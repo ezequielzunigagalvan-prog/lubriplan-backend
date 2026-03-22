@@ -1,7 +1,5 @@
 import { escapeHtml, fmtDateTimeMx } from "./email.utils.js";
 
-const DASH = "—";
-
 function baseLayout({ title, subtitle, bodyHtml, ctaLabel, ctaUrl }) {
   const safeTitle = escapeHtml(title);
   const safeSubtitle = escapeHtml(subtitle || "");
@@ -86,19 +84,19 @@ export function conditionAlertTemplate(payload) {
 
   const bodyHtml = `
     <p style="margin:0 0 16px;">
-      Se registró una condición anormal en un equipo. Te recomendamos revisar el reporte y definir una acción correctiva lo antes posible.
+      Se registró una condición anormal en un equipo. Se recomienda revisar el reporte y definir una acción correctiva lo antes posible.
     </p>
 
     <table style="width:100%;border-collapse:collapse;">
-      ${detailRow("Planta", plantName || DASH)}
-      ${detailRow("Equipo", equipmentName || DASH)}
-      ${detailRow("Código", equipmentCode || DASH)}
-      ${detailRow("Área", areaName || DASH)}
-      ${detailRow("Reportado por", reportedByName || DASH)}
-      ${detailRow("Severidad", severity || DASH)}
-      ${detailRow("Categoría", category || DASH)}
+      ${detailRow("Planta", plantName || "—")}
+      ${detailRow("Equipo", equipmentName || "—")}
+      ${detailRow("Código", equipmentCode || "—")}
+      ${detailRow("Área", areaName || "—")}
+      ${detailRow("Reportado por", reportedByName || "—")}
+      ${detailRow("Severidad", severity || "—")}
+      ${detailRow("Categoría", category || "—")}
       ${detailRow("Fecha / hora", fmtDateTimeMx(detectedAt))}
-      ${detailRow("Descripción", description || DASH)}
+      ${detailRow("Descripción", description || "—")}
     </table>
   `;
 
@@ -132,13 +130,13 @@ export function criticalAlertTemplate(payload) {
     </p>
 
     <table style="width:100%;border-collapse:collapse;">
-      ${detailRow("Planta", plantName || DASH)}
-      ${detailRow("Equipo", equipmentName || DASH)}
-      ${detailRow("Código", equipmentCode || DASH)}
+      ${detailRow("Planta", plantName || "—")}
+      ${detailRow("Equipo", equipmentName || "—")}
+      ${detailRow("Código", equipmentCode || "—")}
       ${detailRow("Nivel de riesgo", riskLevel || "CRÍTICO")}
-      ${detailRow("Motivo", reason || DASH)}
+      ${detailRow("Motivo", reason || "—")}
       ${detailRow("Fecha / hora", fmtDateTimeMx(occurredAt))}
-      ${detailRow("Acción sugerida", suggestedAction || "Revisar el detalle y atender de inmediato")}
+      ${detailRow("Acción sugerida", suggestedAction || "Revisar detalle y atender de inmediato")}
     </table>
   `;
 
@@ -170,7 +168,7 @@ export function overdueSummaryTemplate(payload) {
     </p>
 
     <table style="width:100%;border-collapse:collapse;">
-      ${detailRow("Planta", plantName || DASH)}
+      ${detailRow("Planta", plantName || "—")}
       ${detailRow("Fecha del resumen", fmtDateTimeMx(generatedAt))}
       ${detailRow("Total vencidas", String(totalOverdue ?? 0))}
       ${detailRow("Críticas", String(criticalOverdue ?? 0))}
@@ -191,7 +189,7 @@ export function overdueSummaryTemplate(payload) {
 }
 
 function monthLabelEs(ym) {
-  if (!/^\d{4}-\d{2}$/.test(String(ym || ""))) return String(ym || DASH);
+  if (!/^\d{4}-\d{2}$/.test(String(ym || ""))) return String(ym || "—");
 
   const [y, m] = String(ym).split("-").map(Number);
   const d = new Date(y, (m || 1) - 1, 1);
@@ -205,7 +203,7 @@ function monthLabelEs(ym) {
 
 function renderList(items = []) {
   if (!Array.isArray(items) || items.length === 0) {
-    return `<p style="margin:0;">${DASH}</p>`;
+    return `<p style="margin:0;">—</p>`;
   }
 
   return `
@@ -232,8 +230,8 @@ function renderRisks(risks = []) {
     .slice(0, 5)
     .map((r) => {
       const level = String(r?.level || "LOW").toUpperCase();
-      const message = r?.message || DASH;
-      const action = r?.action || DASH;
+      const message = r?.message || "—";
+      const action = r?.action || "—";
 
       return `
         <div style="margin:0 0 12px;padding:12px;border:1px solid #e2e8f0;border-radius:12px;background:#f8fafc;">
@@ -279,7 +277,151 @@ export function monthlyExecutiveReportTemplate(payload) {
     </p>
 
     <table style="width:100%;border-collapse:collapse;">
-      ${detailRow("Planta", plantName || DASH)}
+      ${detailRow("Planta", plantName || "—")}
+      ${detailRow("Periodo", monthLabelEs(month))}
+      ${detailRow("Generado", fmtDateTimeMx(generatedAt))}
+      ${detailRow("Total actividades", String(total ?? 0))}
+      ${detailRow("Completadas", String(completed ?? 0))}
+      ${detailRow("Pendientes", String(pending ?? 0))}
+      ${detailRow("Atrasadas", String(overdue ?? 0))}
+      ${detailRow("Cumplimiento", `${Number(compliance ?? 0)}%`)}
+      ${detailRow("Eficiencia operativa", `${Number(opEfficiency ?? 0)}%`)}
+      ${detailRow("Lubricantes bajo stock", String(lowStock ?? 0))}
+      ${detailRow("Pendientes sin técnico", String(unassigned ?? 0))}
+      ${detailRow("Condición abierta / en progreso", String(conditionOpen ?? 0))}
+    </table>
+
+    <div style="margin-top:22px;">
+      <div style="font-size:14px;font-weight:800;color:#0f172a;margin-bottom:8px;">
+        Resumen ejecutivo
+      </div>
+      <div style="font-size:14px;line-height:1.6;color:#334155;">
+        ${escapeHtml(executiveSummary || "Sin resumen disponible.")}
+      </div>
+    </div>
+
+    <div style="margin-top:22px;">
+      <div style="font-size:14px;font-weight:800;color:#0f172a;margin-bottom:8px;">
+        Highlights
+      </div>
+      ${renderList(highlights)}
+    </div>
+
+    <div style="margin-top:22px;">
+      <div style="font-size:14px;font-weight:800;color:#0f172a;margin-bottom:8px;">
+        Riesgos principales
+      </div>
+      ${renderRisks(risks)}
+    </div>
+
+    <div style="margin-top:22px;">
+      <div style="font-size:14px;font-weight:800;color:#0f172a;margin-bottom:8px;">
+        Recomendaciones
+      </div>
+      ${renderList(recommendations)}
+    </div>
+  `;
+
+  return {
+    subject: `[LubriPlan] Reporte inteligente mensual · ${plantName || "Planta"} · ${monthLabelEs(month)}`,
+    html: baseLayout({
+      title: "Reporte inteligente mensual",
+      subtitle: "Seguimiento ejecutivo automático",
+      bodyHtml,
+      ctaLabel: "Ver reporte mensual",
+      ctaUrl: link,
+    }),
+  };
+}
+
+function monthLabelEs(ym) {
+  if (!/^\d{4}-\d{2}$/.test(String(ym || ""))) return String(ym || "—");
+
+  const [y, m] = String(ym).split("-").map(Number);
+  const d = new Date(y, (m || 1) - 1, 1);
+
+  return d.toLocaleString("es-MX", {
+    timeZone: "America/Mexico_City",
+    month: "long",
+    year: "numeric",
+  });
+}
+
+function renderList(items = []) {
+  if (!Array.isArray(items) || items.length === 0) return "<p style=\"margin:0;\">—</p>";
+
+  return `
+    <ul style="margin:8px 0 0 18px;padding:0;">
+      ${items
+        .map(
+          (x) => `
+            <li style="margin:0 0 8px;color:#0f172a;">
+              ${escapeHtml(x)}
+            </li>
+          `
+        )
+        .join("")}
+    </ul>
+  `;
+}
+
+function renderRisks(risks = []) {
+  if (!Array.isArray(risks) || risks.length === 0) {
+    return `<p style="margin:0;">Sin riesgos relevantes detectados.</p>`;
+  }
+
+  return risks
+    .slice(0, 5)
+    .map((r) => {
+      const level = String(r?.level || "LOW").toUpperCase();
+      const message = r?.message || "—";
+      const action = r?.action || "—";
+
+      return `
+        <div style="margin:0 0 12px;padding:12px;border:1px solid #e2e8f0;border-radius:12px;background:#f8fafc;">
+          <div style="font-weight:700;color:#0f172a;margin-bottom:6px;">
+            ${escapeHtml(message)}
+          </div>
+          <div style="font-size:12px;color:#475569;margin-bottom:4px;">
+            Nivel: <b>${escapeHtml(level)}</b>
+          </div>
+          <div style="font-size:12px;color:#475569;">
+            Acción sugerida: <b>${escapeHtml(action)}</b>
+          </div>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+export function monthlyExecutiveReportTemplate(payload) {
+  const {
+    plantName,
+    month,
+    generatedAt,
+    completed,
+    pending,
+    overdue,
+    total,
+    compliance,
+    opEfficiency,
+    lowStock,
+    unassigned,
+    conditionOpen,
+    executiveSummary,
+    highlights,
+    recommendations,
+    risks,
+    link,
+  } = payload;
+
+  const bodyHtml = `
+    <p style="margin:0 0 16px;">
+      Te compartimos el reporte inteligente mensual generado automáticamente por LubriPlan.
+    </p>
+
+    <table style="width:100%;border-collapse:collapse;">
+      ${detailRow("Planta", plantName || "—")}
       ${detailRow("Periodo", monthLabelEs(month))}
       ${detailRow("Generado", fmtDateTimeMx(generatedAt))}
       ${detailRow("Total actividades", String(total ?? 0))}

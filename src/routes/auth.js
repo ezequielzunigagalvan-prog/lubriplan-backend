@@ -52,6 +52,7 @@ router.post("/login", async (req, res) => {
     if (!user.passwordHash) return res.status(403).json({ error: "Usuario sin contraseña" });
 
     const ok = await bcrypt.compare(password, user.passwordHash);
+    console.log("BCRYPT MATCH:", ok);
 
     if (!ok) return res.status(401).json({ error: "Credenciales inválidas" });
 
