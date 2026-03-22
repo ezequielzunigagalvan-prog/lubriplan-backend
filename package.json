@@ -4,9 +4,11 @@
   "type": "module",
   "main": "src/index.js",
   "scripts": {
-    "dev": "nodemon src/index.js",
-    "start": "npx prisma db push && node src/index.js"
-  },
+  "dev": "nodemon src/index.js",
+  "start": "npx prisma db push && node src/index.js",
+  "seed": "node seed.js"
+},
+
   "dependencies": {
     "@prisma/client": "^5.22.0",
     "bcrypt": "^6.0.0",
