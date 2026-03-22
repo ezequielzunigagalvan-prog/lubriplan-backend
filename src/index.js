@@ -114,15 +114,29 @@
   app.locals.prisma = prisma;
 
   const corsOptions = {
-  origin: [
-    "http://localhost:5173",
-    "http://192.168.1.69:5173",
-    "https://lubriplan-frontend.vercel.app",
-  ],
+  origin(origin, callback) {
+    if (!origin) return callback(null, true);
+
+    if (
+      origin === "http://localhost:5173" ||
+      origin === "http://192.168.1.69:5173" ||
+      origin === "https://lubriplan-frontend.vercel.app" ||
+      origin.endsWith(".vercel.app")
+    ) {
+      return callback(null, true);
+    }
+
+    return callback(new Error("Not allowed by CORS"));
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "x-plant-id"],
 };
 
+
   // 1) CORS primero
-  app.use(cors(corsOptions));
+ app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
   app.use("/api", (req, res, next) => {
     res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
     res.set("Pragma", "no-cache");
@@ -7000,7 +7014,7 @@ app.patch(
               updated.route?.equipment?.code || updated.equipment?.code
                 ? ` (${updated.route?.equipment?.code || updated.equipment?.code})`
                 : ""
-            } · Ejecucion #${updated.id}`,
+            } ï¿½ Ejecucion #${updated.id}`,
             link: "/activities?filter=critical-risk",
           });
 
