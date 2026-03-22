@@ -1,0 +1,30 @@
+{
+  "routes": [
+    {
+      "id": 1,
+      "name": "Ruta Compresores Planta A",
+      "equipment": { "name": "Compresor Atlas" }
+    },
+    {
+      "id": 2,
+      "name": "Ruta Bombas",
+      "equipment": { "name": "Bomba hidráulica" }
+    }
+  ],
+  "activities": [
+    {
+      "id": 1,
+      "routeId": 1,
+      "scheduled_date": "2025-12-10",
+      "status": "pendiente",
+      "technician": { "name": "Juan Pérez" }
+    },
+    {
+      "id": 2,
+      "routeId": 1,
+      "scheduled_date": "2025-12-05",
+      "status": "completada",
+      "technician": { "name": "Carlos López" }
+    }
+  ]
+}

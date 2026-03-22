@@ -1,0 +1,473 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  SUPERVISOR
+  TECHNICIAN
+}
+
+model AppSettings {
+  id Int @id @default(1)
+
+  // =========================
+  // Ejecución / Evidencias
+  // =========================
+  executionEvidenceRequired Boolean @default(false)
+
+  // =========================
+  // Inventario
+  // =========================
+  preventNegativeStock Boolean @default(true)
+  lowStockWarningEnabled Boolean @default(true)
+
+  // =========================
+  // Alertas / IA
+  // =========================
+  technicianOverloadEnabled Boolean @default(true)
+  predictiveAlertsEnabled   Boolean @default(true)
+  aiSummaryEnabled          Boolean @default(true)
+
+  // =========================  
+  // Sobrecarga técnicos
+  // =========================
+  overloadWindowDays Int @default(7)
+  overloadOverdueLookbackDays Int @default(30)
+  overloadCapacityPerDay Int @default(6)
+  overloadWarnRatio Float @default(1.1)
+  overloadCriticalRatio Float @default(1.4)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model User {
+  id           Int      @id @default(autoincrement())
+  name         String
+  email        String   @unique
+  passwordHash String?
+  role         UserRole @default(TECHNICIAN)
+  active       Boolean  @default(true)
+
+  technicianId Int?        @unique
+  technician   Technician? @relation("UserTechnician", fields: [technicianId], references: [id], onDelete: SetNull)
+
+  notifications    Notification[]
+  conditionReports ConditionReport[] // inversa de ConditionReport.reportedBy
+  dismissedConditionReports ConditionReport[] @relation("ConditionReportDismissedBy")
+
+   userPlants UserPlant[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Technician {
+  id        Int       @id @default(autoincrement())
+
+  plantId   Int
+  plant     Plant     @relation(fields: [plantId], references: [id], onDelete: Cascade)
+
+  name      String
+  code      String
+  specialty String
+  status    String    @default("Activo")
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  executions Execution[]
+  routes     Route[]
+
+  user User? @relation("UserTechnician")
+
+  @@index([plantId])
+  @@unique([plantId, code]) // recomendado: código único por planta
+}
+
+model EquipmentArea {
+  id          Int      @id @default(autoincrement())
+  plantId     Int
+  plant       Plant   @relation(fields: [plantId], references: [id], onDelete: Cascade)
+
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+
+  equipments Equipment[]
+
+  @@unique([plantId, name])
+  @@index([plantId])
+  @@index([name])
+}
+
+model Equipment {
+  id Int @id @default(autoincrement())
+
+  plantId Int
+  plant   Plant @relation(fields: [plantId], references: [id], onDelete: Cascade)
+
+  code        String? @unique
+  name        String
+  location    String
+  status      String
+  description String?
+
+  areaId Int?
+  area   EquipmentArea? @relation(fields: [areaId], references: [id], onDelete: SetNull)
+
+  criticality String?
+
+  conditionReports ConditionReport[]
+
+  createdAt DateTime @default(now())
+
+  routes     Route[]
+  executions Execution[]
+
+  @@index([plantId])
+  @@index([areaId])
+  @@index([status])
+}
+
+model Lubricant {
+  id        Int     @id @default(autoincrement())
+
+  plantId Int
+  plant   Plant @relation(fields: [plantId], references: [id], onDelete: Cascade)
+
+  name      String
+  unit      String  @default("ml")
+  stock     Float   @default(0)
+  minStock  Float?
+  brand     String?
+  type      String?
+  viscosity String?
+  location  String?
+  notes     String?
+
+  code     String?
+  supplier String?
+  unitCost Float?
+
+  routes Route[] @relation("LubricantRoutes")
+  movements LubricantMovement[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([plantId])
+}
+
+model LubricantMovement {
+  id Int @id @default(autoincrement())
+
+  lubricantId Int
+  lubricant   Lubricant @relation(fields: [lubricantId], references: [id], onDelete: Cascade)
+
+  executionId Int?
+  execution   Execution? @relation(fields: [executionId], references: [id], onDelete: SetNull)
+
+  type     String
+  quantity Float
+  reason   String?
+  note     String?
+
+  // ✅ NUEVO
+  inputQuantity     Float?
+  inputUnit         String?
+  convertedQuantity Float?
+  convertedUnit     String?
+
+  stockBefore Float?
+  stockAfter  Float?
+
+  createdAt DateTime @default(now())
+
+  @@index([lubricantId, createdAt])
+  @@index([executionId])
+}
+
+model Route {
+  id            Int     @id @default(autoincrement())
+
+  plantId Int
+  plant   Plant @relation(fields: [plantId], references: [id], onDelete: Cascade)
+
+  name           String
+  normalizedName String
+  lubricantType  String
+  lubricantName  String?
+
+  quantity Float
+  unit     String? @default("ml")
+
+  pumpStrokeValue Float?
+  pumpStrokeUnit  String?
+
+  frequencyDays Int
+
+  frequencyType String?
+  weeklyDays    Int[]     @default([])
+  monthlyAnchorDay Int?
+  customIntervalDays Int?
+
+  method       String?
+  points       Int?
+  instructions String?
+
+  isEmergency Boolean @default(false)
+
+  lastDate DateTime?
+  nextDate DateTime?
+
+  imageUrl String?
+
+  equipmentId Int
+  equipment   Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+
+  lubricantId Int?
+  lubricant   Lubricant? @relation("LubricantRoutes", fields: [lubricantId], references: [id], onDelete: SetNull)
+
+  technicianId Int?
+  technician   Technician? @relation(fields: [technicianId], references: [id], onDelete: SetNull)
+
+  executions Execution[]
+
+  @@index([plantId])
+  @@index([equipmentId])
+  @@index([lubricantId])
+  @@index([technicianId])
+
+  @@index([plantId, equipmentId, normalizedName])
+}
+
+model Execution {
+  id Int @id @default(autoincrement())
+
+  plantId Int
+  plant   Plant @relation(fields: [plantId], references: [id], onDelete: Cascade)
+
+  origin ExecutionOrigin @default(ROUTE)
+
+  routeId Int?
+  route   Route? @relation(fields: [routeId], references: [id], onDelete: Cascade)
+
+  equipmentId Int?
+  equipment   Equipment? @relation(fields: [equipmentId], references: [id], onDelete: SetNull)
+
+  manualTitle        String?
+  manualInstructions String?
+
+  correctiveReports ConditionReport[] @relation("CorrectiveExecution")
+
+  technicianId Int?
+  technician   Technician? @relation(fields: [technicianId], references: [id], onDelete: SetNull)
+
+  lubricantMovements LubricantMovement[]
+
+  status      String    @default("PENDING")
+  scheduledAt DateTime  @default(now())
+  executedAt  DateTime?
+
+  usedQuantity Float?
+  condition    String?
+  observations String?
+
+  // ✅ NUEVO
+  usedInputQuantity      Float?
+  usedInputUnit          String?
+  usedConvertedQuantity  Float?
+  usedConvertedUnit      String?
+
+  evidenceImage String?
+  evidenceNote  String?
+
+  inventoryDeductedAt DateTime?
+
+  @@index([plantId])
+  @@index([routeId])
+  @@index([equipmentId])
+  @@index([technicianId])
+  @@index([status, scheduledAt])
+  @@index([origin, scheduledAt])
+}
+
+enum ExecutionOrigin {
+  ROUTE
+  ONE_OFF
+  MANUAL
+  // Si quieres separar emergentes:
+  // EMERGENCY
+}
+
+enum ConditionLevel {
+  BUENO
+  REGULAR
+  MALO
+  CRITICO
+}
+
+enum ConditionReportStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  DISMISSED
+}
+
+enum ConditionReportCategory {
+  FUGA
+  RUIDO
+  VIBRACION
+  TEMPERATURA
+  CONTAMINACION
+  OTRO
+}
+
+enum ScheduledJobType {
+  MONTHLY_EXEC_REPORT
+}
+
+model ConditionReport {
+  id           Int @id @default(autoincrement())
+
+  plantId Int
+  plant   Plant @relation(fields: [plantId], references: [id], onDelete: Cascade)
+
+  equipmentId  Int
+  reportedById Int
+
+  condition     ConditionLevel
+  category      ConditionReportCategory?
+  description   String
+  detectedAt    DateTime                 @db.Date
+  evidenceImage String?
+
+  status ConditionReportStatus @default(OPEN)
+
+  correctiveExecutionId Int?
+  correctiveExecution   Execution? @relation("CorrectiveExecution", fields: [correctiveExecutionId], references: [id], onDelete: SetNull)
+  correctiveNotes       String?
+  correctiveScheduledAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  equipment  Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+  reportedBy User      @relation(fields: [reportedById], references: [id], onDelete: Cascade)
+  resolvedAt  DateTime?
+  dismissedAt DateTime?
+  dismissedById Int?
+  dismissedBy   User? @relation("ConditionReportDismissedBy", fields: [dismissedById], references: [id], onDelete: SetNull)
+
+  @@index([plantId])
+  @@index([equipmentId])
+  @@index([detectedAt])
+  @@index([status])
+  @@map("condition_reports")
+}
+
+enum NotificationType {
+  CONDITION_REPORTED
+  CONDITION_RESOLVED 
+  CONDITION_DISMISSED
+  EMERGENCY_CREATED
+  EXEC_ASSIGNED
+  EXEC_CONDITION_CRITICAL
+  EXEC_OVERDUE
+  LOW_STOCK
+}
+
+model Notification {
+  id        Int              @id @default(autoincrement())
+
+  plantId Int?
+  plant   Plant? @relation(fields: [plantId], references: [id], onDelete: SetNull)
+
+  userId    Int
+  type      NotificationType
+  title     String
+  message   String?
+  link      String?
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([plantId])
+  @@index([userId, readAt])
+  @@index([createdAt])
+  @@index([userId, createdAt])
+}
+
+model Plant {
+  id       Int     @id @default(autoincrement())
+  name     String
+  timezone String  @default("America/Mexico_City")
+  active   Boolean @default(true)
+
+  monthlyReportEnabled        Boolean @default(true)
+  monthlyReportDay            Int     @default(1)
+  monthlyReportHour           Int     @default(8)
+  monthlyReportRecipientsExtra String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // relaciones
+  userPlants UserPlant[]
+
+  equipmentAreas EquipmentArea[]
+  equipments     Equipment[]
+  lubricants     Lubricant[]
+  routes         Route[]
+  executions     Execution[]
+  conditionReports ConditionReport[]
+  notifications  Notification[]
+  technicians Technician[]
+  scheduledJobRuns ScheduledJobRun[]
+}
+
+model UserPlant {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  plantId   Int
+  isDefault Boolean  @default(false)
+  active    Boolean  @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plant Plant @relation(fields: [plantId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, plantId])
+  @@index([plantId])
+}
+
+model ScheduledJobRun {
+  id        Int              @id @default(autoincrement())
+  jobType   ScheduledJobType
+  plantId   Int
+  period    String           // YYYY-MM
+  status    String           @default("PENDING") // PENDING | SENT | FAILED | SKIPPED
+
+  recipientsJson String?
+  subject        String?
+  errorMessage   String?
+
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  plant Plant @relation(fields: [plantId], references: [id], onDelete: Cascade)
+
+  @@unique([jobType, plantId, period])
+  @@index([plantId, period])
+  @@index([jobType, status])
+}
