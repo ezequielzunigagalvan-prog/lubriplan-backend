@@ -334,18 +334,6 @@ export function monthlyExecutiveReportTemplate(payload) {
   };
 }
 
-function monthLabelEs(ym) {
-  if (!/^\d{4}-\d{2}$/.test(String(ym || ""))) return String(ym || "—");
-
-  const [y, m] = String(ym).split("-").map(Number);
-  const d = new Date(y, (m || 1) - 1, 1);
-
-  return d.toLocaleString("es-MX", {
-    timeZone: "America/Mexico_City",
-    month: "long",
-    year: "numeric",
-  });
-}
 
 function renderList(items = []) {
   if (!Array.isArray(items) || items.length === 0) return "<p style=\"margin:0;\">—</p>";
