@@ -6,24 +6,60 @@ const prisma = new PrismaClient();
 async function main() {
   const passwordHash = await bcrypt.hash("Admin1234", 10);
 
-  const user = await prisma.user.upsert({
+  const admin = await prisma.user.upsert({
     where: { email: "admin@lubriplan.com" },
     update: {
-      passwordHash,
       name: "Administrador",
+      passwordHash,
       role: "ADMIN",
       active: true,
     },
     create: {
+      name: "Administrador",
       email: "admin@lubriplan.com",
       passwordHash,
-      name: "Administrador",
       role: "ADMIN",
       active: true,
     },
   });
 
-  console.log("✅ Usuario listo:", user.email);
+  const plant = await prisma.plant.upsert({
+    where: { id: 1 },
+    update: {
+      name: "Planta Principal",
+      active: true,
+      timezone: "America/Mexico_City",
+    },
+    create: {
+      id: 1,
+      name: "Planta Principal",
+      active: true,
+      timezone: "America/Mexico_City",
+    },
+  });
+
+  await prisma.userPlant.upsert({
+    where: {
+      userId_plantId: {
+        userId: admin.id,
+        plantId: plant.id,
+      },
+    },
+    update: {
+      active: true,
+      isDefault: true,
+    },
+    create: {
+      userId: admin.id,
+      plantId: plant.id,
+      active: true,
+      isDefault: true,
+    },
+  });
+
+  console.log("✅ Usuario listo:", admin.email);
+  console.log("✅ Planta lista:", plant.name);
+  console.log("✅ Relación usuario-planta lista");
 }
 
 main()
