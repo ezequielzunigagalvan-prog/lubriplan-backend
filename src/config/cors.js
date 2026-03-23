@@ -7,10 +7,9 @@ export const allowedOrigins = [
 ];
 
 const corsOptions = {
-  origin: function (origin, callback) {
+  origin(origin, callback) {
     if (!origin) return callback(null, true);
 
-    // Permitir cualquier subdominio de Vercel
     if (origin.includes("vercel.app")) {
       return callback(null, true);
     }
@@ -22,6 +21,8 @@ const corsOptions = {
     return callback(new Error("Not allowed by CORS"));
   },
   credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
 };
 
 export const corsMiddleware = cors(corsOptions);

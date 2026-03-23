@@ -4319,7 +4319,7 @@ app.post(
 
       console.log(">>> route creada", route.id);
 
-      const scheduledAt = parsedNextDate ? startOfDay(parsedNextDate) : startOfDay(new Date());
+      const scheduledAt = parsedNextDate ? toSafeNoon(parsedNextDate) : toSafeNoon(new Date());
 
       const start = new Date(scheduledAt);
       start.setHours(0, 0, 0, 0);
@@ -4729,14 +4729,11 @@ app.put(
       if (parsedNext) {
         console.log("[PUT route] align execution -> start", stamp());
 
-        const nd = new Date(parsedNext);
-        nd.setHours(0, 0, 0, 0);
+        const nd = toSafeNoon(parsedNext);
 
-        const start = new Date(nd);
-        start.setHours(0, 0, 0, 0);
+        const start = startOfDay(nd);
 
-        const end = new Date(nd);
-        end.setHours(23, 59, 59, 999);
+        const end = endOfDay(nd);
 
         console.log(
           "[PUT route] align range",
@@ -7795,6 +7792,7 @@ app.get("/api/history/lubricant-movements", requireAuth, async (req, res) => {
       process.exit(0);
     }
   });
+
 
 
 
