@@ -1,4 +1,4 @@
-import express from "express";
+﻿import express from "express";
 import { notifyManagers } from "../notifications/notify.js";
 import { sseHub } from "../realtime/sseHub.js";
 import { sendCriticalActivityEmail } from "../services/email/email.service.js";
@@ -17,7 +17,7 @@ export default function emergencyActivitiesRoutes({ prisma, auth }) {
     const fromU = normUnit(fromUnit);
     const toU = normUnit(lubricantUnit);
 
-    // líquidos: ml <-> L
+    // lÃ­quidos: ml <-> L
     if (fromU === "l" && toU === "ml") return q * 1000;
     if (fromU === "ml" && toU === "l") return q / 1000;
 
@@ -82,14 +82,14 @@ export default function emergencyActivitiesRoutes({ prisma, auth }) {
             .json({ error: "emergencyReason requerido" });
         }
         if (!Number.isFinite(qty) || qty <= 0) {
-          return res.status(400).json({ error: "quantity inválida" });
+          return res.status(400).json({ error: "quantity invÃ¡lida" });
         }
 
         const executedAtDT = new Date(
           `${String(executedAt).slice(0, 10)}T12:00:00`
         );
         if (Number.isNaN(executedAtDT.getTime())) {
-          return res.status(400).json({ error: "executedAt inválido" });
+          return res.status(400).json({ error: "executedAt invÃ¡lido" });
         }
 
         const result = await prisma.$transaction(async (tx) => {
@@ -112,7 +112,7 @@ export default function emergencyActivitiesRoutes({ prisma, auth }) {
               where: { id: techId, plantId, deletedAt: null },
             });
             if (!technician) {
-              throw new Error("Técnico no encontrado en la planta actual");
+              throw new Error("TÃ©cnico no encontrado en la planta actual");
             }
           }
 
@@ -121,10 +121,10 @@ export default function emergencyActivitiesRoutes({ prisma, auth }) {
           const qtyNormalized = convertQtyToLubUnit(qty, inputUnit, lubUnit);
 
           if (!Number.isFinite(qtyNormalized) || qtyNormalized <= 0) {
-            throw new Error("Cantidad inválida después de la conversión");
+            throw new Error("Cantidad invÃ¡lida despuÃ©s de la conversiÃ³n");
           }
 
-          const manualTitle = `EMERGENTE · ${equipment.name || `Equipo ${eqId}`} · ${String(
+          const manualTitle = `EMERGENTE Â· ${equipment.name || `Equipo ${eqId}`} Â· ${String(
             emergencyReason
           )
             .trim()
@@ -188,7 +188,7 @@ export default function emergencyActivitiesRoutes({ prisma, auth }) {
               convertedQuantity: qtyNormalized,
               convertedUnit: lubUnit,
               reason: "EMERGENCY",
-              note: `Equipo: ${equipment.code || equipment.name || eqId} · ${String(
+              note: `Equipo: ${equipment.code || equipment.name || eqId} Â· ${String(
                 emergencyReason
               ).trim()}`,
               stockBefore,
@@ -224,7 +224,7 @@ export default function emergencyActivitiesRoutes({ prisma, auth }) {
               message: `${result.execution?.manualTitle || "Actividad emergente"} · ${
                 result.execution?.id ? `Ejecución #${result.execution.id}` : "sin folio"
               }`,
-              link: "/activities?filter=critical-risk",
+              link: `/activities?filter=critical-risk&executionId=${result.execution.id}&focus=critical`,
             });
 
             await sendCriticalActivityEmail({
@@ -238,7 +238,7 @@ export default function emergencyActivitiesRoutes({ prisma, auth }) {
                 reason: `Actividad emergente con condición ${String(condition).trim().toUpperCase()}`,
                 occurredAt: result.execution?.executedAt || executedAtDT,
                 suggestedAction: "Revisar la actividad crítica y validar seguimiento inmediato.",
-                link: `${process.env.APP_BASE_URL || "http://localhost:5173"}/activities?filter=critical-risk`,
+                link: `${process.env.APP_BASE_URL || "http://localhost:5173"}/activities?filter=critical-risk&executionId=${result.execution.id}&focus=critical`,
               },
             });
 
@@ -252,7 +252,7 @@ export default function emergencyActivitiesRoutes({ prisma, auth }) {
               executedAt: result.execution.executedAt,
             });
           } catch (notifyErr) {
-            console.error("No se pudo notificar actividad emergente crítica:", notifyErr);
+            console.error("No se pudo notificar actividad emergente crÃ­tica:", notifyErr);
           }
         }
 
@@ -274,7 +274,7 @@ export default function emergencyActivitiesRoutes({ prisma, auth }) {
                 plantId,
                 type: "LOW_STOCK",
                 title: "Stock bajo",
-                message: `${result.lubricant.name} quedó en ${result.lubricant.stockAfter} ${result.lubricant.unit || ""}`,
+                message: `${result.lubricant.name} quedÃ³ en ${result.lubricant.stockAfter} ${result.lubricant.unit || ""}`,
                 link: "/inventory",
               });
 
@@ -303,4 +303,6 @@ export default function emergencyActivitiesRoutes({ prisma, auth }) {
 
   return router;
 }
+
+
 
