@@ -1,4 +1,4 @@
-// src/dashboard/buildDashboardSummary.js
+import { getPredictiveMetrics } from "./predictiveMetrics.js";
 
 const isAdmin = (role) => role === "ADMIN";
 const isTechnician = (role) => role === "TECHNICIAN";
@@ -71,10 +71,6 @@ export async function buildDashboardSummary({
     }),
   ]);
 
-  // =========================
-  // KPIs actividades
-  // =========================
-
   const completedWhere = scopeWhereByUser({
     status: "COMPLETED",
     executedAt: { gte: from, lte: to },
@@ -107,9 +103,6 @@ export async function buildDashboardSummary({
     else pendingDue++;
   }
 
-  // =========================
-  // UPCOMING
-  // =========================
   let upcoming = [];
 
   if (!isAdmin(role)) {
@@ -152,9 +145,6 @@ export async function buildDashboardSummary({
 
   const upcomingOut = isAdmin(role) ? [] : upcoming;
 
-  // =========================
-  // ALERTAS
-  // =========================
   const alerts = { overdueActivities: overdue };
 
   const crWhereBase = {
@@ -200,9 +190,46 @@ export async function buildDashboardSummary({
     alerts.lowStockCount = lowStockCount;
   }
 
-  // =========================
-  // CONDITION REPORTS COUNTS
-  // =========================
+  let predictive = {
+    lubricantDaysToEmptyCount: 0,
+    equipmentConsumptionAnomaliesCount: 0,
+    consumptionSignalsCount: 0,
+    lubricantDaysToEmptyTop: [],
+    equipmentConsumptionAnomaliesTop: [],
+  };
+
+  try {
+    const metrics = await getPredictiveMetrics({
+      prisma,
+      toStartOfDaySafe,
+      plantId: safePlantId,
+      month: monthOk ? monthStr : "",
+    });
+
+    predictive = {
+      lubricantDaysToEmptyCount: Number(metrics?.lubricantDaysToEmptyCount || 0),
+      equipmentConsumptionAnomaliesCount: Number(
+        metrics?.equipmentConsumptionAnomaliesCount || 0
+      ),
+      consumptionSignalsCount: Number(metrics?.consumptionSignalsCount || 0),
+      lubricantDaysToEmptyTop: Array.isArray(metrics?.lubricantDaysToEmptyTop)
+        ? metrics.lubricantDaysToEmptyTop.slice(0, 5)
+        : [],
+      equipmentConsumptionAnomaliesTop: Array.isArray(
+        metrics?.equipmentConsumptionAnomaliesTop
+      )
+        ? metrics.equipmentConsumptionAnomaliesTop.slice(0, 5)
+        : [],
+    };
+  } catch (error) {
+    console.error("buildDashboardSummary predictive metrics error:", error);
+  }
+
+  alerts.daysToEmptyCount = predictive.lubricantDaysToEmptyCount;
+  alerts.consumptionAnomaliesCount =
+    predictive.equipmentConsumptionAnomaliesCount;
+  alerts.predictiveSignalsCount = predictive.consumptionSignalsCount;
+
   const whereReports = { plantId: safePlantId };
 
   if (role === "TECHNICIAN") {
@@ -238,16 +265,13 @@ export async function buildDashboardSummary({
     updatedAt: new Date().toISOString(),
     role,
     plantId: safePlantId,
-
     range: monthOk
       ? { month: monthStr, from: from.toISOString(), to: to.toISOString() }
       : { days: safeDays, from: from.toISOString(), to: to.toISOString() },
-
     counts: {
       totalRoutes,
       totalEquipments,
     },
-
     activities: {
       completed,
       pending: pendingDue,
@@ -255,9 +279,9 @@ export async function buildDashboardSummary({
       total: completed + pendingDue + overdue,
       conditionReports,
     },
-
     monthlyTotals,
     alerts,
+    predictive,
     upcoming: upcomingOut,
     upcomingMeta: isAdmin(role) ? upcomingMeta : undefined,
   };

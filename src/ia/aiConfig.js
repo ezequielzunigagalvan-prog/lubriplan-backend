@@ -12,3 +12,6 @@ export const AI_RATE_LIMIT_PLANT_PER_HOUR =
   Number(process.env.AI_RATE_LIMIT_PLANT_PER_HOUR || 50);
 
 export const AI_LANG_DEFAULT = String(process.env.AI_LANG_DEFAULT || "es-MX");
+export const OPENAI_MODEL = String(
+  process.env.OPENAI_MODEL || "gpt-5.4-mini"
+).trim();
