@@ -1,5 +1,80 @@
 import { OPENAI_MODEL } from "./aiConfig.js";
 
+const SUMMARY_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "title",
+    "period",
+    "plantId",
+    "kpis",
+    "highlights",
+    "risks",
+    "recommendations",
+    "executiveSummary",
+    "schemaVersion",
+  ],
+  properties: {
+    title: { type: "string" },
+    period: { type: "string" },
+    plantId: { type: "string" },
+    kpis: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "completed",
+        "pending",
+        "overdue",
+        "conditionOpen",
+        "conditionInProgress",
+        "lowStockCount",
+        "unassignedPending",
+      ],
+      properties: {
+        completed: { type: "integer" },
+        pending: { type: "integer" },
+        overdue: { type: "integer" },
+        conditionOpen: { type: "integer" },
+        conditionInProgress: { type: "integer" },
+        lowStockCount: { type: "integer" },
+        unassignedPending: { type: "integer" },
+      },
+    },
+    highlights: {
+      type: "array",
+      items: { type: "string" },
+      minItems: 3,
+      maxItems: 6,
+    },
+    risks: {
+      type: "array",
+      minItems: 2,
+      maxItems: 5,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["level", "message", "action"],
+        properties: {
+          level: {
+            type: "string",
+            enum: ["LOW", "MEDIUM", "HIGH", "CRITICAL"],
+          },
+          message: { type: "string" },
+          action: { type: "string" },
+        },
+      },
+    },
+    recommendations: {
+      type: "array",
+      items: { type: "string" },
+      minItems: 3,
+      maxItems: 6,
+    },
+    executiveSummary: { type: "string" },
+    schemaVersion: { type: "integer" },
+  },
+};
+
 let clientPromise = null;
 
 async function getClient() {
@@ -45,6 +120,14 @@ export async function generateExecutiveSummary({ prompt }) {
   const response = await client.responses.create({
     model: OPENAI_MODEL,
     input: String(prompt || ""),
+    text: {
+      format: {
+        type: "json_schema",
+        name: "lubriplan_executive_summary",
+        strict: true,
+        schema: SUMMARY_SCHEMA,
+      },
+    },
   });
 
   const text = extractResponseText(response);
