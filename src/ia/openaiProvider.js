@@ -115,8 +115,30 @@ function extractResponseText(response) {
   return parts.join("\n").trim();
 }
 
+function extractParsedResponse(response) {
+  if (response?.output_parsed && typeof response.output_parsed === "object") {
+    return response.output_parsed;
+  }
+
+  const outputs = Array.isArray(response?.output) ? response.output : [];
+  for (const item of outputs) {
+    const content = Array.isArray(item?.content) ? item.content : [];
+    for (const chunk of content) {
+      if (chunk?.parsed && typeof chunk.parsed === "object") {
+        return chunk.parsed;
+      }
+    }
+  }
+
+  return null;
+}
+
 export async function generateExecutiveSummary({ prompt }) {
   const client = await getClient();
+  console.log("AI_MODE:", process.env.AI_MODE);
+  console.log("AI_MODEL:", OPENAI_MODEL);
+  console.log("OPENAI_API_KEY exists:", Boolean(process.env.OPENAI_API_KEY));
+
   const response = await client.responses.create({
     model: OPENAI_MODEL,
     input: String(prompt || ""),
@@ -130,7 +152,18 @@ export async function generateExecutiveSummary({ prompt }) {
     },
   });
 
+  const parsed = extractParsedResponse(response);
+  if (parsed) return parsed;
+
   const text = extractResponseText(response);
-  if (!text) throw new Error("OPENAI_EMPTY_RESPONSE");
+  if (!text) {
+    console.error("Raw AI response: empty", {
+      hasOutputText: Boolean(response?.output_text),
+      outputItems: Array.isArray(response?.output) ? response.output.length : 0,
+    });
+    throw new Error("OPENAI_EMPTY_RESPONSE");
+  }
+
+  console.log("Raw AI response:", text.slice(0, 1200));
   return text;
 }

@@ -90,18 +90,22 @@ function buildPrompt({ month, plantId, role, lang, dashboard }) {
   return `
 Eres un analista experto en lubricación industrial y mantenimiento.
 Debes responder SOLO con JSON válido, sin markdown, sin comentarios y sin texto extra.
-Responde en español claro y ejecutivo.
+Responde en español claro, ejecutivo y directo.
 
 Objetivo:
 - resumir el estado operativo real
 - leer alertas operativas y alertas predictivas
 - señalar riesgos concretos
 - recomendar acciones útiles y accionables
+- interpretar, no solo listar KPIs
+- sonar como un resumen ejecutivo industrial
 
 Debe cumplir:
 - no inventar números
 - no contradecir el payload
 - no usar texto genérico
+- no repetir KPIs literalmente si ya están visibles en pantalla
+- evitar frases vagas como “dar seguimiento” o “monitorear” sin contexto
 - executiveSummary: máximo 3 frases
 - highlights: 3 a 6 bullets cortos
 - risks: 2 a 5 objetos con level, message y action
@@ -221,20 +225,16 @@ function fallbackSummary({ month, plantId, dashboard }) {
       conditionInProgress: Number(
         alerts.conditionInProgressCount || conditionReports.IN_PROGRESS || 0
       ),
-      lowStockCount:
-        alerts.lowStockCount != null ? Number(alerts.lowStockCount || 0) : undefined,
-      unassignedPending:
-        alerts.unassignedPending != null
-          ? Number(alerts.unassignedPending || 0)
-          : undefined,
+      lowStockCount: Number(alerts.lowStockCount || 0),
+      unassignedPending: Number(alerts.unassignedPending || 0),
     },
     highlights: highlights.slice(0, 6),
     risks: risks.slice(0, 5),
     recommendations: recommendations.slice(0, 6),
     executiveSummary:
       predictiveSignalsCount > 0
-        ? "Resumen no disponible por IA en este momento. Se muestran KPIs, riesgos operativos y señales predictivas detectadas con base en datos del sistema."
-        : "Resumen no disponible por IA en este momento. Se muestran KPIs y acciones sugeridas basadas en datos del sistema.",
+        ? "Resumen no disponible por IA en este momento. Se muestran riesgos operativos y señales predictivas detectadas con base en datos del sistema."
+        : "Resumen no disponible por IA en este momento. Se muestran riesgos y acciones sugeridas con base en datos del sistema.",
   };
 }
 
@@ -250,6 +250,13 @@ function extractJson(text) {
   return s.slice(first, last + 1);
 }
 
+function normalizeProviderOutput(raw) {
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    return raw;
+  }
+  return raw;
+}
+
 async function generateOnce({ month, plantId, role, lang, dashboard }) {
   const prompt = buildPrompt({ month, plantId, role, lang, dashboard });
 
@@ -257,7 +264,7 @@ async function generateOnce({ month, plantId, role, lang, dashboard }) {
     return JSON.stringify(fallbackSummary({ month, plantId, dashboard }));
   }
 
-  return callProvider(prompt);
+  return normalizeProviderOutput(await callProvider(prompt));
 }
 
 async function generateWithRepair({ month, plantId, role, lang, dashboard }) {
@@ -267,8 +274,16 @@ async function generateWithRepair({ month, plantId, role, lang, dashboard }) {
   try {
     raw1 = await generateOnce({ month, plantId, role, lang, dashboard });
   } catch (error) {
-    console.error("AI provider first pass failed:", error);
+    console.error("AI summary failed:", error);
     return schema.parse(fallbackSummary({ month, plantId, dashboard }));
+  }
+
+  if (raw1 && typeof raw1 === "object" && !Array.isArray(raw1)) {
+    try {
+      return schema.parse(raw1);
+    } catch (error) {
+      console.error("AI first pass schema failed:", error);
+    }
   }
 
   const json1 = extractJson(raw1);
@@ -277,6 +292,7 @@ async function generateWithRepair({ month, plantId, role, lang, dashboard }) {
       return schema.parse(JSON.parse(json1));
     } catch (error) {
       console.error("AI first pass parse failed:", error);
+      console.log("Raw AI response:", String(raw1).slice(0, 1200));
     }
   }
 
@@ -314,10 +330,18 @@ Usa exactamente este schema funcional:
   let raw2 = raw1;
   if (AI_MODE !== "mock") {
     try {
-      raw2 = await callProvider(repairPrompt);
+      raw2 = normalizeProviderOutput(await callProvider(repairPrompt));
     } catch (error) {
-      console.error("AI provider repair pass failed:", error);
+      console.error("AI repair pass failed:", error);
       return schema.parse(fallbackSummary({ month, plantId, dashboard }));
+    }
+  }
+
+  if (raw2 && typeof raw2 === "object" && !Array.isArray(raw2)) {
+    try {
+      return schema.parse(raw2);
+    } catch (error) {
+      console.error("AI repair pass schema failed:", error);
     }
   }
 
@@ -327,6 +351,7 @@ Usa exactamente este schema funcional:
       return schema.parse(JSON.parse(json2));
     } catch (error) {
       console.error("AI repair pass parse failed:", error);
+      console.log("Raw AI response:", String(raw2).slice(0, 1200));
     }
   }
 
@@ -362,6 +387,15 @@ export async function getAISummary({
       summary: cached.summary,
     };
   }
+
+  console.log("AI summary request:", {
+    month,
+    plantId,
+    role,
+    userId: userId ?? null,
+    lang,
+    model: AI_MODE === "provider" ? OPENAI_MODEL : AI_MODE,
+  });
 
   const summary = await generateWithRepair({ month, plantId, role, lang, dashboard });
   const payload = {
