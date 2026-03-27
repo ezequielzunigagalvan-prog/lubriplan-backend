@@ -23,55 +23,78 @@ function shortList(items = [], max = 3) {
   return Array.isArray(items) ? items.slice(0, max) : [];
 }
 
+function toNum(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function normalizeRiskLevel(level) {
+  const s = String(level || "").toUpperCase().trim();
+  if (["LOW", "MEDIUM", "HIGH", "CRITICAL"].includes(s)) return s;
+  return "MEDIUM";
+}
+
 function buildPrompt({ month, plantId, role, lang, dashboard }) {
   const activities = dashboard?.activities || {};
   const alerts = dashboard?.alerts || {};
   const counts = dashboard?.counts || {};
   const predictive = dashboard?.predictive || {};
+  const trends = dashboard?.trends || {};
+  const priorities = dashboard?.priorities || {};
 
   const payload = {
     month,
     plantId,
     role,
     lang,
+
     counts: {
-      totalRoutes: Number(counts.totalRoutes || 0),
-      totalEquipments: Number(counts.totalEquipments || 0),
+      totalRoutes: toNum(counts.totalRoutes),
+      totalEquipments: toNum(counts.totalEquipments),
     },
+
     activities: {
-      completed: Number(activities.completed || 0),
-      pending: Number(activities.pending || 0),
-      overdue: Number(activities.overdue || 0),
-      total: Number(activities.total || 0),
+      completed: toNum(activities.completed),
+      pending: toNum(activities.pending),
+      overdue: toNum(activities.overdue),
+      total: toNum(activities.total),
       conditionReports: {
-        OPEN: Number(activities?.conditionReports?.OPEN || 0),
-        IN_PROGRESS: Number(activities?.conditionReports?.IN_PROGRESS || 0),
-        RESOLVED: Number(activities?.conditionReports?.RESOLVED || 0),
-        DISMISSED: Number(activities?.conditionReports?.DISMISSED || 0),
+        OPEN: toNum(activities?.conditionReports?.OPEN),
+        IN_PROGRESS: toNum(activities?.conditionReports?.IN_PROGRESS),
+        RESOLVED: toNum(activities?.conditionReports?.RESOLVED),
+        DISMISSED: toNum(activities?.conditionReports?.DISMISSED),
       },
     },
-    operationalAlerts: {
-      overdueActivities: Number(alerts.overdueActivities || 0),
-      conditionOpenCount: Number(alerts.conditionOpenCount || 0),
-      conditionInProgressCount: Number(alerts.conditionInProgressCount || 0),
-      lowStockCount:
-        alerts.lowStockCount == null ? null : Number(alerts.lowStockCount || 0),
-      unassignedPending:
-        alerts.unassignedPending == null
-          ? null
-          : Number(alerts.unassignedPending || 0),
+
+    trends: {
+      completedDelta: toNum(trends.completedDelta),
+      pendingDelta: toNum(trends.pendingDelta),
+      overdueDelta: toNum(trends.overdueDelta),
+      conditionOpenDelta: toNum(trends.conditionOpenDelta),
+      conditionInProgressDelta: toNum(trends.conditionInProgressDelta),
     },
+
+    operationalAlerts: {
+      overdueActivities: toNum(alerts.overdueActivities),
+      conditionOpenCount: toNum(alerts.conditionOpenCount),
+      conditionInProgressCount: toNum(alerts.conditionInProgressCount),
+      lowStockCount: toNum(alerts.lowStockCount),
+      unassignedPending: toNum(alerts.unassignedPending),
+    },
+
     predictiveAlerts: {
-      daysToEmptyCount: Number(alerts.daysToEmptyCount || 0),
-      consumptionAnomaliesCount: Number(alerts.consumptionAnomaliesCount || 0),
-      predictiveSignalsCount: Number(alerts.predictiveSignalsCount || 0),
+      daysToEmptyCount: toNum(alerts.daysToEmptyCount),
+      consumptionAnomaliesCount: toNum(alerts.consumptionAnomaliesCount),
+      predictiveSignalsCount: toNum(alerts.predictiveSignalsCount),
+
       daysToEmptyTop: shortList(predictive?.lubricantDaysToEmptyTop, 3).map((x) => ({
         lubricantName: x?.lubricantName || x?.name || "Lubricante",
         daysToEmpty: x?.daysToEmpty ?? x?.dte ?? null,
         stock: x?.stock ?? null,
         minStock: x?.minStock ?? null,
-        risk: x?.risk || "LOW",
+        risk: normalizeRiskLevel(x?.risk || "LOW"),
       })),
+
       consumptionAnomaliesTop: shortList(
         predictive?.equipmentConsumptionAnomaliesTop,
         3
@@ -82,36 +105,121 @@ function buildPrompt({ month, plantId, role, lang, dashboard }) {
         last14AvgDaily: x?.last14AvgDaily ?? x?.lastNAvgDaily ?? null,
         baselineAvgDaily: x?.baselineAvgDaily ?? null,
         criticality: x?.criticality || null,
-        risk: x?.risk || "LOW",
+        risk: normalizeRiskLevel(x?.risk || "LOW"),
+      })),
+    },
+
+    priorities: {
+      overdueTop: shortList(priorities?.overdueTop, 5).map((x) => ({
+        executionId: x?.executionId ?? null,
+        activityName: x?.activityName || "Actividad",
+        equipmentName: x?.equipmentName || "Equipo",
+        equipmentCode: x?.equipmentCode || "",
+        criticality: x?.criticality || null,
+        overdueDays: x?.overdueDays ?? 0,
+        technicianName: x?.technicianName || null,
+        isUnassigned: Boolean(x?.isUnassigned),
+      })),
+
+      unassignedPendingTop: shortList(priorities?.unassignedPendingTop, 5).map((x) => ({
+        executionId: x?.executionId ?? null,
+        activityName: x?.activityName || "Actividad",
+        equipmentName: x?.equipmentName || "Equipo",
+        equipmentCode: x?.equipmentCode || "",
+        criticality: x?.criticality || null,
+        ageDays: x?.ageDays ?? 0,
+      })),
+
+      conditionRiskTop: shortList(priorities?.conditionRiskTop, 5).map((x) => ({
+        reportId: x?.reportId ?? null,
+        status: x?.status || "OPEN",
+        condition: x?.condition || null,
+        equipmentName: x?.equipmentName || "Equipo",
+        equipmentCode: x?.equipmentCode || "",
+        criticality: x?.criticality || null,
+        ageDays: x?.ageDays ?? 0,
+      })),
+
+      equipmentRiskTop: shortList(priorities?.equipmentRiskTop, 5).map((x) => ({
+        equipmentId: x?.equipmentId ?? null,
+        equipmentName: x?.equipmentName || "Equipo",
+        equipmentCode: x?.equipmentCode || "",
+        criticality: x?.criticality || null,
+        openReports: x?.openReports ?? 0,
+        criticalReports: x?.criticalReports ?? 0,
+        badReports: x?.badReports ?? 0,
+        score: x?.score ?? 0,
+      })),
+
+      technicianLoadTop: shortList(priorities?.technicianLoadTop, 5).map((x) => ({
+        technicianId: x?.technicianId ?? null,
+        technicianName: x?.technicianName || "Sin asignar",
+        technicianCode: x?.technicianCode || "",
+        openAssigned: x?.openAssigned ?? 0,
+        overdueAssigned: x?.overdueAssigned ?? 0,
+        pendingAssigned: x?.pendingAssigned ?? 0,
+        score: x?.score ?? 0,
+      })),
+
+      topLubricants: shortList(priorities?.topLubricants, 5).map((x) => ({
+        lubricantId: x?.lubricantId ?? null,
+        name: x?.name || "Lubricante",
+        code: x?.code || "",
+        unit: x?.unit || "",
+        consumed: x?.consumed ?? 0,
+        stock: x?.stock ?? null,
+        minStock: x?.minStock ?? null,
       })),
     },
   };
 
   return `
-Eres un analista experto en lubricaci�n industrial y mantenimiento.
-Debes responder SOLO con JSON v�lido, sin markdown, sin comentarios y sin texto extra.
-Responde en espa�ol claro, ejecutivo y directo.
+Eres un analista senior de lubricación industrial y mantenimiento para una planta productiva.
 
-Objetivo:
-- resumir el estado operativo real
-- leer alertas operativas y alertas predictivas
-- se�alar riesgos concretos
-- recomendar acciones �tiles y accionables
-- interpretar, no solo listar KPIs
-- sonar como un resumen ejecutivo industrial
+Tu trabajo NO es repetir métricas visibles.
+Tu trabajo es INTERPRETAR, PRIORIZAR y RECOMENDAR decisiones operativas concretas.
 
-Debe cumplir:
-- no inventar n�meros
-- no contradecir el payload
-- no usar texto gen�rico
-- no repetir KPIs literalmente si ya est�n visibles en pantalla
-- evitar frases vagas como �dar seguimiento� o �monitorear� sin contexto
-- executiveSummary: m�ximo 3 frases
-- highlights: 3 a 6 bullets cortos
-- risks: 2 a 5 objetos con level, message y action
-- recommendations: 3 a 6 acciones concretas
+Debes responder SOLO con JSON válido.
+No uses markdown.
+No agregues texto fuera del JSON.
+No expliques el schema.
+No incluyas comentarios.
 
-Si faltan datos, dilo claramente.
+Idioma:
+- Responde en español ejecutivo, claro, técnico y directo.
+- Tono: gerente de mantenimiento / jefe de planta.
+- Nada de frases genéricas o vacías.
+
+Reglas obligatorias:
+- No inventes datos.
+- No contradigas el payload.
+- No repitas literalmente KPIs si no aportan interpretación.
+- Cada highlight debe ser un hallazgo accionable, no una lectura plana de números.
+- Cada risk debe señalar impacto operativo real.
+- Cada action debe ser específica y ejecutable.
+- Evita frases vagas como "dar seguimiento", "monitorear", "revisar constantemente" o "seguir observando" sin contexto.
+- Si el riesgo es bajo, dilo sin exagerar.
+- Si faltan datos, dilo claramente.
+- Prioriza lo que afecta ejecución, disponibilidad, cumplimiento del plan o abastecimiento.
+- Usa el bloque "trends" para detectar deterioro o mejora vs periodo anterior.
+- Usa el bloque "priorities" para señalar concentración de riesgo.
+- Si hay alertas predictivas, intégralas al diagnóstico; no las menciones como sección aislada sin interpretación.
+- Si existen vencidas, sin asignar, reportes abiertos críticos o lubricantes comprometidos, deben influir en riesgos o recomendaciones.
+
+Qué debes priorizar al analizar:
+1. Actividades vencidas y pendientes críticas.
+2. Reportes de condición abiertos o en progreso.
+3. Lubricantes con riesgo de agotarse.
+4. Consumos anómalos o señales predictivas.
+5. Carga operativa mal distribuida o actividades sin asignar.
+6. Cambios contra el periodo anterior.
+
+Formato esperado:
+- title: "Lectura ejecutiva operativa"
+- executiveSummary: máximo 2 frases
+- highlights: exactamente 3 hallazgos accionables
+- risks: 2 o 3 riesgos concretos
+- recommendations: exactamente 3 acciones concretas y priorizadas
 
 Schema obligatorio:
 {
@@ -127,7 +235,7 @@ Schema obligatorio:
     "lowStockCount": 0,
     "unassignedPending": 0
   },
-  "highlights": ["string"],
+  "highlights": ["string", "string", "string"],
   "risks": [
     {
       "level": "LOW | MEDIUM | HIGH | CRITICAL",
@@ -135,7 +243,7 @@ Schema obligatorio:
       "action": "string"
     }
   ],
-  "recommendations": ["string"],
+  "recommendations": ["string", "string", "string"],
   "executiveSummary": "string",
   "schemaVersion": ${Number(AI_SCHEMA_VERSION || 1)}
 }
@@ -150,91 +258,154 @@ function fallbackSummary({ month, plantId, dashboard }) {
   const conditionReports = activities?.conditionReports || {};
   const alerts = dashboard?.alerts || {};
   const predictive = dashboard?.predictive || {};
-  const overdue = Number(activities.overdue || 0);
-  const pending = Number(activities.pending || 0);
-  const completed = Number(activities.completed || 0);
-  const dteCount = Number(
-    predictive?.lubricantDaysToEmptyCount ?? alerts?.daysToEmptyCount ?? 0
+  const trends = dashboard?.trends || {};
+  const priorities = dashboard?.priorities || {};
+
+  const overdue = toNum(activities.overdue);
+  const pending = toNum(activities.pending);
+  const completed = toNum(activities.completed);
+
+  const dteCount = toNum(
+    predictive?.lubricantDaysToEmptyCount ?? alerts?.daysToEmptyCount
   );
-  const anomalyCount = Number(
+  const anomalyCount = toNum(
     predictive?.equipmentConsumptionAnomaliesCount ??
-      alerts?.consumptionAnomaliesCount ??
-      0
+      alerts?.consumptionAnomaliesCount
   );
-  const predictiveSignalsCount = Number(
-    predictive?.consumptionSignalsCount ?? alerts?.predictiveSignalsCount ?? 0
+  const predictiveSignalsCount = toNum(
+    predictive?.consumptionSignalsCount ?? alerts?.predictiveSignalsCount
   );
 
-  const risks = [
-    {
-      level: overdue > 0 ? "HIGH" : "LOW",
-      message: `Hay ${overdue} actividades vencidas.`,
-      action: "Reasignar y priorizar vencidas en el plan de la semana.",
-    },
-  ];
+  const overdueDelta = toNum(trends?.overdueDelta);
+  const conditionOpenDelta = toNum(trends?.conditionOpenDelta);
+  const unassignedPending = toNum(alerts?.unassignedPending);
 
-  if (dteCount > 0) {
-    risks.push({
-      level: dteCount >= 3 ? "HIGH" : "MEDIUM",
-      message: `Se detectaron ${dteCount} lubricantes con riesgo de agotarse.`,
-      action: "Revisar cobertura, stock m�nimo y compras prioritarias.",
-    });
-  }
+  const topOverdue = shortList(priorities?.overdueTop, 1)[0];
+  const topCondition = shortList(priorities?.conditionRiskTop, 1)[0];
+  const topLubricant = shortList(priorities?.topLubricants, 1)[0];
 
-  if (anomalyCount > 0) {
-    risks.push({
-      level: anomalyCount >= 3 ? "HIGH" : "MEDIUM",
-      message: `Hay ${anomalyCount} equipos con consumo fuera de patr�n.`,
-      action:
-        "Validar condici�n, ruta y consumo reciente antes de que crezca el riesgo.",
-    });
-  }
+  const highlights = [];
 
-  const highlights = [
-    `Actividades completadas: ${completed}`,
-    `Pendientes: ${pending}`,
-    `Vencidas: ${overdue}`,
-  ];
-
-  if (predictiveSignalsCount > 0) {
-    highlights.push(`Se�ales predictivas activas: ${predictiveSignalsCount}`);
-  }
-
-  const recommendations = [
-    "Revisar vencidas y programar recuperaci�n.",
-    "Validar reportes de condici�n OPEN/IN_PROGRESS y asignar responsable.",
-    "Asegurar disponibilidad de lubricantes cr�ticos si aplica.",
-  ];
-
-  if (predictiveSignalsCount > 0) {
-    recommendations.push(
-      "Atender primero alertas predictivas de consumo e inventario con mayor severidad."
+  if (overdue > 0) {
+    highlights.push(
+      overdueDelta > 0
+        ? `Las actividades vencidas siguen siendo el principal foco y además crecieron vs el periodo anterior.`
+        : `Las actividades vencidas se mantienen como la principal fricción operativa del periodo.`
     );
   }
 
+  if (topCondition) {
+    highlights.push(
+      `El mayor riesgo técnico está concentrado en ${topCondition.equipmentName}${topCondition.equipmentCode ? ` (${topCondition.equipmentCode})` : ""}, con reporte ${String(topCondition.condition || "").toUpperCase()} ${topCondition.status === "OPEN" ? "aún abierto" : "en atención"}.`
+    );
+  }
+
+  if (dteCount > 0 || topLubricant) {
+    highlights.push(
+      dteCount > 0
+        ? `El abastecimiento requiere atención: hay lubricantes con riesgo de agotarse y el consumo debe alinearse con prioridad operativa.`
+        : `El consumo se concentra en lubricantes clave y conviene validar cobertura para sostener la ejecución.`
+    );
+  }
+
+  while (highlights.length < 3) {
+    if (unassignedPending > 0) {
+      highlights.push(
+        `Persisten actividades sin asignación, lo que puede convertir pendiente en vencido si no se redistribuye carga.`
+      );
+    } else if (anomalyCount > 0 || predictiveSignalsCount > 0) {
+      highlights.push(
+        `Las señales predictivas sugieren revisar consumo e inventario antes de que el riesgo se convierta en evento operativo.`
+      );
+    } else {
+      highlights.push(
+        `La operación se mantiene estable, pero conviene sostener disciplina en cierre de pendientes y reportes abiertos.`
+      );
+    }
+  }
+
+  const risks = [];
+
+  if (overdue > 0) {
+    risks.push({
+      level: overdue >= 5 ? "HIGH" : "MEDIUM",
+      message: topOverdue
+        ? `Hay actividades vencidas y la más sensible corresponde a ${topOverdue.equipmentName}${topOverdue.equipmentCode ? ` (${topOverdue.equipmentCode})` : ""}, con ${toNum(topOverdue.overdueDays)} días de atraso.`
+        : `Hay ${overdue} actividades vencidas que ya comprometen cumplimiento operativo.`,
+      action: "Reprogramar primero las vencidas críticas, asignar responsable y cerrar la recuperación en la semana.",
+    });
+  }
+
+  if (topCondition) {
+    risks.push({
+      level:
+        String(topCondition.condition || "").toUpperCase() === "CRITICO"
+          ? "CRITICAL"
+          : "HIGH",
+      message: `Existe riesgo técnico en ${topCondition.equipmentName}${topCondition.equipmentCode ? ` (${topCondition.equipmentCode})` : ""} por condición ${String(topCondition.condition || "").toUpperCase()} en estado ${topCondition.status}.`,
+      action: "Atender primero ese equipo, validar condición real y definir acción correctiva con fecha compromiso.",
+    });
+  }
+
+  if (dteCount > 0 || anomalyCount > 0 || predictiveSignalsCount > 0) {
+    risks.push({
+      level:
+        dteCount >= 3 || anomalyCount >= 3 || predictiveSignalsCount >= 3
+          ? "HIGH"
+          : "MEDIUM",
+      message:
+        dteCount > 0
+          ? `Se detectan riesgos de abastecimiento y/o consumo anómalo que pueden afectar continuidad del plan.`
+          : `Existen señales predictivas que justifican revisión preventiva antes de que se materialice el riesgo.`,
+      action: "Validar cobertura de lubricantes críticos y revisar los equipos con mayor desviación de consumo.",
+    });
+  }
+
+  while (risks.length < 2) {
+    risks.push({
+      level: "LOW",
+      message: "No se detecta un riesgo crítico adicional con la información disponible.",
+      action: "Mantener control de ejecución y cierre oportuno del backlog actual.",
+    });
+  }
+
+  const recommendations = [
+    overdue > 0
+      ? "Cerrar primero el bloque de actividades vencidas con mayor criticidad, atraso y falta de asignación."
+      : "Sostener el cumplimiento del plan semanal evitando que pendientes migren a vencidas.",
+
+    topCondition
+      ? `Resolver el frente técnico de ${topCondition.equipmentName}${topCondition.equipmentCode ? ` (${topCondition.equipmentCode})` : ""} antes de ampliar carga en otros equipos.`
+      : "Cerrar reportes OPEN e IN_PROGRESS con responsable, fecha compromiso y criterio de cierre.",
+
+    dteCount > 0 || anomalyCount > 0 || predictiveSignalsCount > 0
+      ? "Priorizar inventario y consumo predictivo en los puntos con mayor severidad antes de que afecten disponibilidad."
+      : "Revisar balance de carga y asignación para sostener la ejecución sin generar nuevo atraso.",
+  ];
+
   return {
     schemaVersion: Number(AI_SCHEMA_VERSION || 1),
-    title: "Resumen ejecutivo (fallback)",
+    title: "Lectura ejecutiva operativa",
     period: month,
     plantId,
     kpis: {
       completed,
       pending,
       overdue,
-      conditionOpen: Number(alerts.conditionOpenCount || conditionReports.OPEN || 0),
-      conditionInProgress: Number(
-        alerts.conditionInProgressCount || conditionReports.IN_PROGRESS || 0
+      conditionOpen: toNum(alerts.conditionOpenCount || conditionReports.OPEN),
+      conditionInProgress: toNum(
+        alerts.conditionInProgressCount || conditionReports.IN_PROGRESS
       ),
-      lowStockCount: Number(alerts.lowStockCount || 0),
-      unassignedPending: Number(alerts.unassignedPending || 0),
+      lowStockCount: toNum(alerts.lowStockCount),
+      unassignedPending: toNum(alerts.unassignedPending),
     },
-    highlights: highlights.slice(0, 6),
-    risks: risks.slice(0, 5),
-    recommendations: recommendations.slice(0, 6),
+    highlights: highlights.slice(0, 3),
+    risks: risks.slice(0, 3),
+    recommendations: recommendations.slice(0, 3),
     executiveSummary:
       predictiveSignalsCount > 0
-        ? "Resumen no disponible por IA en este momento. Se muestran riesgos operativos y se�ales predictivas detectadas con base en datos del sistema."
-        : "Resumen no disponible por IA en este momento. Se muestran riesgos y acciones sugeridas con base en datos del sistema.",
+        ? "Se detectan riesgos operativos que requieren priorización inmediata, especialmente en vencidas, reportes abiertos y señales predictivas de consumo o inventario. La ejecución debe enfocarse en los frentes con mayor impacto operativo."
+        : "La operación presenta focos que requieren priorización táctica, principalmente en vencidas, reportes abiertos y balance de ejecución. Conviene atacar primero lo que más compromete cumplimiento y continuidad.",
   };
 }
 
@@ -261,7 +432,7 @@ async function generateOnce({ month, plantId, role, lang, dashboard }) {
   const prompt = buildPrompt({ month, plantId, role, lang, dashboard });
 
   if (AI_MODE === "mock") {
-    return JSON.stringify(fallbackSummary({ month, plantId, dashboard }));
+    return fallbackSummary({ month, plantId, dashboard });
   }
 
   return normalizeProviderOutput(await callProvider(prompt));
@@ -297,9 +468,26 @@ async function generateWithRepair({ month, plantId, role, lang, dashboard }) {
   }
 
   const repairPrompt = `
-Corrige tu respuesta anterior.
-Devuelve SOLO JSON v�lido, sin markdown, sin comentarios y sin texto adicional.
-Usa exactamente este schema funcional:
+Tu respuesta anterior no cumplió el formato requerido.
+
+Corrígela y devuelve SOLO JSON válido.
+No uses markdown.
+No agregues comentarios.
+No agregues explicación.
+No agregues texto antes o después del JSON.
+
+Debes cumplir exactamente estas reglas:
+- executiveSummary: máximo 2 frases
+- highlights: exactamente 3 strings
+- risks: 2 a 3 objetos
+- recommendations: exactamente 3 strings
+- no inventar datos
+- no repetir literalmente KPIs si no aportan interpretación
+- redactar en español ejecutivo, técnico y directo
+- priorizar vencidas, reportes abiertos, inventario comprometido, anomalías de consumo y carga no asignada
+- usar los datos entregados, no frases genéricas
+
+Schema:
 {
   "title": "string",
   "period": "${month}",
@@ -313,7 +501,7 @@ Usa exactamente este schema funcional:
     "lowStockCount": 0,
     "unassignedPending": 0
   },
-  "highlights": ["string"],
+  "highlights": ["string", "string", "string"],
   "risks": [
     {
       "level": "LOW | MEDIUM | HIGH | CRITICAL",
@@ -321,10 +509,13 @@ Usa exactamente este schema funcional:
       "action": "string"
     }
   ],
-  "recommendations": ["string"],
+  "recommendations": ["string", "string", "string"],
   "executiveSummary": "string",
   "schemaVersion": ${Number(AI_SCHEMA_VERSION || 1)}
 }
+
+Respuesta anterior:
+${typeof raw1 === "string" ? raw1 : JSON.stringify(raw1)}
 `.trim();
 
   let raw2 = raw1;
@@ -397,7 +588,14 @@ export async function getAISummary({
     model: AI_MODE === "provider" ? OPENAI_MODEL : AI_MODE,
   });
 
-  const summary = await generateWithRepair({ month, plantId, role, lang, dashboard });
+  const summary = await generateWithRepair({
+    month,
+    plantId,
+    role,
+    lang,
+    dashboard,
+  });
+
   const payload = {
     generatedAt: new Date().toISOString(),
     summary,
