@@ -113,24 +113,35 @@
   app.set("etag", false);
   app.locals.prisma = prisma;
 
+  const allowedOrigins = new Set([
+    "http://localhost:5173",
+    "http://192.168.1.69:5173",
+    "https://lubriplan-frontend.vercel.app",
+    "https://lubriplan.com",
+    "https://www.lubriplan.com",
+    "https://app.lubriplan.com",
+  ]);
+
   const corsOptions = {
   origin(origin, callback) {
     if (!origin) return callback(null, true);
 
-    if (
-      origin === "http://localhost:5173" ||
-      origin === "http://192.168.1.69:5173" ||
-      origin === "https://lubriplan-frontend.vercel.app" ||
-      origin.endsWith(".vercel.app")
-    ) {
+    if (allowedOrigins.has(origin) || origin.endsWith(".vercel.app")) {
       return callback(null, true);
     }
 
-    return callback(new Error("Not allowed by CORS"));
+    return callback(new Error(`Not allowed by CORS: ${origin}`));
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "x-plant-id"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "x-plant-id",
+    "X-Plant-Id",
+    "x-user-id",
+    "X-User-Id",
+  ],
 };
 
 
