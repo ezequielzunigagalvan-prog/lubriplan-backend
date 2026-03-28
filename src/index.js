@@ -137,6 +137,10 @@
   allowedHeaders: [
     "Content-Type",
     "Authorization",
+    "Cache-Control",
+    "cache-control",
+    "Pragma",
+    "pragma",
     "x-plant-id",
     "X-Plant-Id",
     "x-user-id",
