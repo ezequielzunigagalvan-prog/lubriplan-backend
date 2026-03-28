@@ -82,7 +82,7 @@ router.post("/login", async (req, res) => {
         technicianId: user.technicianId ?? null,
       },
       process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRES || "8h" }
+      { expiresIn: process.env.JWT_EXPIRES || "16h" }
     );
 
     return res.json({
