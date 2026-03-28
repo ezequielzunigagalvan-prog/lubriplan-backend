@@ -1484,8 +1484,8 @@ app.get(
           type: "COND_REPORT",
           severity: sevFromScore(score),
           score,
-          title: `CondiciÃ³n anormal: ${lvl}`,
-          reason: `${r?.category ? String(r.category) : "Sin categorÃ­a"}${eq?.name ? ` Â· ${eq.name}` : ""}`,
+          title: `Condición anormal: ${lvl}`,
+          reason: `${r?.category ? String(r.category) : "Sin categorí­a"}${eq?.name ? ` Â· ${eq.name}` : ""}`,
           suggestedOwner: "SUPERVISOR",
           entity: { reportId: r.id, equipmentId: eq?.id ?? null },
           link: `/condition-reports?status=OPEN`,
@@ -7334,7 +7334,7 @@ app.post("/api/emergency-activities", requireAuth, async (req, res) => {
       const stockAfter =
         stockBefore != null ? Math.max(0, stockBefore - Number(usedInInvUnit)) : null;
 
-      const manualTitle = `EMERGENTE Â· ${eq.name || "Equipo"} Â· ${String(
+      const manualTitle = `EMERGENTE · ${eq.name || "Equipo"} · ${String(
         emergencyReason
       )
         .trim()
@@ -7347,7 +7347,7 @@ app.post("/api/emergency-activities", requireAuth, async (req, res) => {
         .filter(Boolean)
         .join("\n\n");
 
-      // 1) ejecuciÃ³n irrepetible completada
+      // 1) ejecución irrepetible completada
       const execution = await tx.execution.create({
         data: {
           plantId,
@@ -7779,6 +7779,33 @@ app.get("/api/history/lubricant-movements", requireAuth, async (req, res) => {
   });
 
   /* ========= SERVER ========= */
+app.get("/", (req, res) => {
+  res.json({
+    ok: true,
+    service: "LubriPlan API",
+    env: process.env.NODE_ENV || "development",
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.get("/api/health", async (req, res) => {
+  try {
+    return res.status(200).json({
+      ok: true,
+      service: "LubriPlan API",
+      status: "healthy",
+      uptimeSec: Math.round(process.uptime()),
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      status: "unhealthy",
+      error: error?.message || "Health check failed",
+    });
+  }
+});
+
   const PORT = Number(process.env.PORT || 3001);
   app.listen(process.env.PORT || 3001, "0.0.0.0", () => {
   console.log(`Server running on port ${process.env.PORT || 3001}`);
