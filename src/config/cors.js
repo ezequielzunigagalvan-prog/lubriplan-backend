@@ -10,17 +10,18 @@ export const allowedOrigins = [
 
 const corsOptions = {
   origin(origin, callback) {
+    console.log("[CORS] Origin recibido:", origin);
+
     if (!origin) return callback(null, true);
 
-    if (origin.includes("vercel.app")) {
+    if (
+      allowedOrigins.includes(origin) ||
+      /^https:\/\/.*\.vercel\.app$/.test(origin)
+    ) {
       return callback(null, true);
     }
 
-    if (allowedOrigins.includes(origin)) {
-      return callback(null, true);
-    }
-
-    return callback(new Error(`CORS bloqueado para: ${origin}`));
+    return callback(new Error(`Not allowed by CORS: ${origin}`));
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
