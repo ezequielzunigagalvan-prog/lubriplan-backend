@@ -1,8 +1,10 @@
 ﻿import cors from "cors";
 
 export const allowedOrigins = [
-  "http://localhost:5173",
-  "http://192.168.1.69:5173",
+   "http://localhost:5173",
+  "https://lubriplan.com",
+  "https://www.lubriplan.com",
+  "https://app.lubriplan.com",
   "https://lubriplan-frontend.vercel.app",
 ];
 
