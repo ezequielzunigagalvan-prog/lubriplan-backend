@@ -327,7 +327,7 @@ app.options("*", cors(corsOptions));
 
   function isCriticalCondition(c) {
     const s = String(c || "").toUpperCase().trim();
-    return s === "CRITICO" || s === "CRÃTICO" || s === "CRITICAL";
+    return s === "CRITICO" || s === "CRITICO" || s === "CRITICAL";
   }
 
 
@@ -1380,7 +1380,7 @@ app.get(
           technicianId: null,
           route: {
             equipment: {
-              criticality: { in: ["ALTA", "CRITICA", "CRÃTICA"] },
+              criticality: { in: ["ALTA", "CRITICA", "CRITICA"] },
             },
           },
         },
@@ -1409,7 +1409,7 @@ app.get(
       for (const ex of overdueExecs || []) {
         const eq = ex?.equipment || ex?.route?.equipment || null;
         const crit = String(eq?.criticality || "").toUpperCase();
-        const isCritical = ["ALTA", "CRITICA", "CRÃTICA"].includes(crit);
+        const isCritical = ["ALTA", "CRITICA", "CRITICA"].includes(crit);
 
         const sched = ex?.scheduledAt ? toStartOfDaySafe(new Date(ex.scheduledAt)) : null;
         const daysLate = sched ? Math.floor((today.getTime() - sched.getTime()) / 86400000) : 0;
@@ -1424,8 +1424,8 @@ app.get(
           type: "EXEC_OVERDUE",
           severity: sevFromScore(score),
           score,
-          title: `Actividad vencida${isCritical ? " (crÃ­tica)" : ""}`,
-          reason: `Programada ${daysLate} dÃ­a(s) atrÃ¡s${eq?.name ? ` Â· ${eq.name}` : ""}`,
+          title: `Actividad vencida${isCritical ? " (crí­tica)" : ""}`,
+          reason: `Programada ${daysLate} día(s) atrás${eq?.name ? ` Â· ${eq.name}` : ""}`,
           suggestedOwner: ex?.technicianId ? "TECHNICIAN" : "SUPERVISOR",
           entity: {
             executionId: ex.id,
@@ -1454,7 +1454,7 @@ app.get(
           type: "EXEC_UNASSIGNED",
           severity: sevFromScore(score),
           score,
-          title: `Actividad sin tÃ©cnico${isCritical ? " (crÃ­tica)" : ""}`,
+          title: `Actividad sin técnico${isCritical ? " (crÃ­tica)" : ""}`,
           reason: `${isOverdue ? "Vencida" : "Pendiente"}${eq?.name ? ` Â· ${eq.name}` : ""}`,
           suggestedOwner: "SUPERVISOR",
           entity: {
@@ -1469,7 +1469,7 @@ app.get(
         const eq = r?.equipment || null;
         const lvl = String(r?.condition || "REGULAR").toUpperCase();
         const crit = String(eq?.criticality || "").toUpperCase();
-        const isCriticalEq = ["ALTA", "CRITICA", "CRÃTICA"].includes(crit);
+        const isCriticalEq = ["ALTA", "CRITICA", "CRITICA"].includes(crit);
 
         let score = 50;
         if (lvl === "CRITICO") score += 35;
@@ -1509,8 +1509,8 @@ app.get(
           type: "REPEATED_FAILURE",
           severity: sevFromScore(score),
           score,
-          title: `Reincidencia MALO/CRÃTICO`,
-          reason: `Eventos: ${it.badTotal} Â· CRÃTICOS: ${it.critTotal}${eq?.name ? ` Â· ${eq.name}` : ""}`,
+          title: `Reincidencia MALO/CRITICO`,
+          reason: `Eventos: ${it.badTotal} Â· CRITICOS: ${it.critTotal}${eq?.name ? ` Â· ${eq.name}` : ""}`,
           suggestedOwner: "SUPERVISOR",
           entity: { equipmentId: it.equipmentId },
           link: `/activities?filter=bad-condition&month=${ym}`,
@@ -1526,7 +1526,7 @@ app.get(
           type: "CRITICAL_UNASSIGNED_OVERDUE",
           severity: "CRITICAL",
           score,
-          title: `CrÃ­tica vencida sin tÃ©cnico`,
+          title: `CrÃ­tica vencida sin técnico`,
           reason: `${eq?.name ? eq.name : "Equipo"} Â· Ruta: ${ex?.route?.name || "â€”"}`,
           suggestedOwner: "SUPERVISOR",
           entity: { executionId: ex.id, equipmentId: eq?.id ?? null },
@@ -1564,10 +1564,10 @@ app.get(
           type: "DAYS_TO_EMPTY",
           severity: sevFromScore(score),
           score,
-          title: `Days-to-empty ${risk === "HIGH" ? "crÃ­tico" : "en riesgo"}`,
+          title: `Days-to-empty ${risk === "HIGH" ? "crí­tico" : "en riesgo"}`,
           reason: `${it.name || "Lubricante"} Â· DTE: ${
             it.daysToEmpty ?? it.dte ?? "â€”"
-          } dÃ­a(s) Â· Stock: ${Number(it.stock || 0)} ${it.unit || ""}${it?.underMin ? " Â· Bajo mÃ­nimo" : ""}`,
+          } día(s) Â· Stock: ${Number(it.stock || 0)} ${it.unit || ""}${it?.underMin ? " Â· Bajo mí­nimo" : ""}`,
           suggestedOwner: "ADMIN",
           entity: { lubricantId: it.lubricantId },
           link: `/inventory`,
@@ -1581,14 +1581,14 @@ app.get(
         else if (risk === "MED") score = 72;
 
         const crit = String(it?.criticality || "").toUpperCase();
-        if (["ALTA", "CRITICA", "CRÃTICA"].includes(crit)) score = Math.min(100, score + 7);
+        if (["ALTA", "CRITICA", "CRITICA"].includes(crit)) score = Math.min(100, score + 7);
 
         add(queue, {
           key: `ANOMALY:${it.equipmentId}`,
           type: "CONSUMPTION_ANOMALY",
           severity: sevFromScore(score),
           score,
-          title: `AnomalÃ­a de consumo (${risk})`,
+          title: `Anomalí­a de consumo (${risk})`,
           reason: `${it.name || "Equipo"}${it.code ? ` (${it.code})` : ""} Â· Ratio: ${
             it.ratio ?? "â€”"
           } Â· Base: ${it.baselineAvgDaily ?? "â€”"} Â· Ãšlt.14: ${it.last14AvgDaily ?? it.lastNAvgDaily ?? "â€”"}`,
@@ -2332,7 +2332,7 @@ app.get(
       });
 
       if (!technician) {
-        return res.status(404).json({ error: "TÃ©cnico no encontrado en la planta actual" });
+        return res.status(404).json({ error: "Técnico no encontrado en la planta actual" });
       }
 
       const executions = await prisma.execution.findMany({
@@ -2873,7 +2873,7 @@ app.get(
     }
   }
 );
- // âœ… Asignar tÃ©cnico a una ejecuciÃ³n (quick assign)
+ // âœ… Asignar técnico a una ejecuciÃ³n (quick assign)
 // - MULTI-PLANTA
 app.patch(
   "/api/executions/:id/assign-technician",
@@ -2954,7 +2954,7 @@ app.patch(
       });
 
       if (!tech) {
-        return res.status(404).json({ error: "TÃ©cnico no encontrado en la planta actual" });
+        return res.status(404).json({ error: "Técnico no encontrado en la planta actual" });
       }
 
       const updated = await prisma.execution.update({
@@ -2980,7 +2980,7 @@ app.patch(
   }
 );
 
-  // âœ… Asignar tÃ©cnico a una ejecuciÃ³n
+  // âœ… Asignar técnico a una ejecuciÃ³n
 // - MULTI-PLANTA
 app.patch(
   "/api/executions/:id/assign",
@@ -3861,8 +3861,8 @@ app.get("/api/technicians", requireAuth, async (req, res) => {
 
     return res.json(result);
   } catch (error) {
-    console.error("Error obteniendo tÃ©cnicos:", error);
-    return res.status(500).json({ error: "Error obteniendo tÃ©cnicos" });
+    console.error("Error obteniendo técnicos:", error);
+    return res.status(500).json({ error: "Error obteniendo técnicos" });
   }
 });
 
@@ -3875,7 +3875,7 @@ app.post("/api/technicians", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), 
 
     if (!name || !code || !specialty) {
       return res.status(400).json({
-        error: "Nombre, cÃ³digo y especialidad son obligatorios",
+        error: "Nombre, código y especialidad son obligatorios",
       });
     }
 
@@ -3892,13 +3892,13 @@ app.post("/api/technicians", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), 
 
     res.status(201).json({ ...technician, lastActivityAt: null });
   } catch (error) {
-    console.error("âŒ Error creando tÃ©cnico:", error);
+    console.error("Error creando técnico:", error);
 
     if (error?.code === "P2002") {
-      return res.status(409).json({ error: "Ya existe un tÃ©cnico con ese cÃ³digo en esta planta" });
+      return res.status(409).json({ error: "Ya existe un técnico con ese cÃ³digo en esta planta" });
     }
 
-    res.status(500).json({ error: "Error creando tÃ©cnico" });
+    res.status(500).json({ error: "Error creando técnico" });
   }
 });
 
@@ -3923,7 +3923,7 @@ app.put("/api/technicians/:id", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]
     });
 
     if (!existing || existing.deletedAt) {
-      return res.status(404).json({ error: "TÃ©cnico no encontrado" });
+      return res.status(404).json({ error: "Técnico no encontrado" });
     }
 
     const result = await prisma.technician.updateMany({
@@ -3937,7 +3937,7 @@ app.put("/api/technicians/:id", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]
     });
 
     if (!result.count) {
-      return res.status(404).json({ error: "TÃ©cnico no encontrado" });
+      return res.status(404).json({ error: "Técnico no encontrado" });
     }
 
     const technician = await prisma.technician.findFirst({
@@ -3946,13 +3946,13 @@ app.put("/api/technicians/:id", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]
 
     res.json({ ...technician, lastActivityAt: null });
   } catch (error) {
-    console.error("âŒ Error actualizando tÃ©cnico:", error);
+    console.error("Error actualizando técnico:", error);
 
     if (error?.code === "P2002") {
-      return res.status(409).json({ error: "Ya existe un tÃ©cnico con ese cÃ³digo en esta planta" });
+      return res.status(409).json({ error: "Ya existe un técnico con ese cÃ³digo en esta planta" });
     }
 
-    res.status(500).json({ error: "Error actualizando tÃ©cnico" });
+    res.status(500).json({ error: "Error actualizando técnico" });
   }
 });
 
@@ -3970,7 +3970,7 @@ app.delete("/api/technicians/:id", requireAuth, requireRole(["ADMIN", "SUPERVISO
     });
 
     if (!existing || existing.deletedAt) {
-      return res.status(404).json({ error: "TÃ©cnico no encontrado" });
+      return res.status(404).json({ error: "Técnico no encontrado" });
     }
 
     const result = await prisma.technician.updateMany({
@@ -3979,13 +3979,13 @@ app.delete("/api/technicians/:id", requireAuth, requireRole(["ADMIN", "SUPERVISO
     });
 
     if (!result.count) {
-      return res.status(404).json({ error: "TÃ©cnico no encontrado" });
+      return res.status(404).json({ error: "Técnico no encontrado" });
     }
 
     res.json({ ok: true });
   } catch (error) {
-    console.error("âŒ Error eliminando tÃ©cnico:", error);
-    res.status(500).json({ error: "Error eliminando tÃ©cnico" });
+    console.error("âŒ Error eliminando técnico:", error);
+    res.status(500).json({ error: "Error eliminando técnico" });
   }
 });
 
@@ -4236,7 +4236,7 @@ app.post(
         });
 
         if (!technicianExists) {
-          return res.status(404).json({ error: "TÃ©cnico no encontrado en la planta actual" });
+          return res.status(404).json({ error: "Técnico no encontrado en la planta actual" });
         }
       }
 
@@ -4576,7 +4576,7 @@ app.put(
 
         if (!technicianExists) {
           return res.status(404).json({
-            error: "TÃ©cnico no encontrado en la planta actual",
+            error: "Técnico no encontrado en la planta actual",
           });
         }
       }
@@ -4906,7 +4906,7 @@ app.patch(
           where: { id: technicianId, plantId, deletedAt: null },
           select: { id: true },
         });
-        if (!tech) return res.status(400).json({ error: "TÃ©cnico invalido" });
+        if (!tech) return res.status(400).json({ error: "Técnico invalido" });
       }
 
       const updated = await prisma.execution.updateMany({
@@ -4915,7 +4915,7 @@ app.patch(
       });
 
       if (!updated.count) {
-        return res.status(404).json({ error: "EjecuciÃ³n no encontrada" });
+        return res.status(404).json({ error: "Ejecución no encontrada" });
       }
 
       const item = await prisma.execution.findFirst({
@@ -4964,7 +4964,7 @@ app.patch(
         where: { id: technicianId, plantId, deletedAt: null },
         select: { id: true, name: true, code: true, status: true },
       });
-      if (!tech) return res.status(404).json({ error: "TÃ©cnico no encontrado" });
+      if (!tech) return res.status(404).json({ error: "Técnico no encontrado" });
 
       const where = {
         plantId,
@@ -4994,7 +4994,7 @@ app.patch(
       });
     } catch (e) {
       console.error("assign-technician-by-equipment:", e);
-      res.status(500).json({ error: "Error asignando tÃ©cnico por equipo" });
+      res.status(500).json({ error: "Error asignando técnico por equipo" });
     }
   }
 );
@@ -5034,7 +5034,7 @@ app.patch(
         });
 
         if (!tech) {
-          return res.status(404).json({ error: "TÃ©cnico no encontrado en la planta actual" });
+          return res.status(404).json({ error: "Técnico no encontrado en la planta actual" });
         }
       }
 
@@ -5073,7 +5073,7 @@ app.patch(
       return res.json({ ok: true, item: updated });
     } catch (e) {
       console.error("assign route technician error:", e);
-      return res.status(500).json({ error: "Error asignando tÃ©cnico a ruta" });
+      return res.status(500).json({ error: "Error asignando técnico a ruta" });
     }
   }
 );
@@ -6687,7 +6687,7 @@ app.patch(
 
       if (role === "TECHNICIAN") {
         if (!Number.isFinite(myTechnicianId)) {
-          return res.status(403).json({ error: "Tu usuario no tiene tÃ©cnico asociado" });
+          return res.status(403).json({ error: "Tu usuario no tiene técnico asociado" });
         }
 
         const assignedId =
@@ -7126,7 +7126,7 @@ if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
   const scopeWhereByUser = (baseWhere = {}) => {
     if (role !== "TECHNICIAN") return baseWhere;
     if (!Number.isFinite(myTechId)) {
-      // si no sabemos quÃ© tÃ©cnico es, no le muestres historial (seguro)
+      // si no sabemos qué técnico es, no le muestres historial (seguro)
       return { ...baseWhere, technicianId: -1 };
     }
     return { ...baseWhere, technicianId: myTechId };
@@ -7280,7 +7280,7 @@ app.post("/api/emergency-activities", requireAuth, async (req, res) => {
       select: { id: true, name: true, code: true },
     });
     if (!tech) {
-      return res.status(400).json({ error: "TÃ©cnico invalido" });
+      return res.status(400).json({ error: "Técnico invalido" });
     }
 
     const qty = Number(quantity);
@@ -7754,7 +7754,7 @@ app.get("/api/history/lubricant-movements", requireAuth, async (req, res) => {
           if (ratio >= criticalRatio) level = "CRITICAL";
           else if (ratio >= warnRatio) level = "WARNING";
 
-          const tech = techById.get(g.technicianId) || { id: g.technicianId, name: "TÃ©cnico" };
+          const tech = techById.get(g.technicianId) || { id: g.technicianId, name: "Técnico" };
 
           return {
             technician: tech,

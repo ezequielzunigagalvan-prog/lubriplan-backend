@@ -26,13 +26,13 @@ async function main() {
   const plant = await prisma.plant.upsert({
     where: { id: 1 },
     update: {
-      name: "Planta Principal",
+      name: "Hidrolub",
       active: true,
       timezone: "America/Mexico_City",
     },
     create: {
       id: 1,
-      name: "Planta Principal",
+      name: "Hidrolub",
       active: true,
       timezone: "America/Mexico_City",
     },

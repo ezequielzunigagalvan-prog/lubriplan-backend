@@ -112,7 +112,7 @@ export default function emergencyActivitiesRoutes({ prisma, auth }) {
               where: { id: techId, plantId, deletedAt: null },
             });
             if (!technician) {
-              throw new Error("TÃ©cnico no encontrado en la planta actual");
+              throw new Error("Técnico no encontrado en la planta actual");
             }
           }
 
@@ -121,7 +121,7 @@ export default function emergencyActivitiesRoutes({ prisma, auth }) {
           const qtyNormalized = convertQtyToLubUnit(qty, inputUnit, lubUnit);
 
           if (!Number.isFinite(qtyNormalized) || qtyNormalized <= 0) {
-            throw new Error("Cantidad invÃ¡lida despuÃ©s de la conversiÃ³n");
+            throw new Error("Cantidad inválida después de la conversión");
           }
 
           const manualTitle = `EMERGENTE Â· ${equipment.name || `Equipo ${eqId}`} Â· ${String(
