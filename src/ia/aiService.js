@@ -205,6 +205,8 @@ Reglas obligatorias:
 - Usa el bloque "priorities" para señalar concentración de riesgo.
 - Si hay alertas predictivas, intégralas al diagnóstico; no las menciones como sección aislada sin interpretación.
 - Si existen vencidas, sin asignar, reportes abiertos críticos o lubricantes comprometidos, deben influir en riesgos o recomendaciones.
+- Si mencionas un equipo específico, incluye también su código entre paréntesis cuando exista en los datos. Ejemplo: "MEZCLADOR (MEZ-14)".
+- No menciones equipos solo por nombre si el código está disponible.
 
 Qué debes priorizar al analizar:
 1. Actividades vencidas y pendientes críticas.
@@ -486,6 +488,7 @@ Debes cumplir exactamente estas reglas:
 - redactar en español ejecutivo, técnico y directo
 - priorizar vencidas, reportes abiertos, inventario comprometido, anomalías de consumo y carga no asignada
 - usar los datos entregados, no frases genéricas
+- si mencionas un equipo específico, incluye su código entre paréntesis cuando exista en los datos
 
 Schema:
 {
