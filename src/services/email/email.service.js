@@ -13,6 +13,17 @@ const resend = process.env.RESEND_API_KEY
 
 const EMAIL_FROM = process.env.EMAIL_FROM || "LubriPlan <onboarding@resend.dev>";
 const APP_BASE_URL = String(process.env.APP_BASE_URL || "http://localhost:5173").replace(/\/$/, "");
+const API_PUBLIC_BASE_URL = String(
+  process.env.API_PUBLIC_BASE_URL || process.env.APP_BASE_URL || "http://localhost:5173"
+).replace(/\/$/, "");
+
+function absolutizeUrl(url) {
+  const raw = String(url || "").trim();
+  if (!raw) return null;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (raw.startsWith("/")) return `${API_PUBLIC_BASE_URL}${raw}`;
+  return `${API_PUBLIC_BASE_URL}/${raw}`;
+}
 
 async function sendEmail({ to, subject, html }) {
   if (!resend) {
@@ -43,6 +54,8 @@ export async function sendConditionAlertEmail({ prisma, payload }) {
 
   const { subject, html } = conditionAlertTemplate({
     ...payload,
+    observation: payload.observation || payload.description || "",
+    evidenceImage: absolutizeUrl(payload.evidenceImage),
     link:
       payload.link ||
       `${APP_BASE_URL}/condition-reports?status=OPEN`,
@@ -64,6 +77,8 @@ export async function sendCriticalActivityEmail({ prisma, payload }) {
 
   const { subject, html } = criticalAlertTemplate({
     ...payload,
+    observation: payload.observation || payload.observations || payload.reason || "",
+    evidenceImage: absolutizeUrl(payload.evidenceImage),
     link:
       payload.link ||
       `${APP_BASE_URL}/activities`,

@@ -236,6 +236,11 @@ export default function emergencyActivitiesRoutes({ prisma, auth }) {
                 equipmentCode: null,
                 riskLevel: "CRÍTICO",
                 reason: `Actividad emergente con condición ${String(condition).trim().toUpperCase()}`,
+                observation:
+                  result.execution?.observations ||
+                  result.execution?.evidenceNote ||
+                  "",
+                evidenceImage: result.execution?.evidenceImage || null,
                 occurredAt: result.execution?.executedAt || executedAtDT,
                 suggestedAction: "Revisar la actividad crítica y validar seguimiento inmediato.",
                 link: `${process.env.APP_BASE_URL || "http://localhost:5173"}/activities?filter=critical-risk&executionId=${result.execution.id}&focus=critical`,

@@ -7044,8 +7044,13 @@ app.patch(
                 updated.route?.equipment?.code ||
                 updated.equipment?.code ||
                 "",
-              riskLevel: "CR?TICO",
-              reason: "Actividad completada con condici?n cr?tica",
+              riskLevel: "CRÍTICO",
+              reason: "Actividad completada con condición crítica",
+              observation:
+                updated.observations ||
+                updated.evidenceNote ||
+                "",
+              evidenceImage: updated.evidenceImage || null,
               occurredAt: updated.executedAt || new Date(),
               suggestedAction: "Revisar la actividad y definir seguimiento inmediato.",
               link: `${process.env.APP_BASE_URL || "http://localhost:5173"}/activities?filter=critical-risk&executionId=${updated.id}&focus=critical`,
@@ -7460,6 +7465,11 @@ app.post("/api/emergency-activities", requireAuth, async (req, res) => {
             equipmentCode: result.equipment?.code || "",
             riskLevel: "CRÍTICO",
             reason: "Actividad emergente completada con condición crítica",
+            observation:
+              result.execution?.observations ||
+              result.execution?.evidenceNote ||
+              "",
+            evidenceImage: result.execution?.evidenceImage || null,
             occurredAt: result.execution.executedAt || new Date(),
             suggestedAction: "Revisar la actividad emergente y atender el seguimiento requerido.",
             link: `${process.env.APP_BASE_URL || "http://localhost:5173"}/activities?filter=critical-risk&executionId=${result.execution.id}&focus=critical`,

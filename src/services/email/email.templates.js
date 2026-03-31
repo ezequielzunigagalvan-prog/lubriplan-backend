@@ -68,6 +68,26 @@ function detailRow(label, value) {
   `;
 }
 
+function imageBlock(label, imageUrl) {
+  const safeUrl = escapeHtml(String(imageUrl || "").trim());
+  if (!safeUrl) return "";
+
+  return `
+    <div style="margin-top:18px;">
+      <div style="font-size:14px;font-weight:800;color:#0f172a;margin-bottom:8px;">
+        ${escapeHtml(label)}
+      </div>
+      <div style="padding:12px;border:1px solid #e2e8f0;border-radius:12px;background:#f8fafc;">
+        <img
+          src="${safeUrl}"
+          alt="${escapeHtml(label)}"
+          style="display:block;max-width:100%;height:auto;border-radius:10px;border:1px solid #e2e8f0;"
+        />
+      </div>
+    </div>
+  `;
+}
+
 function monthLabelEs(ym) {
   if (!/^\d{4}-\d{2}$/.test(String(ym || ""))) return String(ym || "—");
 
@@ -140,6 +160,8 @@ export function conditionAlertTemplate(payload) {
     severity,
     category,
     description,
+    observation,
+    evidenceImage,
     detectedAt,
     link,
   } = payload;
@@ -159,7 +181,10 @@ export function conditionAlertTemplate(payload) {
       ${detailRow("Categoría", category || "—")}
       ${detailRow("Fecha / hora", fmtDateTimeMx(detectedAt))}
       ${detailRow("Descripción", description || "—")}
+      ${detailRow("Observación", observation || description || "—")}
     </table>
+
+    ${imageBlock("Evidencia", evidenceImage)}
   `;
 
   return {
@@ -181,6 +206,8 @@ export function criticalAlertTemplate(payload) {
     equipmentCode,
     riskLevel,
     reason,
+    observation,
+    evidenceImage,
     occurredAt,
     suggestedAction,
     link,
@@ -197,9 +224,12 @@ export function criticalAlertTemplate(payload) {
       ${detailRow("Código", equipmentCode || "—")}
       ${detailRow("Nivel de riesgo", riskLevel || "CRÍTICO")}
       ${detailRow("Motivo", reason || "—")}
+      ${detailRow("Observación", observation || "—")}
       ${detailRow("Fecha / hora", fmtDateTimeMx(occurredAt))}
       ${detailRow("Acción sugerida", suggestedAction || "Revisar detalle y atender de inmediato")}
     </table>
+
+    ${imageBlock("Evidencia", evidenceImage)}
   `;
 
   return {
@@ -302,7 +332,7 @@ export function monthlyExecutiveReportTemplate(payload) {
 
     <div style="margin-top:22px;">
       <div style="font-size:14px;font-weight:800;color:#0f172a;margin-bottom:8px;">
-        Highlights
+        Hallazgos clave
       </div>
       ${renderList(highlights)}
     </div>

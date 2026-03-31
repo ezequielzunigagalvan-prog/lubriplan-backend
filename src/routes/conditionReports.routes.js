@@ -202,6 +202,8 @@ export default function conditionReportsRoutes({ prisma, auth }) {
             severity: item.condition,
             category: item.category || "OTRO",
             description: item.description,
+            observation: item.description,
+            evidenceImage: item.evidenceImage,
             detectedAt: item.detectedAt,
             link: `${process.env.APP_BASE_URL || "http://localhost:5173"}/condition-reports?status=OPEN`,
           },
@@ -493,4 +495,3 @@ export default function conditionReportsRoutes({ prisma, auth }) {
 
   return router;
 }
-
