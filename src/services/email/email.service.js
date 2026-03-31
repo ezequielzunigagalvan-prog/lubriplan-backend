@@ -132,7 +132,7 @@ export async function sendMonthlyExecutiveReportEmail({ prisma, payload }) {
     ...payload,
     link:
       payload.link ||
-      `${APP_BASE_URL}/reports/monthly-intelligent?month=${payload.month}`,
+      `${APP_BASE_URL}/reports/monthly?month=${payload.month}`,
   });
 
   const result = await sendEmail({

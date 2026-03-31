@@ -215,7 +215,7 @@ export async function runMonthlyExecutiveReportJob({
             ? summary.recommendations
             : [],
           risks: Array.isArray(summary?.risks) ? summary.risks : [],
-          link: `${String(baseUrl).replace(/\/$/, "")}/reports/monthly-intelligent?month=${reportMonth}`,
+          link: `${String(baseUrl).replace(/\/$/, "")}/reports/monthly?month=${reportMonth}`,
         },
       });
 
