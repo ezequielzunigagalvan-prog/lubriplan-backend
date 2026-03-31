@@ -20,6 +20,7 @@ const API_PUBLIC_BASE_URL = String(
 function absolutizeUrl(url) {
   const raw = String(url || "").trim();
   if (!raw) return null;
+  if (/^data:/i.test(raw)) return null;
   if (/^https?:\/\//i.test(raw)) return raw;
   if (raw.startsWith("/")) return `${API_PUBLIC_BASE_URL}${raw}`;
   return `${API_PUBLIC_BASE_URL}/${raw}`;

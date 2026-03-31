@@ -68,9 +68,21 @@ function detailRow(label, value) {
   `;
 }
 
-function imageBlock(label, imageUrl) {
+function imageBlock(label, imageUrl, fallbackText = "") {
   const safeUrl = escapeHtml(String(imageUrl || "").trim());
-  if (!safeUrl) return "";
+  if (!safeUrl) {
+    if (!fallbackText) return "";
+    return `
+      <div style="margin-top:18px;">
+        <div style="font-size:14px;font-weight:800;color:#0f172a;margin-bottom:8px;">
+          ${escapeHtml(label)}
+        </div>
+        <div style="padding:12px;border:1px solid #e2e8f0;border-radius:12px;background:#f8fafc;color:#475569;">
+          ${escapeHtml(fallbackText)}
+        </div>
+      </div>
+    `;
+  }
 
   return `
     <div style="margin-top:18px;">
@@ -184,7 +196,11 @@ export function conditionAlertTemplate(payload) {
       ${detailRow("Observación", observation || description || "—")}
     </table>
 
-    ${imageBlock("Evidencia", evidenceImage)}
+    ${imageBlock(
+      "Evidencia",
+      evidenceImage,
+      "La evidencia está disponible dentro de LubriPlan si fue adjuntada desde la app."
+    )}
   `;
 
   return {
@@ -229,7 +245,11 @@ export function criticalAlertTemplate(payload) {
       ${detailRow("Acción sugerida", suggestedAction || "Revisar detalle y atender de inmediato")}
     </table>
 
-    ${imageBlock("Evidencia", evidenceImage)}
+    ${imageBlock(
+      "Evidencia",
+      evidenceImage,
+      "La evidencia está disponible dentro de LubriPlan si fue adjuntada desde la app."
+    )}
   `;
 
   return {
