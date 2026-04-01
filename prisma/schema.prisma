@@ -33,6 +33,10 @@ model AppSettings {
   technicianOverloadEnabled Boolean @default(true)
   predictiveAlertsEnabled   Boolean @default(true)
   aiSummaryEnabled          Boolean @default(true)
+  criticalActivityEmailEnabled Boolean @default(true)
+  conditionReportEmailEnabled  Boolean @default(true)
+  overdueSummaryEmailEnabled   Boolean @default(true)
+  monthlyReportEmailEnabled    Boolean @default(true)
 
   // =========================  
   // Sobrecarga técnicos

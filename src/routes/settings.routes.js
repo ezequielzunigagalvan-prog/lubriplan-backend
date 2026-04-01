@@ -1,4 +1,4 @@
-// src/routes/settings.routes.js
+﻿// src/routes/settings.routes.js
 import express from "express";
 
 export default function settingsRoutes({ prisma, auth, requireRole }) {
@@ -39,7 +39,7 @@ export default function settingsRoutes({ prisma, auth, requireRole }) {
         preventNegativeStock: "boolean",
         lowStockWarningEnabled: "boolean",
 
-        // ✅ nuevos switches simples
+        // âœ… nuevos switches simples
         technicianOverloadEnabled: "boolean",
         predictiveAlertsEnabled: "boolean",
         aiSummaryEnabled: "boolean",
@@ -85,7 +85,7 @@ export default function settingsRoutes({ prisma, auth, requireRole }) {
         }
       }
 
-      // validación lógica
+      // Validacion logica
       if (
         data.overloadWarnRatio !== undefined &&
         data.overloadCriticalRatio !== undefined &&
