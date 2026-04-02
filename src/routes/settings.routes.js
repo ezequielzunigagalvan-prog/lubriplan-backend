@@ -39,10 +39,14 @@ export default function settingsRoutes({ prisma, auth, requireRole }) {
         preventNegativeStock: "boolean",
         lowStockWarningEnabled: "boolean",
 
-        // âœ… nuevos switches simples
+        // switches simples
         technicianOverloadEnabled: "boolean",
         predictiveAlertsEnabled: "boolean",
         aiSummaryEnabled: "boolean",
+        criticalActivityEmailEnabled: "boolean",
+        conditionReportEmailEnabled: "boolean",
+        overdueSummaryEmailEnabled: "boolean",
+        monthlyReportEmailEnabled: "boolean",
 
         // avanzados
         overloadWindowDays: "int",
