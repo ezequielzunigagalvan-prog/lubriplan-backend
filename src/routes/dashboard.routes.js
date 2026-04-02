@@ -1,4 +1,4 @@
-// src/routes/dashboard.routes.js
+﻿// src/routes/dashboard.routes.js
 import express from "express";
 
 export default function dashboardRoutes({
@@ -225,31 +225,31 @@ export default function dashboardRoutes({
       const labelFromType = (type) => {
         const t = String(type || "").toUpperCase();
         if (t === "EXEC_OVERDUE") return "Actividad vencida";
-        if (t === "EXEC_UNASSIGNED") return "Actividad sin técnico";
-        if (t === "COND_REPORT") return "Condición reportada";
+        if (t === "EXEC_UNASSIGNED") return "Actividad sin tÃ©cnico";
+        if (t === "COND_REPORT") return "CondiciÃ³n reportada";
         if (t === "DAYS_TO_EMPTY") return "Inventario en riesgo";
-        if (t === "CONSUMPTION_ANOMALY") return "Consumo fuera de patrón";
+        if (t === "CONSUMPTION_ANOMALY") return "Consumo fuera de patrÃ³n";
         return "Prioridad";
       };
       const priorityLabelFromSeverity = (severity) => {
         const s = String(severity || "").toUpperCase();
-        if (s === "CRITICAL") return "Atención inmediata";
+        if (s === "CRITICAL") return "AtenciÃ³n inmediata";
         if (s === "HIGH") return "Alta prioridad";
-        if (s === "MED") return "Atención hoy";
+        if (s === "MED") return "AtenciÃ³n hoy";
         return "Seguimiento";
       };
       const ownerLabelFromSuggestedOwner = (owner) => {
         const o = String(owner || "").toUpperCase();
         if (o === "ADMIN") return "Administrador";
         if (o === "SUPERVISOR") return "Supervisor";
-        if (o === "TECHNICIAN") return "Técnico";
+        if (o === "TECHNICIAN") return "TÃ©cnico";
         return "Equipo";
       };
       const actionFromItem = (item) => {
         const t = String(item?.type || "").toUpperCase();
         if (t === "EXEC_OVERDUE") return "Completar o reprogramar la actividad hoy";
-        if (t === "EXEC_UNASSIGNED") return "Asignar responsable antes de que se retrase más";
-        if (t === "COND_REPORT") return "Revisar el reporte y definir acción correctiva";
+        if (t === "EXEC_UNASSIGNED") return "Asignar responsable antes de que se retrase mÃ¡s";
+        if (t === "COND_REPORT") return "Revisar el reporte y definir acciÃ³n correctiva";
         if (t === "DAYS_TO_EMPTY") return "Reponer lubricante o ajustar el plan de consumo";
         if (t === "CONSUMPTION_ANOMALY") return "Inspeccionar el equipo y validar el consumo real";
         return "Revisar y atender";
@@ -259,15 +259,15 @@ export default function dashboardRoutes({
         const raw = String(item?.reason || "").trim();
         if (t === "DAYS_TO_EMPTY") {
           return raw
-            .replace(/Days-to-empty|DTE/gi, "Días estimados restantes")
+            .replace(/Days-to-empty|DTE/gi, "DÃ­as estimados restantes")
             .replace(/Stock:/gi, "Stock actual:")
-            .replace(/Bajo m[íi]nimo/gi, "por debajo del mínimo");
+            .replace(/Bajo m[Ã­i]nimo/gi, "por debajo del mÃ­nimo");
         }
         if (t === "CONSUMPTION_ANOMALY") {
           return raw
-            .replace(/Ratio:/gi, "Desviación:")
+            .replace(/Ratio:/gi, "DesviaciÃ³n:")
             .replace(/Base:/gi, "Promedio base:")
-            .replace(/Últ\.?14:|Ult\.?14:/gi, "Promedio últimos 14 días:");
+            .replace(/Ãšlt\.?14:|Ult\.?14:/gi, "Promedio Ãºltimos 14 dÃ­as:");
         }
         if (t === "EXEC_UNASSIGNED") {
           return raw.replace(/^Vencida/gi, "Ya vencida").replace(/^Pendiente/gi, "Pendiente por asignar");
@@ -287,17 +287,17 @@ export default function dashboardRoutes({
         }
         if (t === "EXEC_UNASSIGNED") {
           return severity === "CRITICAL"
-            ? "Asignar técnico a una actividad crítica"
-            : "Asignar técnico a una actividad pendiente";
+            ? "Asignar tÃ©cnico a una actividad crÃ­tica"
+            : "Asignar tÃ©cnico a una actividad pendiente";
         }
         if (t === "COND_REPORT") {
-          return "Revisar condición anormal reportada";
+          return "Revisar condiciÃ³n anormal reportada";
         }
         if (t === "DAYS_TO_EMPTY") {
           return "Reponer lubricante con riesgo de agotarse";
         }
         if (t === "CONSUMPTION_ANOMALY") {
-          return "Revisar consumo fuera de patrón";
+          return "Revisar consumo fuera de patrÃ³n";
         }
         return String(item?.title || "").trim() || labelFromType(t);
       };
@@ -391,7 +391,7 @@ export default function dashboardRoutes({
       for (const ex of overdueExecs || []) {
         const eq = ex?.equipment || ex?.route?.equipment || null;
         const crit = String(eq?.criticality || "").toUpperCase();
-        const isCritical = ["ALTA", "CRITICA", "CRÍTICA"].includes(crit);
+        const isCritical = ["ALTA", "CRITICA", "CRÃTICA"].includes(crit);
 
         const sched = ex?.scheduledAt ? toStartOfDaySafe(new Date(ex.scheduledAt)) : null;
         const daysLate = sched ? Math.floor((today.getTime() - sched.getTime()) / 86400000) : 0;
@@ -406,8 +406,8 @@ export default function dashboardRoutes({
           type: "EXEC_OVERDUE",
           severity: sevFromScore(score),
           score,
-          title: `Actividad vencida${isCritical ? " (crítica)" : ""}`,
-          reason: `Programada ${daysLate} día(s) atrás${eq?.name ? ` · ${eq.name}` : ""}`,
+          title: `Actividad vencida${isCritical ? " (crÃ­tica)" : ""}`,
+          reason: `Programada ${daysLate} dÃ­a(s) atrÃ¡s${eq?.name ? ` Â· ${eq.name}` : ""}`,
           suggestedOwner: ex?.technicianId ? "TECHNICIAN" : "SUPERVISOR",
           entity: { executionId: ex.id, equipmentId: eq?.id ?? null },
           link: `/activities?status=OVERDUE&month=${ym}`,
@@ -417,7 +417,7 @@ export default function dashboardRoutes({
       for (const ex of unassignedExecs || []) {
         const eq = ex?.equipment || ex?.route?.equipment || null;
         const crit = String(eq?.criticality || "").toUpperCase();
-        const isCritical = ["ALTA", "CRITICA", "CRÍTICA"].includes(crit);
+        const isCritical = ["ALTA", "CRITICA", "CRÃTICA"].includes(crit);
 
         let score = 45;
         const sched = ex?.scheduledAt ? toStartOfDaySafe(new Date(ex.scheduledAt)) : null;
@@ -432,8 +432,8 @@ export default function dashboardRoutes({
           type: "EXEC_UNASSIGNED",
           severity: sevFromScore(score),
           score,
-          title: `Actividad sin técnico${isCritical ? " (crítica)" : ""}`,
-          reason: `${isOverdue ? "Vencida" : "Pendiente"}${eq?.name ? ` · ${eq.name}` : ""}`,
+          title: `Actividad sin tÃ©cnico${isCritical ? " (crÃ­tica)" : ""}`,
+          reason: `${isOverdue ? "Vencida" : "Pendiente"}${eq?.name ? ` Â· ${eq.name}` : ""}`,
           suggestedOwner: "SUPERVISOR",
           entity: { executionId: ex.id, equipmentId: eq?.id ?? null },
           link: `/activities?filter=unassigned&month=${ym}`,
@@ -456,8 +456,8 @@ export default function dashboardRoutes({
           type: "COND_REPORT",
           severity: sevFromScore(score),
           score,
-          title: `Condición anormal: ${lvl}`,
-          reason: `${r?.category ? String(r.category) : "Sin categoría"}${eq?.name ? ` · ${eq.name}` : ""}`,
+          title: `CondiciÃ³n anormal: ${lvl}`,
+          reason: `${r?.category ? String(r.category) : "Sin categorÃ­a"}${eq?.name ? ` Â· ${eq.name}` : ""}`,
           suggestedOwner: "SUPERVISOR",
           entity: { reportId: r.id, equipmentId: eq?.id ?? null },
           link: `/condition-reports?status=OPEN`,
@@ -474,8 +474,8 @@ export default function dashboardRoutes({
           type: "DAYS_TO_EMPTY",
           severity: sevFromScore(score),
           score,
-          title: `Days-to-empty ${risk === "HIGH" ? "crítico" : "en riesgo"}`,
-          reason: `${it.name || it.lubricantName || "Lubricante"} · DTE: ${it.daysToEmpty ?? it.dte ?? "—"} día(s) · Stock: ${Number(it.stock || 0)} ${it.unit || ""}${it?.underMin ? " · Bajo mínimo" : ""}`,
+          title: `Days-to-empty ${risk === "HIGH" ? "crÃ­tico" : "en riesgo"}`,
+          reason: `${it.name || it.lubricantName || "Lubricante"} Â· DTE: ${it.daysToEmpty ?? it.dte ?? "â€”"} dÃ­a(s) Â· Stock: ${Number(it.stock || 0)} ${it.unit || ""}${it?.underMin ? " Â· Bajo mÃ­nimo" : ""}`,
           suggestedOwner: "ADMIN",
           entity: { lubricantId: it.lubricantId },
           link: `/inventory?filter=predictive-dte&month=${ym}`,
@@ -487,15 +487,15 @@ export default function dashboardRoutes({
         let score = risk === "HIGH" ? 88 : risk === "MED" ? 72 : 58;
 
         const crit = String(it?.criticality || "").toUpperCase();
-        if (["ALTA", "CRITICA", "CRÍTICA"].includes(crit)) score = Math.min(100, score + 7);
+        if (["ALTA", "CRITICA", "CRÃTICA"].includes(crit)) score = Math.min(100, score + 7);
 
         add(queue, {
           key: `ANOMALY:${it.equipmentId}`,
           type: "CONSUMPTION_ANOMALY",
           severity: sevFromScore(score),
           score,
-          title: `Anomalía de consumo (${risk})`,
-          reason: `${it.name || it.equipmentName || "Equipo"}${it.code ? ` (${it.code})` : ""} · Ratio: ${it.ratio ?? "—"} · Base: ${it.baselineAvgDaily ?? "—"} · Últ.14: ${it.last14AvgDaily ?? it.lastNAvgDaily ?? "—"}`,
+          title: `AnomalÃ­a de consumo (${risk})`,
+          reason: `${it.name || it.equipmentName || "Equipo"}${it.code ? ` (${it.code})` : ""} Â· Ratio: ${it.ratio ?? "â€”"} Â· Base: ${it.baselineAvgDaily ?? "â€”"} Â· Ãšlt.14: ${it.last14AvgDaily ?? it.lastNAvgDaily ?? "â€”"}`,
           suggestedOwner: "SUPERVISOR",
           entity: { equipmentId: it.equipmentId },
           link: `/analysis?tab=consumption&filter=anomalies&month=${ym}`,
@@ -666,7 +666,7 @@ export default function dashboardRoutes({
             topRiskPending.push({
               executionId: ex.id,
               equipmentId,
-              routeName: ex?.route?.name || "—",
+              routeName: ex?.route?.name || "â€”",
               scheduledAt: ex.scheduledAt,
               risk,
               overdue,
@@ -715,16 +715,22 @@ export default function dashboardRoutes({
         const repeatedFailures = [];
         for (const [equipmentId, s] of badByEq.entries()) {
           const score = s.total + s.crit * 1.5;
+          const lastAtTs = s.lastAt ? new Date(s.lastAt).getTime() : null;
+          const daysSinceLast = Number.isFinite(lastAtTs)
+            ? Math.floor((now.getTime() - lastAtTs) / 86400000)
+            : null;
+          const recentEnough = daysSinceLast == null || daysSinceLast <= 45;
 
           let risk = "LOW";
-          if (s.total >= 3 || s.crit >= 2) risk = "HIGH";
-          else if (s.total >= 2 || s.crit >= 1) risk = "MED";
+          if (recentEnough && (s.total >= 4 || s.crit >= 2)) risk = "HIGH";
+          else if (recentEnough && (s.total >= 3 || (s.total >= 2 && s.crit >= 1))) risk = "MED";
 
           repeatedFailures.push({
             equipmentId,
             badTotal: s.total,
             critTotal: s.crit,
             lastBadAt: s.lastAt,
+            daysSinceLast,
             score: Number(score.toFixed(2)),
             risk,
           });
@@ -748,7 +754,7 @@ export default function dashboardRoutes({
                 equipment: {
                   is: {
                     plantId,
-                    criticality: { in: ["ALTA", "CRITICA", "CRÍTICA"] },
+                    criticality: { in: ["ALTA", "CRITICA", "CRÃTICA"] },
                   },
                 },
               },
@@ -775,13 +781,13 @@ export default function dashboardRoutes({
           executionId: ex.id,
           scheduledAt: ex.scheduledAt,
           status: ex.status,
-          routeName: ex?.route?.name || "—",
+          routeName: ex?.route?.name || "â€”",
           equipment: {
             id: ex?.route?.equipment?.id ?? null,
-            name: ex?.route?.equipment?.name || "—",
+            name: ex?.route?.equipment?.name || "â€”",
             code: ex?.route?.equipment?.code || "",
             location: ex?.route?.equipment?.location || "",
-            criticality: ex?.route?.equipment?.criticality || "—",
+            criticality: ex?.route?.equipment?.criticality || "â€”",
           },
         }));
 
@@ -1012,9 +1018,9 @@ export default function dashboardRoutes({
       const items = techIds.map((id) => {
         const t = techMap.get(id) || {
           id,
-          name: "—",
+          name: "â€”",
           code: "",
-          status: "—",
+          status: "â€”",
           specialty: "",
         };
 
@@ -1064,3 +1070,4 @@ export default function dashboardRoutes({
 
   return router;
 }
+

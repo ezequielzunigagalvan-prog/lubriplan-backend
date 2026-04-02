@@ -1,4 +1,4 @@
-// src/dashboard/predictiveMetrics.js
+﻿// src/dashboard/predictiveMetrics.js
 
 export async function getPredictiveMetrics({
   prisma,
@@ -75,10 +75,23 @@ export async function getPredictiveMetrics({
     const d = String(day.getDate()).padStart(2, "0");
     const dayKey = `${y}-${m}-${d}`;
 
-    if (!byEq.has(eqId)) byEq.set(eqId, { totalOut: 0, byDay: new Map() });
+    if (!byEq.has(eqId)) {
+      byEq.set(eqId, {
+        totalOut: 0,
+        moveCount: 0,
+        recentTotal: 0,
+        recentMoveCount: 0,
+        byDay: new Map(),
+      });
+    }
     const s = byEq.get(eqId);
     s.totalOut += qty;
+    s.moveCount += 1;
     s.byDay.set(dayKey, (s.byDay.get(dayKey) || 0) + qty);
+    if (day.getTime() >= lastNFrom.getTime()) {
+      s.recentTotal += qty;
+      s.recentMoveCount += 1;
+    }
   }
 
   const lubIds = [...byLub.keys()];
@@ -165,25 +178,20 @@ export async function getPredictiveMetrics({
       const s = byEq.get(id);
       const meta = eqMeta.get(id);
 
-      const baselineAvgDaily = (s.totalOut || 0) / Number(histDays || 90);
-
-      let lastNTotal = 0;
-      for (const [dayKey, qty] of s.byDay.entries()) {
-        const dLocalSafe = new Date(`${dayKey}T12:00:00`);
-        if (dLocalSafe.getTime() >= lastNFrom.getTime()) {
-          lastNTotal += qty;
-        }
-      }
-
-      const lastNAvgDaily = lastNTotal / Number(shortWindowDays || 14);
+      const moveCount = Number(s?.moveCount || 0);
+      const recentMoveCount = Number(s?.recentMoveCount || 0);
+      const baselineAvgDaily = moveCount > 0 ? (s.totalOut || 0) / moveCount : 0;
+      const lastNAvgDaily =
+        recentMoveCount > 0 ? Number(s?.recentTotal || 0) / recentMoveCount : 0;
       const ratio = baselineAvgDaily > 0 ? lastNAvgDaily / baselineAvgDaily : null;
+      const minSampleOk = moveCount >= 6 && recentMoveCount >= 2;
 
       let risk = "LOW";
-      if (ratio != null && ratio >= 1.5) risk = "HIGH";
-      else if (ratio != null && ratio >= 1.25) risk = "MED";
+      if (minSampleOk && ratio != null && ratio >= 1.8) risk = "HIGH";
+      else if (minSampleOk && ratio != null && ratio >= 1.5) risk = "MED";
 
       const criticality = String(meta?.criticality || "").toUpperCase();
-      const critBoost = ["CRITICA", "CRÍTICA", "ALTA"].includes(criticality);
+      const critBoost = ["CRITICA", "CRÃTICA", "ALTA"].includes(criticality);
 
       return {
         type: "CONSUMPTION_ANOMALY",
@@ -192,9 +200,11 @@ export async function getPredictiveMetrics({
         equipmentName: meta?.name || `Equipment ${id}`,
         name: meta?.name || `Equipment ${id}`,
         code: meta?.code || "",
-        area: meta?.area?.name || "—",
+        area: meta?.area?.name || "â€”",
         location: meta?.location || "",
         criticality: meta?.criticality || null,
+        movementCount: moveCount,
+        recentMovementCount: recentMoveCount,
         baselineAvgDaily: Number.isFinite(baselineAvgDaily) ? Number(baselineAvgDaily.toFixed(2)) : 0,
         lastNAvgDaily: Number.isFinite(lastNAvgDaily) ? Number(lastNAvgDaily.toFixed(2)) : 0,
         last14AvgDaily: Number.isFinite(lastNAvgDaily) ? Number(lastNAvgDaily.toFixed(2)) : 0,
@@ -235,3 +245,4 @@ export async function getPredictiveMetrics({
     },
   };
 }
+
