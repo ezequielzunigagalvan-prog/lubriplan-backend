@@ -419,6 +419,22 @@ app.options("*", cors(corsOptions));
   return new Date(y, m - 1, d, 12, 0, 0, 0);
 };
 
+    const dateKeyInTimezone = (value, timezone = "America/Mexico_City") => {
+  if (!value) return "";
+  const dt = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(dt.getTime())) return "";
+
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(dt);
+
+  const get = (type) => parts.find((p) => p.type === type)?.value || "";
+  return `${get("year")}-${get("month")}-${get("day")}`;
+};
+
     const convertUnits = (value, from, to) => {
       if (value == null) return null;
       const v = Number(value);
@@ -2232,6 +2248,11 @@ app.get(
       }
 
       const role = String(req.user?.role || "").toUpperCase();
+      const plant = await prisma.plant.findUnique({
+        where: { id: plantId },
+        select: { timezone: true },
+      });
+      const plantTimezone = String(plant?.timezone || "America/Mexico_City");
 
       const month = String(req.query.month || "").trim();
       const now = new Date();
@@ -2245,7 +2266,7 @@ app.get(
         ? new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0, 23, 59, 59, 999)
         : new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
 
-      const today = toStartOfDaySafe(new Date());
+      const todayKey = dateKeyInTimezone(new Date(), plantTimezone);
 
       const executions = await prisma.execution.findMany({
         where: {
@@ -2264,11 +2285,11 @@ app.get(
       let pending = 0;
 
       for (const e of executions) {
-        const sched = toStartOfDaySafe(e.scheduledAt);
+        const schedKey = dateKeyInTimezone(e.scheduledAt, plantTimezone);
 
         if (e.status === "COMPLETED" && e.executedAt) {
           completed++;
-        } else if (sched.getTime() < today.getTime()) {
+        } else if (schedKey && schedKey < todayKey) {
           overdue++;
         } else {
           pending++;
@@ -2316,6 +2337,11 @@ app.get(
       }
 
       const role = String(req.user?.role || "").toUpperCase();
+      const plant = await prisma.plant.findUnique({
+        where: { id: plantId },
+        select: { timezone: true },
+      });
+      const plantTimezone = String(plant?.timezone || "America/Mexico_City");
 
       const month = String(req.query.month || "").trim();
       const now = new Date();
@@ -2329,7 +2355,7 @@ app.get(
         ? new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0, 23, 59, 59, 999)
         : new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
 
-      const today = toStartOfDaySafe(new Date());
+      const todayKey = dateKeyInTimezone(new Date(), plantTimezone);
 
       const myTechnicianId = req.user?.technicianId != null ? Number(req.user.technicianId) : null;
 
@@ -2368,11 +2394,11 @@ app.get(
       let pending = 0;
 
       for (const e of executions) {
-        const sched = toStartOfDaySafe(e.scheduledAt);
+        const schedKey = dateKeyInTimezone(e.scheduledAt, plantTimezone);
 
         if (e.status === "COMPLETED" && e.executedAt) {
           completed++;
-        } else if (sched.getTime() < today.getTime()) {
+        } else if (schedKey && schedKey < todayKey) {
           overdue++;
         } else {
           pending++;
