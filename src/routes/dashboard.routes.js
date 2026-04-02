@@ -10,6 +10,27 @@ export default function dashboardRoutes({
   getPredictiveMetrics,
 }) {
   const router = express.Router();
+  const DEFAULT_TIMEZONE = "America/Mexico_City";
+
+  const dateKeyInTimezone = (value, timezone = DEFAULT_TIMEZONE) => {
+    const dt = new Date(value);
+    if (!Number.isFinite(dt.getTime())) return "";
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(dt);
+    const year = parts.find((p) => p.type === "year")?.value;
+    const month = parts.find((p) => p.type === "month")?.value;
+    const day = parts.find((p) => p.type === "day")?.value;
+    return year && month && day ? `${year}-${month}-${day}` : "";
+  };
+
+  const isBeforeTodayInTimezone = (value, todayKey, timezone = DEFAULT_TIMEZONE) => {
+    const valueKey = dateKeyInTimezone(value, timezone);
+    return Boolean(valueKey) && Boolean(todayKey) && valueKey < todayKey;
+  };
 
   const parseMonthRange = (monthRaw) => {
     const now = new Date();
@@ -64,15 +85,27 @@ export default function dashboardRoutes({
       }
 
       const { year, monthNum, from, to, ym } = parseMonthRange(req.query.month);
-      const today = toStartOfDaySafe(new Date());
+      const plant = await prisma.plant.findUnique({
+        where: { id: plantId },
+        select: { timezone: true },
+      });
+      const plantTimezone = String(plant?.timezone || DEFAULT_TIMEZONE);
+      const todayKey = dateKeyInTimezone(new Date(), plantTimezone);
 
-      const overdueActivities = await prisma.execution.count({
+      const openExecutionsInMonth = await prisma.execution.findMany({
         where: {
           plantId,
-          scheduledAt: { gte: from, lte: to, lt: today },
+          scheduledAt: { gte: from, lte: to },
           status: { not: "COMPLETED" },
         },
+        select: {
+          scheduledAt: true,
+        },
       });
+
+      const overdueActivities = (openExecutionsInMonth || []).filter((ex) =>
+        isBeforeTodayInTimezone(ex?.scheduledAt, todayKey, plantTimezone)
+      ).length;
 
       const unassignedPending = await prisma.execution.count({
         where: {
@@ -215,8 +248,13 @@ export default function dashboardRoutes({
       }
 
       const { from, to, ym } = parseMonthRange(req.query.month);
-      const today = toStartOfDaySafe(new Date());
       const now = new Date();
+      const plant = await prisma.plant.findUnique({
+        where: { id: plantId },
+        select: { timezone: true },
+      });
+      const plantTimezone = String(plant?.timezone || DEFAULT_TIMEZONE);
+      const todayKey = dateKeyInTimezone(new Date(), plantTimezone);
 
       const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
       const sevFromScore = (score) =>
@@ -302,10 +340,10 @@ export default function dashboardRoutes({
         return String(item?.title || "").trim() || labelFromType(t);
       };
 
-      const overdueExecs = await prisma.execution.findMany({
+      const openExecsInMonth = await prisma.execution.findMany({
         where: {
           plantId,
-          scheduledAt: { gte: from, lte: to, lt: today },
+          scheduledAt: { gte: from, lte: to },
           status: { not: "COMPLETED" },
         },
         select: {
@@ -327,30 +365,11 @@ export default function dashboardRoutes({
         take: 25,
       });
 
-      const unassignedExecs = await prisma.execution.findMany({
-        where: {
-          plantId,
-          scheduledAt: { gte: from, lte: to },
-          status: { not: "COMPLETED" },
-          technicianId: null,
-        },
-        select: {
-          id: true,
-          scheduledAt: true,
-          status: true,
-          route: {
-            select: {
-              name: true,
-              equipment: {
-                select: { id: true, name: true, code: true, location: true, criticality: true },
-              },
-            },
-          },
-          equipment: { select: { id: true, name: true, code: true, location: true, criticality: true } },
-        },
-        orderBy: { scheduledAt: "asc" },
-        take: 25,
-      });
+      const overdueExecs = (openExecsInMonth || []).filter((ex) =>
+        isBeforeTodayInTimezone(ex?.scheduledAt, todayKey, plantTimezone)
+      );
+
+      const unassignedExecs = (openExecsInMonth || []).filter((ex) => ex?.technicianId == null);
 
       const openReports = await prisma.conditionReport.findMany({
         where: {
@@ -394,7 +413,11 @@ export default function dashboardRoutes({
         const isCritical = ["ALTA", "CRITICA", "CRÃTICA"].includes(crit);
 
         const sched = ex?.scheduledAt ? toStartOfDaySafe(new Date(ex.scheduledAt)) : null;
-        const daysLate = sched ? Math.floor((today.getTime() - sched.getTime()) / 86400000) : 0;
+        const schedKey = ex?.scheduledAt ? dateKeyInTimezone(ex.scheduledAt, plantTimezone) : "";
+        const daysLate =
+          sched && schedKey && todayKey
+            ? Math.max(0, Math.floor((new Date(`${todayKey}T00:00:00`).getTime() - new Date(`${schedKey}T00:00:00`).getTime()) / 86400000))
+            : 0;
 
         let score = 55 + clamp(daysLate * 6, 0, 30);
         if (isCritical) score += 20;
@@ -420,8 +443,7 @@ export default function dashboardRoutes({
         const isCritical = ["ALTA", "CRITICA", "CRÃTICA"].includes(crit);
 
         let score = 45;
-        const sched = ex?.scheduledAt ? toStartOfDaySafe(new Date(ex.scheduledAt)) : null;
-        const isOverdue = sched ? sched.getTime() < today.getTime() : false;
+        const isOverdue = isBeforeTodayInTimezone(ex?.scheduledAt, todayKey, plantTimezone);
 
         if (isOverdue) score += 20;
         if (isCritical) score += 20;
@@ -554,11 +576,16 @@ export default function dashboardRoutes({
         }
 
         const { year, monthNum, from, to, ym } = parseMonthRange(req.query.month);
-        const today = toStartOfDaySafe(new Date());
         const now = new Date();
+        const plant = await prisma.plant.findUnique({
+          where: { id: plantId },
+          select: { timezone: true },
+        });
+        const plantTimezone = String(plant?.timezone || DEFAULT_TIMEZONE);
+        const todayKey = dateKeyInTimezone(new Date(), plantTimezone);
 
         const histDays = 90;
-        const histFrom = new Date(today);
+        const histFrom = new Date(now);
         histFrom.setDate(histFrom.getDate() - histDays);
 
         const completed = await prisma.execution.findMany({
@@ -658,8 +685,7 @@ export default function dashboardRoutes({
 
           riskPendingCount += 1;
 
-          const schedDay = toStartOfDaySafe(new Date(ex.scheduledAt));
-          const overdue = schedDay.getTime() < today.getTime();
+          const overdue = isBeforeTodayInTimezone(ex?.scheduledAt, todayKey, plantTimezone);
           if (overdue) riskOverdueCount += 1;
 
           if (topRiskPending.length < 10) {
@@ -743,10 +769,10 @@ export default function dashboardRoutes({
         alerts.repeatedFailuresTop = repeatedFailures.slice(0, 10);
         alerts.repeatedFailures = repeatedFailuresCount;
 
-        const criticalUnassigned = await prisma.execution.findMany({
+        const criticalUnassignedInMonth = await prisma.execution.findMany({
           where: {
             plantId,
-            scheduledAt: { gte: from, lte: to, lt: today },
+            scheduledAt: { gte: from, lte: to },
             status: { not: "COMPLETED" },
             technicianId: null,
             route: {
@@ -773,6 +799,10 @@ export default function dashboardRoutes({
           },
           orderBy: { scheduledAt: "asc" },
         });
+
+        const criticalUnassigned = (criticalUnassignedInMonth || []).filter((ex) =>
+          isBeforeTodayInTimezone(ex?.scheduledAt, todayKey, plantTimezone)
+        );
 
         const criticalUnassignedCount = Array.isArray(criticalUnassigned) ? criticalUnassigned.length : 0;
 
@@ -875,7 +905,12 @@ export default function dashboardRoutes({
       }
 
       const { monthOk, from, to, ym } = parseMonthRange(req.query.month);
-      const today = toStartOfDaySafe(new Date());
+      const plant = await prisma.plant.findUnique({
+        where: { id: plantId },
+        select: { timezone: true },
+      });
+      const plantTimezone = String(plant?.timezone || DEFAULT_TIMEZONE);
+      const todayKey = dateKeyInTimezone(new Date(), plantTimezone);
 
       const executions = await prisma.execution.findMany({
         where: {
@@ -890,9 +925,8 @@ export default function dashboardRoutes({
       let pending = 0;
 
       for (const e of executions) {
-        const sched = toStartOfDaySafe(e.scheduledAt);
         if (e.status === "COMPLETED" && e.executedAt) completed++;
-        else if (sched.getTime() < today.getTime()) overdue++;
+        else if (isBeforeTodayInTimezone(e?.scheduledAt, todayKey, plantTimezone)) overdue++;
         else pending++;
       }
 

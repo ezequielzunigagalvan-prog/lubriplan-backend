@@ -2,6 +2,7 @@ import { getPredictiveMetrics } from "./predictiveMetrics.js";
 
 const isAdmin = (role) => role === "ADMIN";
 const isTechnician = (role) => role === "TECHNICIAN";
+const DEFAULT_TIMEZONE = "America/Mexico_City";
 
 function toNum(v) {
   const n = Number(v);
@@ -23,6 +24,26 @@ function daysBetween(a, b) {
   const a0 = new Date(da.getFullYear(), da.getMonth(), da.getDate()).getTime();
   const b0 = new Date(db.getFullYear(), db.getMonth(), db.getDate()).getTime();
   return Math.floor((b0 - a0) / 86400000);
+}
+
+function dateKeyInTimezone(value, timezone = DEFAULT_TIMEZONE) {
+  const dt = new Date(value);
+  if (!Number.isFinite(dt.getTime())) return "";
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(dt);
+  const year = parts.find((p) => p.type === "year")?.value;
+  const month = parts.find((p) => p.type === "month")?.value;
+  const day = parts.find((p) => p.type === "day")?.value;
+  return year && month && day ? `${year}-${month}-${day}` : "";
+}
+
+function isBeforeTodayInTimezone(value, todayKey, timezone = DEFAULT_TIMEZONE) {
+  const valueKey = dateKeyInTimezone(value, timezone);
+  return Boolean(valueKey) && Boolean(todayKey) && valueKey < todayKey;
 }
 
 export async function buildDashboardSummary({
@@ -63,6 +84,12 @@ export async function buildDashboardSummary({
   const monthStr = String(month || "").trim();
   const now = new Date();
   const today = toStartOfDaySafe(new Date());
+  const plant = await prisma.plant.findUnique({
+    where: { id: safePlantId },
+    select: { timezone: true },
+  });
+  const plantTimezone = String(plant?.timezone || DEFAULT_TIMEZONE);
+  const todayKey = dateKeyInTimezone(now, plantTimezone);
 
   const monthOk = /^\d{4}-\d{2}$/.test(monthStr);
 
@@ -181,17 +208,14 @@ export async function buildDashboardSummary({
   let pendingPrev = 0;
 
   for (const e of scheduledOpenExecs) {
-    const sched = toStartOfDaySafe(e.scheduledAt);
-
     if (!e.technicianId) unassignedPending++;
 
-    if (sched.getTime() < today.getTime()) overdue++;
+    if (isBeforeTodayInTimezone(e?.scheduledAt, todayKey, plantTimezone)) overdue++;
     else pendingDue++;
   }
 
   for (const e of scheduledOpenPrevExecs) {
-    const sched = toStartOfDaySafe(e.scheduledAt);
-    if (sched.getTime() < today.getTime()) overduePrev++;
+    if (isBeforeTodayInTimezone(e?.scheduledAt, todayKey, plantTimezone)) overduePrev++;
     else pendingPrev++;
   }
 
