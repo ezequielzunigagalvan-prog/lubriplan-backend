@@ -686,7 +686,7 @@ export default function dashboardRoutes({
           where: {
             plantId,
             status: "COMPLETED",
-            executedAt: { gte: histFrom, lte: now },
+            executedAt: { gte: from, lte: to },
             condition: { in: ["MALO", "CRITICO"] },
           },
           select: {
