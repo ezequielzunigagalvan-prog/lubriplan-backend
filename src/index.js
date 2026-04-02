@@ -621,6 +621,32 @@ app.options("*", cors(corsOptions));
     return "OTRO";
   }
 
+  function inferKindFromUnits(...units) {
+    for (const raw of units) {
+      const unit = normalizeUnit(raw);
+      if (!unit) continue;
+      if (["ml", "l"].includes(unit)) return "ACEITE";
+      if (["g", "gr", "kg"].includes(unit)) return "GRASA";
+    }
+    return "OTRO";
+  }
+
+  function resolveAnalyticsKind(route) {
+    const explicitKind =
+      [
+        route?.lubricantType,
+        route?.lubricant?.type,
+        route?.lubricant?.name,
+        route?.lubricantName,
+      ]
+        .map((value) => normalizeKind(value))
+        .find((value) => value && value !== "OTRO") || "OTRO";
+
+    if (explicitKind !== "OTRO") return explicitKind;
+
+    return inferKindFromUnits(route?.lubricant?.unit, route?.unit);
+  }
+
   function executionMatchesAnalyticsFilters(execution, { kind = "OTRO", lubricantId = null } = {}) {
     const route = execution?.route || null;
 
@@ -631,16 +657,7 @@ app.options("*", cors(corsOptions));
     }
 
     if (kind && kind !== "OTRO") {
-      const routeKind =
-        [
-          route?.lubricantType,
-          route?.lubricant?.type,
-          route?.lubricant?.name,
-          route?.lubricantName,
-        ]
-          .map((value) => normalizeKind(value))
-          .find((value) => value && value !== "OTRO") || "OTRO";
-
+      const routeKind = resolveAnalyticsKind(route);
       if (routeKind !== kind) return false;
     }
 
@@ -748,8 +765,7 @@ app.options("*", cors(corsOptions));
    */
   function resolveExecutionConsumptionForAnalytics(execution) {
     const route = execution?.route || null;
-    const lubricantType = route?.lubricantType || "";
-    const kind = normalizeKind(lubricantType);
+    const kind = resolveAnalyticsKind(route);
     const baseUnit = getBaseUnitByKind(kind);
 
     const inputQty =
@@ -5497,7 +5513,7 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
               select: { id: true, name: true, code: true, location: true },
             },
             lubricant: {
-              select: { id: true, name: true, unit: true, code: true },
+              select: { id: true, name: true, unit: true, code: true, type: true },
             },
           },
         },
