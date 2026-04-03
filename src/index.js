@@ -631,34 +631,52 @@ app.options("*", cors(corsOptions));
     return "OTRO";
   }
 
-  function resolveAnalyticsKind(route) {
+  function resolveAnalyticsKind(source) {
     const explicitKind =
       [
-        route?.lubricantType,
-        route?.lubricant?.type,
-        route?.lubricant?.name,
-        route?.lubricantName,
+        source?.lubricantType,
+        source?.lubricant?.type,
+        source?.lubricant?.name,
+        source?.lubricantName,
       ]
         .map((value) => normalizeKind(value))
         .find((value) => value && value !== "OTRO") || "OTRO";
 
     if (explicitKind !== "OTRO") return explicitKind;
 
-    return inferKindFromUnits(route?.lubricant?.unit, route?.unit);
+    return inferKindFromUnits(
+      source?.lubricant?.unit,
+      source?.convertedUnit,
+      source?.inputUnit,
+      source?.unit
+    );
   }
 
   function executionMatchesAnalyticsFilters(execution, { kind = "OTRO", lubricantId = null } = {}) {
     const route = execution?.route || null;
+    const movement = Array.isArray(execution?.lubricantMovements)
+      ? execution.lubricantMovements[0] || null
+      : null;
+    const manualSource = {
+      lubricant: movement?.lubricant || null,
+      inputUnit: movement?.inputUnit || execution?.usedInputUnit || "",
+      convertedUnit: movement?.convertedUnit || execution?.usedConvertedUnit || "",
+    };
 
     if (lubricantId != null) {
       const routeLubricantId =
         route?.lubricantId != null ? Number(route.lubricantId) : null;
-      if (routeLubricantId !== Number(lubricantId)) return false;
+      const movementLubricantId =
+        movement?.lubricantId != null ? Number(movement.lubricantId) : null;
+      if (routeLubricantId !== Number(lubricantId) && movementLubricantId !== Number(lubricantId)) {
+        return false;
+      }
     }
 
     if (kind && kind !== "OTRO") {
       const routeKind = resolveAnalyticsKind(route);
-      if (routeKind !== kind) return false;
+      const fallbackKind = resolveAnalyticsKind(manualSource);
+      if (routeKind !== kind && fallbackKind !== kind) return false;
     }
 
     return true;
@@ -765,7 +783,17 @@ app.options("*", cors(corsOptions));
    */
   function resolveExecutionConsumptionForAnalytics(execution) {
     const route = execution?.route || null;
-    const kind = resolveAnalyticsKind(route);
+    const movement = Array.isArray(execution?.lubricantMovements)
+      ? execution.lubricantMovements[0] || null
+      : null;
+    const fallbackSource = {
+      lubricant: movement?.lubricant || null,
+      inputUnit: movement?.inputUnit || execution?.usedInputUnit || "",
+      convertedUnit: movement?.convertedUnit || execution?.usedConvertedUnit || "",
+    };
+    const kind = resolveAnalyticsKind(route) !== "OTRO"
+      ? resolveAnalyticsKind(route)
+      : resolveAnalyticsKind(fallbackSource);
     const baseUnit = getBaseUnitByKind(kind);
 
     const inputQty =
@@ -5521,6 +5549,22 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
         usedInputUnit: true,
         usedConvertedQuantity: true,
         usedConvertedUnit: true,
+        equipment: {
+          select: { id: true, name: true, code: true, location: true },
+        },
+        lubricantMovements: {
+          where: { type: "OUT" },
+          orderBy: { createdAt: "desc" },
+          take: 1,
+          select: {
+            lubricantId: true,
+            inputUnit: true,
+            convertedUnit: true,
+            lubricant: {
+              select: { id: true, name: true, unit: true, code: true, type: true },
+            },
+          },
+        },
         route: {
           select: {
             equipmentId: true,
@@ -5551,11 +5595,15 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
         const comparable = Number(cons.comparableBaseQuantity || 0);
         if (!(comparable > 0)) continue;
 
-        const eq = ex?.route?.equipment || null;
+        const eq = ex?.route?.equipment || ex?.equipment || null;
         const eqId = eq?.id ?? ex?.equipmentId ?? ex?.route?.equipmentId ?? null;
 
-        const lub = ex?.route?.lubricant || null;
-        const lubId = lub?.id ?? ex?.route?.lubricantId ?? null;
+        const movement = Array.isArray(ex?.lubricantMovements)
+          ? ex.lubricantMovements[0] || null
+          : null;
+        const lub = ex?.route?.lubricant || movement?.lubricant || null;
+        const lubId =
+          lub?.id ?? ex?.route?.lubricantId ?? movement?.lubricantId ?? null;
 
         if (eqId) {
           if (!byEquipment.has(eqId)) {
@@ -5743,6 +5791,33 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
         usedInputUnit: true,
         usedConvertedQuantity: true,
         usedConvertedUnit: true,
+        equipment: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+            location: true,
+          },
+        },
+        lubricantMovements: {
+          where: { type: "OUT" },
+          orderBy: { createdAt: "desc" },
+          take: 1,
+          select: {
+            lubricantId: true,
+            inputUnit: true,
+            convertedUnit: true,
+            lubricant: {
+              select: {
+                id: true,
+                name: true,
+                unit: true,
+                code: true,
+                type: true,
+              },
+            },
+          },
+        },
         route: {
           select: {
             equipmentId: true,
@@ -5769,7 +5844,7 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
       try {
         if (!executionMatchesAnalyticsFilters(ex, { kind, lubricantId })) continue;
 
-        const eq = ex?.route?.equipment || null;
+        const eq = ex?.route?.equipment || ex?.equipment || null;
         const equipmentId = eq?.id ?? ex?.equipmentId ?? ex?.route?.equipmentId ?? null;
         if (!equipmentId) continue;
 
