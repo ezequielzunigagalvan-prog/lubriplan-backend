@@ -1921,7 +1921,7 @@ app.get(
       const criticalUnassigned = await prisma.execution.findMany({
         where: {
           plantId,
-          scheduledAt: { gte: from, lte: to, lt: today },
+          scheduledAt: { gte: from, lte: to },
           status: { not: "COMPLETED" },
           technicianId: null,
           route: {
