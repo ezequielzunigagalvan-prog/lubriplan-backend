@@ -1449,6 +1449,13 @@ app.get(
       // 3) Priority queue
       // =========================
       const queue = [];
+      const equipmentLabel = (eq) => {
+        if (!eq) return "";
+        const name = String(eq?.name || "").trim();
+        const code = String(eq?.code || "").trim();
+        if (name && code) return `${name} (${code})`;
+        return name || code || "";
+      };
 
       for (const ex of overdueExecs || []) {
         const eq = ex?.equipment || ex?.route?.equipment || null;
@@ -1479,7 +1486,7 @@ app.get(
           severity: sevFromScore(score),
           score,
           title: `Actividad vencida${isCritical ? " (crí­tica)" : ""}`,
-          reason: `Programada ${daysLate} día(s) atrás${eq?.name ? ` Â· ${eq.name}` : ""}`,
+          reason: `Programada ${daysLate} día(s) atrás${equipmentLabel(eq) ? ` · ${equipmentLabel(eq)}` : ""}`,
           suggestedOwner: ex?.technicianId ? "TECHNICIAN" : "SUPERVISOR",
           entity: {
             executionId: ex.id,
@@ -1509,7 +1516,7 @@ app.get(
           severity: sevFromScore(score),
           score,
           title: `Actividad sin técnico${isCritical ? " (crÃ­tica)" : ""}`,
-          reason: `${isOverdue ? "Vencida" : "Pendiente"}${eq?.name ? ` Â· ${eq.name}` : ""}`,
+          reason: `${isOverdue ? "Vencida" : "Pendiente"}${equipmentLabel(eq) ? ` · ${equipmentLabel(eq)}` : ""}`,
           suggestedOwner: "SUPERVISOR",
           entity: {
             executionId: ex.id,
@@ -1539,7 +1546,7 @@ app.get(
           severity: sevFromScore(score),
           score,
           title: `Condición anormal: ${lvl}`,
-          reason: `${r?.category ? String(r.category) : "Sin categorí­a"}${eq?.name ? ` Â· ${eq.name}` : ""}`,
+          reason: `${r?.category ? String(r.category) : "Sin categorí­a"}${equipmentLabel(eq) ? ` · ${equipmentLabel(eq)}` : ""}`,
           suggestedOwner: "SUPERVISOR",
           entity: { reportId: r.id, equipmentId: eq?.id ?? null },
           link: `/condition-reports?status=OPEN`,
@@ -1564,7 +1571,7 @@ app.get(
           severity: sevFromScore(score),
           score,
           title: `Reincidencia MALO/CRITICO`,
-          reason: `Eventos: ${it.badTotal} Â· CRITICOS: ${it.critTotal}${eq?.name ? ` Â· ${eq.name}` : ""}`,
+          reason: `Eventos: ${it.badTotal} · CRITICOS: ${it.critTotal}${equipmentLabel(eq) ? ` · ${equipmentLabel(eq)}` : ""}`,
           suggestedOwner: "SUPERVISOR",
           entity: { equipmentId: it.equipmentId },
           link: `/activities?filter=bad-condition&month=${ym}`,
@@ -1581,7 +1588,7 @@ app.get(
           severity: "CRITICAL",
           score,
           title: `CrÃ­tica vencida sin técnico`,
-          reason: `${eq?.name ? eq.name : "Equipo"} Â· Ruta: ${ex?.route?.name || "â€”"}`,
+          reason: `${equipmentLabel(eq) || "Equipo"} · Ruta: ${ex?.route?.name || "-"}`,
           suggestedOwner: "SUPERVISOR",
           entity: { executionId: ex.id, equipmentId: eq?.id ?? null },
           link: `/activities?status=OVERDUE&month=${ym}`,
