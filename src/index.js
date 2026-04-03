@@ -7243,10 +7243,16 @@ if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
       ? {
           OR: [
             { observations: { contains: q, mode: "insensitive" } },
-            { route: { name: { contains: q, mode: "insensitive" } } },
-            { route: { equipment: { name: { contains: q, mode: "insensitive" } } } },
-            { route: { lubricant: { name: { contains: q, mode: "insensitive" } } } },
-            { technician: { name: { contains: q, mode: "insensitive" } } },
+            { manualTitle: { contains: q, mode: "insensitive" } },
+            { equipment: { is: { name: { contains: q, mode: "insensitive" } } } },
+            { equipment: { is: { code: { contains: q, mode: "insensitive" } } } },
+            { route: { is: { name: { contains: q, mode: "insensitive" } } } },
+            { route: { is: { equipment: { is: { name: { contains: q, mode: "insensitive" } } } } } },
+            { route: { is: { equipment: { is: { code: { contains: q, mode: "insensitive" } } } } } },
+            { route: { is: { lubricant: { is: { name: { contains: q, mode: "insensitive" } } } } } },
+            { route: { is: { lubricant: { is: { code: { contains: q, mode: "insensitive" } } } } } },
+            { technician: { is: { name: { contains: q, mode: "insensitive" } } } },
+            { technician: { is: { code: { contains: q, mode: "insensitive" } } } },
           ],
         }
       : {}),
