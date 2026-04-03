@@ -1046,17 +1046,29 @@ app.get("/api/dashboard/alerts", requireAuth, requireRole(["ADMIN", "SUPERVISOR"
 
     const from = new Date(year, monthNum - 1, 1, 0, 0, 0, 0);
     const to = new Date(year, monthNum, 0, 23, 59, 59, 999);
+    const plant = await prisma.plant.findUnique({
+      where: { id: plantId },
+      select: { timezone: true },
+    });
+    const plantTimezone = String(plant?.timezone || "America/Mexico_City");
+    const todayKey = dateKeyInTimezone(new Date(), plantTimezone);
 
-    const today = toStartOfDaySafe(new Date()); // para comparar vencidas con HOY
-
-    // 1) Actividades vencidas EN EL MES (no completadas y scheduled < hoy)
-    const overdueActivities = await prisma.execution.count({
+    const openExecutionsInMonth = await prisma.execution.findMany({
       where: {
         plantId,
-        scheduledAt: { gte: from, lte: to, lt: today },
+        scheduledAt: { gte: from, lte: to },
         status: { not: "COMPLETED" },
       },
+      select: {
+        scheduledAt: true,
+      },
     });
+
+    // 1) Actividades vencidas EN EL MES (no completadas y con día local anterior a hoy)
+    const overdueActivities = (openExecutionsInMonth || []).filter((ex) => {
+      const scheduledKey = dateKeyInTimezone(ex?.scheduledAt, plantTimezone);
+      return Boolean(scheduledKey) && Boolean(todayKey) && scheduledKey < todayKey;
+    }).length;
 
     // 2) Pendientes sin tÃ©cnico EN EL MES (solo status PENDING)
     const unassignedPending = await prisma.execution.count({
@@ -1214,7 +1226,12 @@ app.get(
 
       const from = new Date(year, monthNum - 1, 1, 0, 0, 0, 0);
       const to = new Date(year, monthNum, 0, 23, 59, 59, 999);
-      const today = toStartOfDaySafe(new Date());
+      const plant = await prisma.plant.findUnique({
+        where: { id: plantId },
+        select: { timezone: true },
+      });
+      const plantTimezone = String(plant?.timezone || "America/Mexico_City");
+      const todayKey = dateKeyInTimezone(new Date(), plantTimezone);
 
       const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
       const sevFromScore = (score) =>
@@ -1226,10 +1243,10 @@ app.get(
       // =========================
 
       // A) Overdue del mes
-      const overdueExecs = await prisma.execution.findMany({
+      const openExecsInMonth = await prisma.execution.findMany({
         where: {
           plantId,
-          scheduledAt: { gte: from, lte: to, lt: today },
+          scheduledAt: { gte: from, lte: to },
           status: { not: "COMPLETED" },
         },
         select: {
@@ -1253,33 +1270,13 @@ app.get(
         take: 25,
       });
 
-      // B) Sin tÃ©cnico
-      const unassignedExecs = await prisma.execution.findMany({
-        where: {
-          plantId,
-          scheduledAt: { gte: from, lte: to },
-          status: { not: "COMPLETED" },
-          technicianId: null,
-        },
-        select: {
-          id: true,
-          scheduledAt: true,
-          status: true,
-          route: {
-            select: {
-              name: true,
-              equipment: {
-                select: { id: true, name: true, code: true, location: true, criticality: true },
-              },
-            },
-          },
-          equipment: {
-            select: { id: true, name: true, code: true, location: true, criticality: true },
-          },
-        },
-        orderBy: { scheduledAt: "asc" },
-        take: 25,
+      const overdueExecs = (openExecsInMonth || []).filter((ex) => {
+        const scheduledKey = dateKeyInTimezone(ex?.scheduledAt, plantTimezone);
+        return Boolean(scheduledKey) && Boolean(todayKey) && scheduledKey < todayKey;
       });
+
+      // B) Sin tÃ©cnico
+      const unassignedExecs = (openExecsInMonth || []).filter((ex) => ex?.technicianId == null);
 
       // C) Reportes OPEN
       const openReports = await prisma.conditionReport.findMany({
@@ -1349,15 +1346,11 @@ app.get(
       // =========================
       // 2b) Reincidencia MALO/CRITICO
       // =========================
-      const histDays = 90;
-      const histFrom = new Date(today);
-      histFrom.setDate(histFrom.getDate() - histDays);
-
       const badEvents = await prisma.execution.findMany({
         where: {
           plantId,
           status: "COMPLETED",
-          executedAt: { gte: histFrom, lte: now },
+          executedAt: { gte: from, lte: to },
           condition: { in: ["MALO", "CRITICO"] },
         },
         select: {
@@ -1422,7 +1415,7 @@ app.get(
       const criticalUnassignedOverdue = await prisma.execution.findMany({
         where: {
           plantId,
-          scheduledAt: { gte: from, lte: to, lt: today },
+          scheduledAt: { gte: from, lte: to },
           status: { not: "COMPLETED" },
           technicianId: null,
           route: {
@@ -1447,6 +1440,10 @@ app.get(
         orderBy: { scheduledAt: "asc" },
         take: 20,
       });
+      const criticalUnassignedOverdueSafe = (criticalUnassignedOverdue || []).filter((ex) => {
+        const scheduledKey = dateKeyInTimezone(ex?.scheduledAt, plantTimezone);
+        return Boolean(scheduledKey) && Boolean(todayKey) && scheduledKey < todayKey;
+      });
 
       // =========================
       // 3) Priority queue
@@ -1458,8 +1455,18 @@ app.get(
         const crit = String(eq?.criticality || "").toUpperCase();
         const isCritical = ["ALTA", "CRITICA", "CRITICA"].includes(crit);
 
-        const sched = ex?.scheduledAt ? toStartOfDaySafe(new Date(ex.scheduledAt)) : null;
-        const daysLate = sched ? Math.floor((today.getTime() - sched.getTime()) / 86400000) : 0;
+        const scheduledKey = dateKeyInTimezone(ex?.scheduledAt, plantTimezone);
+        const daysLate =
+          scheduledKey && todayKey
+            ? Math.max(
+                0,
+                Math.floor(
+                  (new Date(`${todayKey}T00:00:00`).getTime() -
+                    new Date(`${scheduledKey}T00:00:00`).getTime()) /
+                    86400000
+                )
+              )
+            : 0;
 
         let score = 55 + clamp(daysLate * 6, 0, 30);
         if (isCritical) score += 20;
@@ -1488,8 +1495,8 @@ app.get(
         const isCritical = ["ALTA", "CRITICA", "CRÃTICA"].includes(crit);
 
         let score = 45;
-        const sched = ex?.scheduledAt ? toStartOfDaySafe(new Date(ex.scheduledAt)) : null;
-        const isOverdue = sched ? sched.getTime() < today.getTime() : false;
+        const scheduledKey = dateKeyInTimezone(ex?.scheduledAt, plantTimezone);
+        const isOverdue = Boolean(scheduledKey) && Boolean(todayKey) && scheduledKey < todayKey;
 
         if (isOverdue) score += 20;
         if (isCritical) score += 20;
@@ -1564,7 +1571,7 @@ app.get(
         });
       }
 
-      for (const ex of criticalUnassignedOverdue || []) {
+      for (const ex of criticalUnassignedOverdueSafe || []) {
         const eq = ex?.route?.equipment || null;
         const score = 95;
 
@@ -1719,11 +1726,15 @@ app.get(
 
       const from = new Date(year, monthNum - 1, 1, 0, 0, 0, 0);
       const to = new Date(year, monthNum, 0, 23, 59, 59, 999);
-
-      const today = toStartOfDaySafe(new Date());
+      const plant = await prisma.plant.findUnique({
+        where: { id: plantId },
+        select: { timezone: true },
+      });
+      const plantTimezone = String(plant?.timezone || "America/Mexico_City");
+      const todayKey = dateKeyInTimezone(new Date(), plantTimezone);
 
       const histDays = 90;
-      const histFrom = new Date(today);
+      const histFrom = new Date(new Date());
       histFrom.setDate(histFrom.getDate() - histDays);
 
       // 1) completadas historial
@@ -1826,8 +1837,8 @@ app.get(
 
         riskPendingCount += 1;
 
-        const schedDay = toStartOfDaySafe(new Date(ex.scheduledAt));
-        const isOverdue = schedDay.getTime() < today.getTime();
+        const scheduledKey = dateKeyInTimezone(ex?.scheduledAt, plantTimezone);
+        const isOverdue = Boolean(scheduledKey) && Boolean(todayKey) && scheduledKey < todayKey;
         if (isOverdue) riskOverdueCount += 1;
 
         if (topRiskPending.length < 10) {
@@ -1855,7 +1866,7 @@ app.get(
         where: {
           plantId,
           status: "COMPLETED",
-          executedAt: { gte: histFrom, lte: now },
+          executedAt: { gte: from, lte: to },
           condition: { in: ["MALO", "CRITICO"] },
         },
         select: {

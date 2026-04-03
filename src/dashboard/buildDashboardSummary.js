@@ -409,8 +409,19 @@ export async function buildDashboardSummary({
   const overdueTop = scheduledOpenExecs
     .map((e) => {
       const equipment = e.route?.equipment || e.equipment || null;
-      const lateDays = Math.max(0, toNum(daysBetween(e.scheduledAt, today)));
-      const isLate = toStartOfDaySafe(e.scheduledAt).getTime() < today.getTime();
+      const scheduledKey = dateKeyInTimezone(e?.scheduledAt, plantTimezone);
+      const lateDays =
+        scheduledKey && todayKey
+          ? Math.max(
+              0,
+              Math.floor(
+                (new Date(`${todayKey}T00:00:00`).getTime() -
+                  new Date(`${scheduledKey}T00:00:00`).getTime()) /
+                  86400000
+              )
+            )
+          : 0;
+      const isLate = Boolean(scheduledKey) && Boolean(todayKey) && scheduledKey < todayKey;
 
       return {
         executionId: e.id,
@@ -440,7 +451,18 @@ export async function buildDashboardSummary({
   const unassignedPendingTop = scheduledOpenExecs
     .map((e) => {
       const equipment = e.route?.equipment || e.equipment || null;
-      const sched = toStartOfDaySafe(e.scheduledAt);
+      const scheduledKey = dateKeyInTimezone(e?.scheduledAt, plantTimezone);
+      const ageDays =
+        scheduledKey && todayKey
+          ? Math.max(
+              0,
+              Math.floor(
+                (new Date(`${todayKey}T00:00:00`).getTime() -
+                  new Date(`${scheduledKey}T00:00:00`).getTime()) /
+                  86400000
+              )
+            )
+          : 0;
 
       return {
         executionId: e.id,
@@ -450,7 +472,7 @@ export async function buildDashboardSummary({
         equipmentCode: equipment?.code || "",
         criticality: equipment?.criticality || null,
         scheduledAt: e.scheduledAt,
-        ageDays: Math.max(0, toNum(daysBetween(sched, today))),
+        ageDays,
       };
     })
     .filter((x) => !scheduledOpenExecs.find((e) => e.id === x.executionId)?.technicianId)
@@ -558,8 +580,8 @@ export async function buildDashboardSummary({
       score: 0,
     };
 
-    const sched = toStartOfDaySafe(e.scheduledAt);
-    const isLate = sched.getTime() < today.getTime();
+    const scheduledKey = dateKeyInTimezone(e?.scheduledAt, plantTimezone);
+    const isLate = Boolean(scheduledKey) && Boolean(todayKey) && scheduledKey < todayKey;
 
     prev.openAssigned += 1;
     if (isLate) {
