@@ -732,6 +732,27 @@ app.options("*", cors(corsOptions));
     return "";
   }
 
+  function getPreferredAnalyticsDisplayUnit(kind) {
+    if (kind === "ACEITE") return "L";
+    if (kind === "GRASA") return "kg";
+    return "";
+  }
+
+  function formatAnalyticsDisplayLabel(quantity, baseUnit, kind) {
+    const qty = Number(quantity);
+    if (!Number.isFinite(qty)) return null;
+
+    const preferredUnit = getPreferredAnalyticsDisplayUnit(kind);
+    if (preferredUnit && baseUnit) {
+      const converted = convertSimpleUnits(qty, baseUnit, preferredUnit);
+      if (converted != null) {
+        return `${round2(converted)} ${preferredUnit}`;
+      }
+    }
+
+    return baseUnit ? `${round2(qty)} ${baseUnit}` : `${round2(qty)}`;
+  }
+
   /**
    * Convierte unidades homogÃ©neas:
    * volumen: ml <-> l
@@ -5693,6 +5714,17 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
       const inputUnit = inputUnits.length === 1 ? inputUnits[0] : null;
       const convertedUnit = convertedUnits.length === 1 ? convertedUnits[0] : row.totalBaseUnit || null;
 
+      const rowKind = inferKindFromUnits(
+        row.totalBaseUnit,
+        convertedUnit,
+        inputUnit
+      );
+      const displayTotalLabel = formatAnalyticsDisplayLabel(
+        row.totalBaseQuantity,
+        row.totalBaseUnit || convertedUnit || "",
+        rowKind
+      );
+
       return {
         ...row,
         total: round2(row.totalBaseQuantity),
@@ -5704,6 +5736,7 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
           ? round2(row.totalConvertedQuantity || row.totalBaseQuantity)
           : round2(row.totalBaseQuantity),
         totalConvertedUnit: convertedUnit,
+        displayTotalLabel,
         displayTotal: row.totalBaseUnit
           ? `${round2(row.totalBaseQuantity)} ${row.totalBaseUnit}`
           : `${round2(row.totalBaseQuantity)}`,
@@ -5929,6 +5962,12 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
             row._hasConverted && singleConvertedUnit ? round2(row.totalConvertedQuantity) : round2(row.totalBaseQuantity),
           totalConvertedUnit:
             row._hasConverted && singleConvertedUnit ? singleConvertedUnit : row.totalBaseUnit || "",
+
+          displayTotalLabel: formatAnalyticsDisplayLabel(
+            row.totalBaseQuantity,
+            row.totalBaseUnit || "",
+            inferKindFromUnits(row.totalBaseUnit, singleConvertedUnit, singleInputUnit)
+          ),
 
           // strings opcionales para UI
           displayTotal: row.totalBaseUnit
