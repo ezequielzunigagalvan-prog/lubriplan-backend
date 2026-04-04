@@ -4144,14 +4144,21 @@ app.get("/api/routes/:id", requireAuth, async (req, res) => {
             { scheduledAt: "asc" },
             { id: "asc" },
           ],
-          take: 1,
+          take: 10,
         },
       },
     });
 
     if (!route) return res.status(404).json({ error: "Ruta no encontrada" });
 
-    const nextExecution = Array.isArray(route.executions) ? route.executions[0] || null : null;
+    const routeLastTs =
+      route?.lastDate != null ? new Date(route.lastDate).getTime() : 0;
+    const nextExecution = Array.isArray(route.executions)
+      ? route.executions.find((ex) => {
+          const schedTs = ex?.scheduledAt ? new Date(ex.scheduledAt).getTime() : 0;
+          return !routeLastTs || schedTs > routeLastTs;
+        }) || null
+      : null;
 
     res.json({
       ...route,
@@ -4508,14 +4515,21 @@ app.get("/api/routes", requireAuth, async (req, res) => {
             { scheduledAt: "asc" },
             { id: "asc" },
           ],
-          take: 1,
+          take: 10,
         },
       },
       orderBy: { id: "desc" },
     });
 
     const out = routes.map((route) => {
-      const nextExecution = Array.isArray(route.executions) ? route.executions[0] || null : null;
+      const routeLastTs =
+        route?.lastDate != null ? new Date(route.lastDate).getTime() : 0;
+      const nextExecution = Array.isArray(route.executions)
+        ? route.executions.find((ex) => {
+            const schedTs = ex?.scheduledAt ? new Date(ex.scheduledAt).getTime() : 0;
+            return !routeLastTs || schedTs > routeLastTs;
+          }) || null
+        : null;
 
       return {
         ...route,
@@ -7178,6 +7192,83 @@ app.patch(
             where: { id: movementData.lubricantId, plantId },
             data: { stock: movementData.stockAfter },
           });
+        }
+
+        if (route?.id) {
+          const executedDay = startOfDay(executedAt);
+          const nextRouteDate = resolveNextRouteDate({
+            lastDate: executedDay,
+            nextDate: null,
+            frequencyDays: route.frequencyDays,
+            frequencyType: route.frequencyType,
+            weeklyDays: Array.isArray(route.weeklyDays) ? route.weeklyDays : [],
+            monthlyAnchorDay: route.monthlyAnchorDay,
+          });
+
+          await tx.route.updateMany({
+            where: { id: route.id, plantId },
+            data: {
+              lastDate: executedDay,
+              nextDate: nextRouteDate,
+              technicianId: finalTechnicianId,
+            },
+          });
+
+          if (nextRouteDate) {
+            const nd = toSafeNoon(nextRouteDate);
+            const start = startOfDay(nd);
+            const end = endOfDay(nd);
+
+            const pending = await tx.execution.findFirst({
+              where: {
+                plantId,
+                routeId: route.id,
+                status: { in: ["PENDING", "OVERDUE"] },
+              },
+              orderBy: { scheduledAt: "asc" },
+              select: { id: true, scheduledAt: true, status: true },
+            });
+
+            const existingSameDay = await tx.execution.findFirst({
+              where: {
+                plantId,
+                routeId: route.id,
+                status: "PENDING",
+                scheduledAt: { gte: start, lte: end },
+                ...(pending ? { NOT: { id: pending.id } } : {}),
+              },
+              select: { id: true },
+            });
+
+            if (pending) {
+              if (!existingSameDay) {
+                await tx.execution.updateMany({
+                  where: { id: pending.id, plantId },
+                  data: {
+                    scheduledAt: nd,
+                    status: "PENDING",
+                    technicianId: finalTechnicianId,
+                    equipmentId: execution.equipmentId ?? route.equipmentId ?? null,
+                  },
+                });
+              } else {
+                await tx.execution.deleteMany({
+                  where: { id: pending.id, plantId },
+                });
+              }
+            } else if (!existingSameDay) {
+              await tx.execution.create({
+                data: {
+                  plantId,
+                  routeId: route.id,
+                  equipmentId: execution.equipmentId ?? route.equipmentId ?? null,
+                  technicianId: finalTechnicianId,
+                  status: "PENDING",
+                  scheduledAt: nd,
+                },
+              });
+            }
+          }
         }
 
         return tx.execution.findFirst({
