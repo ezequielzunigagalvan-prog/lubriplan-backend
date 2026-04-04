@@ -1564,7 +1564,7 @@ app.get(
           type: "EXEC_UNASSIGNED",
           severity: sevFromScore(score),
           score,
-          title: `Actividad sin técnico${isCritical ? " (crÃ­tica)" : ""}`,
+          title: `Actividad sin técnico${isCritical ? " (crí­tica)" : ""}`,
           reason: `${isOverdue ? "Vencida" : "Pendiente"}${equipmentLabel(eq) ? ` · ${equipmentLabel(eq)}` : ""}`,
           suggestedOwner: "SUPERVISOR",
           entity: {
@@ -1636,7 +1636,7 @@ app.get(
           type: "CRITICAL_UNASSIGNED_OVERDUE",
           severity: "CRITICAL",
           score,
-          title: `CrÃ­tica vencida sin técnico`,
+          title: `Crí­tica vencida sin técnico`,
           reason: `${equipmentLabel(eq) || "Equipo"} · Ruta: ${ex?.route?.name || "-"}`,
           suggestedOwner: "SUPERVISOR",
           entity: { executionId: ex.id, equipmentId: eq?.id ?? null },
@@ -7757,7 +7757,7 @@ app.post("/api/emergency-activities", requireAuth, async (req, res) => {
           executedAt: result.execution.executedAt,
         });
       } catch (notifyErr) {
-        console.error("No se pudo notificar ejecuciÃ³n crÃ­tica emergente:", notifyErr);
+        console.error("No se pudo notificar ejecución crítica emergente:", notifyErr);
       }
     }
 
