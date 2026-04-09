@@ -12,7 +12,7 @@ const SHEETS = ["equipos", "lubricantes", "tecnicos", "rutas"];
 const VALID_STATUS = new Set(["ACTIVO", "INACTIVO"]);
 const VALID_CRITICALITY = new Set(["ALTA", "MEDIA", "BAJA"]);
 const VALID_LUBRICANT_TYPES = new Set(["ACEITE", "GRASA"]);
-const VALID_UNITS = new Set(["L", "ML", "KG", "G"]);
+const VALID_UNITS = new Set(["L", "ML", "KG", "G", "BOMBAZOS"]);
 
 function clean(value) {
   return String(value ?? "").trim();
@@ -288,6 +288,8 @@ async function validateRutas(rows, plantId, staged = {}) {
     const lubricanteCodigo = upper(rowValue(row, "lubricante_codigo"));
     const cantidad = toNumber(rowValue(row, "cantidad"));
     const unidad = upper(rowValue(row, "unidad"));
+    const equivalenciaBombazo = toNumber(rowValue(row, "equivalencia_bombazo"));
+    const unidadEquivalenciaBombazo = upper(rowValue(row, "unidad_equivalencia_bombazo"));
     const tecnicoCodigo = upper(rowValue(row, "tecnico_codigo"));
     const instrucciones = clean(rowValue(row, "instrucciones"));
     const ultimaFecha = parseSheetDate(rowValue(row, "ultima_fecha_lubricacion"));
@@ -305,9 +307,17 @@ async function validateRutas(rows, plantId, staged = {}) {
     if (!lubricanteCodigo) rowErrors.push("lubricante_codigo es obligatorio");
     if (lubricanteCodigo && !lubricant) rowErrors.push("lubricante_codigo no existe");
     if (cantidad == null || cantidad < 0) rowErrors.push("cantidad debe ser mayor o igual a cero");
-    if (!VALID_UNITS.has(unidad)) rowErrors.push("unidad debe ser L, ml, kg o g");
+    if (!VALID_UNITS.has(unidad)) rowErrors.push("unidad debe ser L, ml, kg, g o BOMBAZOS");
     if (tecnicoCodigo && !technician) rowErrors.push("tecnico_codigo no existe");
     if (!ultimaFecha) rowErrors.push("ultima_fecha_lubricacion es obligatoria");
+    if (unidad === "BOMBAZOS") {
+      if (equivalenciaBombazo == null || equivalenciaBombazo <= 0) {
+        rowErrors.push("equivalencia_bombazo debe ser mayor a cero cuando la unidad es BOMBAZOS");
+      }
+      if (!unidadEquivalenciaBombazo || !new Set(["L", "ML", "KG", "G"]).has(unidadEquivalenciaBombazo)) {
+        rowErrors.push("unidad_equivalencia_bombazo debe ser L, ml, kg o g cuando la unidad es BOMBAZOS");
+      }
+    }
 
     const fileRouteKey = `${equipoCodigo}|${normalizeRouteName(nombre)}|${lubricanteCodigo}`;
     if (seenRoutes.has(fileRouteKey)) rowErrors.push("ruta duplicada en el archivo");
@@ -337,6 +347,8 @@ async function validateRutas(rows, plantId, staged = {}) {
         lubricante_codigo: lubricanteCodigo,
         cantidad,
         unidad,
+        equivalencia_bombazo: unidad === "BOMBAZOS" ? equivalenciaBombazo : null,
+        unidad_equivalencia_bombazo: unidad === "BOMBAZOS" ? unidadEquivalenciaBombazo : null,
         tecnico_codigo: tecnicoCodigo,
         instrucciones,
         ultima_fecha_lubricacion: dateToYmd(ultimaFecha),
@@ -490,7 +502,9 @@ async function createRutas(rows, plantId, tx, staged) {
         lubricantType: row.lubricantType || upper(lubricant.type) || "ACEITE",
         lubricantName: null,
         quantity: Number(row.cantidad),
-        unit: String(row.unidad).toLowerCase(),
+        unit: String(row.unidad).trim().toUpperCase() === "BOMBAZOS" ? "BOMBAZOS" : String(row.unidad).toLowerCase(),
+        pumpStrokeValue: String(row.unidad).trim().toUpperCase() === "BOMBAZOS" ? Number(row.equivalencia_bombazo) : null,
+        pumpStrokeUnit: String(row.unidad).trim().toUpperCase() === "BOMBAZOS" ? String(row.unidad_equivalencia_bombazo || "").toLowerCase() : null,
         frequencyDays: Number(row.frecuencia_dias),
         method: null,
         points: null,
@@ -523,21 +537,52 @@ router.get("/template", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), async
   workbook.creator = "LubriPlan";
   workbook.created = new Date();
 
+  addTemplateSheet(
+    workbook,
+    "instrucciones",
+    ["seccion", "detalle"],
+    [
+      ["equipos", "Llena una fila por equipo. El codigo debe ser unico por planta."],
+      ["lubricantes", "Usa unidad base L, ML, KG o G segun el producto."],
+      ["tecnicos", "El codigo del tecnico debe ser unico por planta."],
+      ["rutas", "Si unidad = BOMBAZOS, llena equivalencia_bombazo y unidad_equivalencia_bombazo."],
+      ["rutas", "ultima_fecha_lubricacion debe ir en formato AAAA-MM-DD o DD/MM/AAAA."],
+    ]
+  );
+
   addTemplateSheet(workbook, "equipos", ["codigo", "nombre", "area", "ubicacion", "estado", "criticidad", "descripcion"], [
-    ["EQ-001", "Compresor GA75", "Produccion", "Linea 1", "Activo", "Alta", "Compresor principal"],
+    ["EQ-001", "Compresor GA75", "Producción", "Línea 1", "Activo", "Alta", "Compresor principal"],
   ]);
 
   addTemplateSheet(workbook, "lubricantes", ["codigo", "nombre", "tipo", "viscosidad", "unidad", "stock", "minStock", "marca"], [
-    ["LUB-001", "Aceite Hidraulico ISO 68", "Aceite", "68", "L", 120, 20, "Shell"],
+    ["LUB-001", "Aceite hidráulico ISO 68", "Aceite", "68", "L", 120, 20, "Shell"],
   ]);
 
   addTemplateSheet(workbook, "tecnicos", ["nombre", "codigo", "especialidad", "estatus"], [
-    ["Luis Hernandez", "TEC-01", "Lubricacion general", "Activo"],
+    ["Luis Hernández", "TEC-01", "Lubricación general", "Activo"],
   ]);
 
-  addTemplateSheet(workbook, "rutas", ["equipo_codigo", "nombre", "frecuencia_dias", "lubricante_codigo", "cantidad", "unidad", "tecnico_codigo", "ultima_fecha_lubricacion", "instrucciones"], [
-    ["EQ-001", "Revision nivel aceite", 7, "LUB-001", 0.5, "L", "TEC-01", "2026-04-01", "Verificar nivel y rellenar si es necesario"],
-  ]);
+  addTemplateSheet(
+    workbook,
+    "rutas",
+    [
+      "equipo_codigo",
+      "nombre",
+      "frecuencia_dias",
+      "lubricante_codigo",
+      "cantidad",
+      "unidad",
+      "equivalencia_bombazo",
+      "unidad_equivalencia_bombazo",
+      "tecnico_codigo",
+      "ultima_fecha_lubricacion",
+      "instrucciones",
+    ],
+    [
+      ["EQ-001", "Revisión nivel aceite", 7, "LUB-001", 0.5, "L", "", "", "TEC-01", "2026-04-01", "Verificar nivel y rellenar si es necesario"],
+      ["EQ-002", "Engrase de rodamientos", 15, "LUB-002", 3, "BOMBAZOS", 8, "G", "TEC-01", "2026-04-02", "Aplicar tres bombazos por punto"],
+    ]
+  );
 
   res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
   res.setHeader("Content-Disposition", 'attachment; filename="lubriplan_plantilla_importacion.xlsx"');
