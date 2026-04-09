@@ -36,6 +36,7 @@
   import { runOverdueSummaryJob, startOverdueSummaryScheduler } from "./jobs/overdueSummary.job.js";
   import uploadsRoutes from "./routes/uploads.routes.js";
   import exportRoutes from "./routes/export.js";
+  import importRoutes from "./routes/import.js";
   import { startMonthlyExecutiveReportScheduler } from "./jobs/monthlyExecutiveReport.job.js";
   import monthlyReportRoutes from "./routes/monthlyReport.routes.js";
 
@@ -217,6 +218,7 @@ app.options("*", cors(corsOptions));
   );
 
   app.use("/api/export", exportRoutes);
+  app.use("/api/import", importRoutes);
   console.log(">>> exportRoutes montado");
 
   app.use(

@@ -30,6 +30,40 @@ function daysAgo(n) {
   return d;
 }
 
+function slug(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60);
+}
+
+function resourceLabel(resources = []) {
+  const values = Array.from(new Set((resources || []).map((x) => String(x || "").toLowerCase())));
+  if (values.length > 1) return "reporte-consolidado";
+  const key = values[0] || "datos";
+  const labels = {
+    executions: "actividades",
+    movements: "movimientos-inventario",
+    routes: "rutas",
+    failures: "fallas",
+    emergents: "actividades-emergentes",
+    condition_reports: "reportes-condicion",
+  };
+  return labels[key] || "datos";
+}
+
+async function buildExportFilename({ plantId, resources, extension }) {
+  const plant = plantId
+    ? await prisma.plant.findUnique({ where: { id: plantId }, select: { name: true } })
+    : null;
+  const plantSlug = slug(plant?.name) || "planta";
+  const date = new Date().toISOString().slice(0, 10);
+  return `lubriplan_${plantSlug}_${resourceLabel(resources)}_${date}.${extension}`;
+}
+
 function addHeaderRow(ws, headers) {
   ws.addRow(headers);
   const row = ws.getRow(1);
@@ -663,7 +697,11 @@ router.get("/xlsx", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), async (re
       autoFitColumns(ws);
     }
 
-    const filename = `lubriplan_export_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    const filename = await buildExportFilename({
+      plantId: currentPlantId,
+      resources,
+      extension: "xlsx",
+    });
 
     res.setHeader(
       "Content-Type",
@@ -703,7 +741,11 @@ router.get("/pdf", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), async (req
     const dateFrom = from || (Number.isFinite(days) ? daysAgo(days) : null);
     const dateTo = to || new Date();
 
-    const filename = `lubriplan_export_${new Date().toISOString().slice(0, 10)}.pdf`;
+    const filename = await buildExportFilename({
+      plantId: currentPlantId,
+      resources,
+      extension: "pdf",
+    });
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
 
