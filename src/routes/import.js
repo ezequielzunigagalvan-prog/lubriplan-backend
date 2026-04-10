@@ -54,7 +54,7 @@ function parseSheetDate(value) {
   if (!value) return null;
 
   if (value instanceof Date && Number.isFinite(value.getTime())) {
-    return new Date(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate(), 12, 0, 0, 0);
+    return new Date(value.getFullYear(), value.getMonth(), value.getDate(), 12, 0, 0, 0);
   }
 
   const raw = clean(value);
