@@ -84,6 +84,35 @@ function addDays(date, days) {
   return d;
 }
 
+function startOfDay(value) {
+  const d = parseSheetDate(value);
+  if (!d) return null;
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
+}
+
+function toSafeNoon(value) {
+  const d = value instanceof Date ? value : new Date(value);
+  if (!Number.isFinite(d.getTime())) return null;
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12, 0, 0, 0);
+}
+
+function resolveImportedNextRouteDate(lastDate, frequencyDays) {
+  const parsedLast = startOfDay(lastDate);
+  const days = Number(frequencyDays);
+  if (!parsedLast || !Number.isFinite(days) || days <= 0) return null;
+  const out = new Date(parsedLast);
+  out.setDate(out.getDate() + days);
+  out.setHours(0, 0, 0, 0);
+  return out;
+}
+
+function normalizeRouteMethod(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
 function dateToYmd(date) {
   if (!(date instanceof Date) || !Number.isFinite(date.getTime())) return "";
   const y = date.getFullYear();
@@ -297,6 +326,8 @@ async function validateRutas(rows = [], plantId, staged = {}) {
     const equivalenciaBombazo = toNumber(rowValue(row, "equivalencia_bombazo"));
     const unidadEquivalenciaBombazo = upper(rowValue(row, "unidad_equivalencia_bombazo"));
     const tecnicoCodigo = upper(rowValue(row, "tecnico_codigo"));
+    const puntosLubricacion = toNumber(rowValue(row, "puntos_lubricacion"));
+    const metodoAplicacion = clean(rowValue(row, "metodo_aplicacion"));
     const instrucciones = clean(rowValue(row, "instrucciones"));
     const ultimaFecha = parseSheetDate(rowValue(row, "ultima_fecha_lubricacion"));
     const rowErrors = [];
@@ -304,7 +335,8 @@ async function validateRutas(rows = [], plantId, staged = {}) {
     const equipment = equipmentByCode.get(equipoCodigo);
     const lubricant = lubricantByCode.get(lubricanteCodigo);
     const technician = tecnicoCodigo ? technicianByCode.get(tecnicoCodigo) : null;
-    const proximaFecha = ultimaFecha && frecuenciaDias ? addDays(ultimaFecha, frecuenciaDias) : null;
+    const proximaFecha = resolveImportedNextRouteDate(ultimaFecha, frecuenciaDias);
+    const normalizedMethod = normalizeRouteMethod(metodoAplicacion);
 
     if (!equipoCodigo) rowErrors.push("equipo_codigo es obligatorio");
     if (equipoCodigo && !equipment) rowErrors.push("equipo_codigo no existe");
@@ -315,6 +347,9 @@ async function validateRutas(rows = [], plantId, staged = {}) {
     if (cantidad == null || cantidad < 0) rowErrors.push("cantidad debe ser mayor o igual a cero");
     if (!VALID_UNITS.has(unidad)) rowErrors.push("unidad debe ser L, ml, kg, g o BOMBAZOS");
     if (tecnicoCodigo && !technician) rowErrors.push("tecnico_codigo no existe");
+    if (puntosLubricacion != null && (!Number.isFinite(puntosLubricacion) || puntosLubricacion <= 0)) {
+      rowErrors.push("puntos_lubricacion debe ser mayor a cero");
+    }
     if (!ultimaFecha) rowErrors.push("ultima_fecha_lubricacion es obligatoria");
     if (unidad === "BOMBAZOS") {
       if (equivalenciaBombazo == null || equivalenciaBombazo <= 0) {
@@ -325,7 +360,7 @@ async function validateRutas(rows = [], plantId, staged = {}) {
       }
     }
 
-    const fileRouteKey = `${equipoCodigo}|${normalizeRouteName(nombre)}|${lubricanteCodigo}`;
+    const fileRouteKey = `${equipoCodigo}|${normalizeRouteName(nombre)}|${lubricanteCodigo}|${normalizedMethod}`;
     if (seenRoutes.has(fileRouteKey)) rowErrors.push("ruta duplicada en el archivo");
 
     if (equipment?.id && lubricant?.id) {
@@ -335,10 +370,11 @@ async function validateRutas(rows = [], plantId, staged = {}) {
           equipmentId: equipment.id,
           lubricantId: lubricant.id,
           normalizedName: normalizeRouteName(nombre),
+          method: normalizedMethod,
         },
         select: { id: true },
       });
-      if (duplicate) rowErrors.push("ruta ya existe para ese equipo, nombre y lubricante");
+      if (duplicate) rowErrors.push("ruta ya existe para ese equipo, nombre, lubricante y metodo");
     }
 
     if (rowErrors.length) {
@@ -356,6 +392,8 @@ async function validateRutas(rows = [], plantId, staged = {}) {
         equivalencia_bombazo: unidad === "BOMBAZOS" ? equivalenciaBombazo : null,
         unidad_equivalencia_bombazo: unidad === "BOMBAZOS" ? unidadEquivalenciaBombazo : null,
         tecnico_codigo: tecnicoCodigo,
+        puntos_lubricacion: puntosLubricacion,
+        metodo_aplicacion: metodoAplicacion,
         instrucciones,
         ultima_fecha_lubricacion: dateToYmd(ultimaFecha),
         proxima_fecha: dateToYmd(proximaFecha),
@@ -493,9 +531,13 @@ async function createRutas(rows, plantId, tx, staged) {
     if (!equipment || !lubricant) throw new Error(`Ruta fila ${row.row}: referencia no encontrada`);
 
     const lastDate = parseSheetDate(row.ultima_fecha_lubricacion);
-    const nextDate = addDays(lastDate, row.frecuencia_dias);
-    const scheduledAt = new Date(nextDate);
-    scheduledAt.setHours(12, 0, 0, 0);
+    const nextDate = resolveImportedNextRouteDate(lastDate, row.frecuencia_dias);
+    const scheduledAt = nextDate ? toSafeNoon(nextDate) : toSafeNoon(new Date());
+    const pointsInt =
+      row.puntos_lubricacion === "" || row.puntos_lubricacion == null
+        ? null
+        : Number(row.puntos_lubricacion);
+    const normalizedMethod = normalizeRouteMethod(row.metodo_aplicacion);
 
     const route = await tx.route.create({
       data: {
@@ -512,8 +554,8 @@ async function createRutas(rows, plantId, tx, staged) {
         pumpStrokeValue: String(row.unidad).trim().toUpperCase() === "BOMBAZOS" ? Number(row.equivalencia_bombazo) : null,
         pumpStrokeUnit: String(row.unidad).trim().toUpperCase() === "BOMBAZOS" ? String(row.unidad_equivalencia_bombazo || "").toLowerCase() : null,
         frequencyDays: Number(row.frecuencia_dias),
-        method: null,
-        points: null,
+        method: normalizedMethod,
+        points: pointsInt,
         instructions: row.instrucciones || null,
         lastDate,
         nextDate,
@@ -552,6 +594,7 @@ router.get("/template", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), async
       ["Lubricantes", "Usa unidad base L, ML, KG o G segun el producto."],
       ["Tecnicos", "El codigo del tecnico debe ser unico por planta."],
       ["Rutas", "Si unidad = BOMBAZOS, llena equivalencia_bombazo y unidad_equivalencia_bombazo."],
+      ["Rutas", "Agrega puntos_lubricacion y metodo_aplicacion para describir mejor la ruta."],
       ["Rutas", "ultima_fecha_lubricacion debe ir en formato AAAA-MM-DD o DD/MM/AAAA."],
     ]
   );
@@ -581,12 +624,14 @@ router.get("/template", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), async
       "Equivalencia_bombazo",
       "Unidad_equivalencia_bombazo",
       "Tecnico_codigo",
+      "Puntos_lubricacion",
+      "Metodo_aplicacion",
       "ultima_fecha_lubricacion",
       "Instrucciones",
     ],
     [
-      ["EQ-001", "Revision nivel aceite", 7, "LUB-001", 0.5, "L", "", "", "TEC-01", "2026-04-01", "Verificar nivel y rellenar si es necesario"],
-      ["EQ-002", "Engrase de rodamientos", 15, "LUB-002", 3, "BOMBAZOS", 8, "G", "TEC-01", "2026-04-02", "Aplicar tres bombazos por punto"],
+      ["EQ-001", "Revision nivel aceite", 7, "LUB-001", 0.5, "L", "", "", "TEC-01", 1, "llenado", "2026-04-01", "Verificar nivel y rellenar si es necesario"],
+      ["EQ-002", "Engrase de rodamientos", 15, "LUB-002", 3, "BOMBAZOS", 8, "G", "TEC-01", 4, "engrase manual", "2026-04-02", "Aplicar tres bombazos por punto"],
     ]
   );
 
