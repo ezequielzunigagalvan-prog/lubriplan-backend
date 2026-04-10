@@ -8,7 +8,7 @@ import { requireRole } from "../middleware/requireRole.js";
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024 } });
 
-const SHEETS = ["equipos", "lubricantes", "tecnicos", "rutas"];
+const SHEETS = ["Equipos", "Lubricantes", "Técnicos", "Rutas"];
 const VALID_STATUS = new Set(["ACTIVO", "INACTIVO"]);
 const VALID_CRITICALITY = new Set(["ALTA", "MEDIA", "BAJA"]);
 const VALID_LUBRICANT_TYPES = new Set(["ACEITE", "GRASA"]);
@@ -149,21 +149,21 @@ async function validateEquipos(rows, plantId) {
   const existingByCode = new Map(existing.map((x) => [upper(x.code), x]));
 
   for (const row of rows) {
-    const codigo = upper(rowValue(row, "codigo") || rowValue(row, "código"));
+    const codigo = upper(rowValue(row, "código") || rowValue(row, "código"));
     const nombre = clean(rowValue(row, "nombre"));
-    const area = clean(rowValue(row, "area") || rowValue(row, "área"));
+    const area = clean(rowValue(row, "área") || rowValue(row, "área"));
     const ubicacion = clean(rowValue(row, "ubicacion") || rowValue(row, "ubicación"));
     const estado = upper(rowValue(row, "estado")) || "ACTIVO";
     const criticidad = upper(rowValue(row, "criticidad")) || null;
     const descripcion = clean(rowValue(row, "descripcion") || rowValue(row, "descripción"));
     const rowErrors = [];
 
-    if (!codigo) rowErrors.push("cï¿½digo es obligatorio");
+    if (!codigo) rowErrors.push("código es obligatorio");
     if (!nombre) rowErrors.push("nombre es obligatorio");
     if (!VALID_STATUS.has(estado)) rowErrors.push("estado debe ser Activo o Inactivo");
     if (criticidad && !VALID_CRITICALITY.has(criticidad)) rowErrors.push("criticidad debe ser Alta, Media o Baja");
     if (codigo && seen.has(codigo)) rowErrors.push("cï¿½digo duplicado en el archivo");
-    if (codigo && existingByCode.has(codigo)) rowErrors.push("cï¿½digo ya existe en LubriPlan");
+    if (codigo && existingByCode.has(codigo)) rowErrors.push("código ya existe en LubriPlan");
 
     if (rowErrors.length) {
       for (const msg of rowErrors) pushError(errors, row._row, msg);
@@ -180,14 +180,14 @@ async function validateLubricantes(rows, plantId) {
   const errors = [];
   const ok = [];
   const seen = new Set();
-  const codes = rows.map((r) => upper(rowValue(r, "codigo") || rowValue(r, "código"))).filter(Boolean);
+  const codes = rows.map((r) => upper(rowValue(r, "código") || rowValue(r, "código"))).filter(Boolean);
   const existing = codes.length
     ? await prisma.lubricant.findMany({ where: { plantId, code: { in: codes } }, select: { code: true } })
     : [];
   const existingCodes = new Set(existing.map((x) => upper(x.code)));
 
   for (const row of rows) {
-    const codigo = upper(rowValue(row, "codigo") || rowValue(row, "código"));
+    const codigo = upper(rowValue(row, "código") || rowValue(row, "código"));
     const nombre = clean(rowValue(row, "nombre"));
     const tipo = upper(rowValue(row, "tipo"));
     const viscosidad = clean(rowValue(row, "viscosidad"));
@@ -197,14 +197,14 @@ async function validateLubricantes(rows, plantId) {
     const marca = clean(rowValue(row, "marca"));
     const rowErrors = [];
 
-    if (!codigo) rowErrors.push("cï¿½digo es obligatorio");
+    if (!codigo) rowErrors.push("código es obligatorio");
     if (!nombre) rowErrors.push("nombre es obligatorio");
     if (!VALID_LUBRICANT_TYPES.has(tipo)) rowErrors.push("tipo debe ser Aceite o Grasa");
     if (!VALID_UNITS.has(unidad)) rowErrors.push("unidad debe ser L, ml, kg o g");
-    if (stock == null || stock < 0) rowErrors.push("stock debe ser nï¿½mero mayor o igual a cero");
+    if (stock == null || stock < 0) rowErrors.push("stock debe ser número mayor o igual a cero");
     if (minStock != null && minStock < 0) rowErrors.push("minStock no puede ser negativo");
-    if (codigo && seen.has(codigo)) rowErrors.push("cï¿½digo duplicado en el archivo");
-    if (codigo && existingCodes.has(codigo)) rowErrors.push("cï¿½digo ya existe en LubriPlan");
+    if (codigo && seen.has(codigo)) rowErrors.push("código duplicado en el archivo");
+    if (codigo && existingCodes.has(codigo)) rowErrors.push("código ya existe en LubriPlan");
 
     if (rowErrors.length) {
       for (const msg of rowErrors) pushError(errors, row._row, msg);
@@ -221,7 +221,7 @@ async function validateTecnicos(rows, plantId) {
   const errors = [];
   const ok = [];
   const seen = new Set();
-  const codes = rows.map((r) => upper(rowValue(r, "codigo") || rowValue(r, "código"))).filter(Boolean);
+  const codes = rows.map((r) => upper(rowValue(r, "código") || rowValue(r, "código"))).filter(Boolean);
   const existing = codes.length
     ? await prisma.technician.findMany({ where: { plantId, code: { in: codes }, deletedAt: null }, select: { code: true } })
     : [];
@@ -229,17 +229,17 @@ async function validateTecnicos(rows, plantId) {
 
   for (const row of rows) {
     const nombre = clean(rowValue(row, "nombre"));
-    const codigo = upper(rowValue(row, "codigo") || rowValue(row, "código"));
-    const especialidad = clean(rowValue(row, "especialidad")) || "Lubricaciï¿½n";
+    const codigo = upper(rowValue(row, "código") || rowValue(row, "código"));
+    const especialidad = clean(rowValue(row, "especialidad")) || "Lubricación";
     const estatus = clean(rowValue(row, "estatus")) || "Activo";
     const estatusNorm = upper(estatus);
     const rowErrors = [];
 
     if (!nombre) rowErrors.push("nombre es obligatorio");
-    if (!codigo) rowErrors.push("cï¿½digo es obligatorio");
+    if (!codigo) rowErrors.push("código es obligatorio");
     if (!VALID_STATUS.has(estatusNorm)) rowErrors.push("estatus debe ser Activo o Inactivo");
-    if (codigo && seen.has(codigo)) rowErrors.push("cï¿½digo duplicado en el archivo");
-    if (codigo && existingCodes.has(codigo)) rowErrors.push("cï¿½digo ya existe en LubriPlan");
+    if (codigo && seen.has(codigo)) rowErrors.push("código duplicado en el archivo");
+    if (codigo && existingCodes.has(codigo)) rowErrors.push("código ya existe en LubriPlan");
 
     if (rowErrors.length) {
       for (const msg of rowErrors) pushError(errors, row._row, msg);
@@ -255,9 +255,9 @@ async function validateTecnicos(rows, plantId) {
 async function validateRutas(rows, plantId, staged = {}) {
   const errors = [];
   const ok = [];
-  const equipmentCodes = rows.map((r) => upper(rowValue(r, "equipo_codigo"))).filter(Boolean);
+  const equipmentCodes = rows.map((r) => upper(rowValue(r, "equipo_código"))).filter(Boolean);
   const lubricantCodes = rows.map((r) => upper(rowValue(r, "lubricante_codigo"))).filter(Boolean);
-  const technicianCodes = rows.map((r) => upper(rowValue(r, "tecnico_codigo"))).filter(Boolean);
+  const technicianCodes = rows.map((r) => upper(rowValue(r, "técnico_código"))).filter(Boolean);
 
   const [equipments, lubricants, technicians] = await Promise.all([
     equipmentCodes.length ? prisma.equipment.findMany({ where: { plantId, code: { in: equipmentCodes } }, select: { id: true, code: true } }) : [],
@@ -282,17 +282,17 @@ async function validateRutas(rows, plantId, staged = {}) {
   for (const item of staged.tecnicos || []) technicianByCode.set(upper(item.codigo), { id: item.id ?? null, code: item.codigo });
 
   for (const row of rows) {
-    const equipoCodigo = upper(rowValue(row, "equipo_codigo") || rowValue(row, "equipo_código"));
+    const equipoCodigo = upper(rowValue(row, "equipo_código") || rowValue(row, "equipo_código"));
     const nombre = clean(rowValue(row, "nombre"));
-    const frecuenciaDias = toNumber(rowValue(row, "frecuencia_dias") || rowValue(row, "frecuencia_días"));
-    const lubricanteCodigo = upper(rowValue(row, "lubricante_codigo") || rowValue(row, "lubricante_código"));
+    const frecuenciaDias = toNumber(rowValue(row, "frecuencia_días") || rowValue(row, "frecuencia_días"));
+    const lubricanteCodigo = upper(rowValue(row, "lubricante_código") || rowValue(row, "lubricante_código"));
     const cantidad = toNumber(rowValue(row, "cantidad"));
     const unidad = upper(rowValue(row, "unidad"));
     const equivalenciaBombazo = toNumber(rowValue(row, "equivalencia_bombazo"));
     const unidadEquivalenciaBombazo = upper(rowValue(row, "unidad_equivalencia_bombazo"));
-    const tecnicoCodigo = upper(rowValue(row, "tecnico_codigo") || rowValue(row, "técnico_codigo"));
+    const tecnicoCodigo = upper(rowValue(row, "tecnico_codigo") || rowValue(row, "técnico_código"));
     const instrucciones = clean(rowValue(row, "instrucciones"));
-    const ultimaFecha = parseSheetDate(rowValue(row, "ultima_fecha_lubricacion") || rowValue(row, "última_fecha_lubricación"));
+    const ultimaFecha = parseSheetDate(rowValue(row, "última_fecha_lubricación") || rowValue(row, "última_fecha_lubricación"));
     const rowErrors = [];
 
     const equipment = equipmentByCode.get(equipoCodigo);
@@ -300,16 +300,16 @@ async function validateRutas(rows, plantId, staged = {}) {
     const technician = tecnicoCodigo ? technicianByCode.get(tecnicoCodigo) : null;
     const proximaFecha = ultimaFecha && frecuenciaDias ? addDays(ultimaFecha, frecuenciaDias) : null;
 
-    if (!equipoCodigo) rowErrors.push("equipo_cï¿½digo es obligatorio");
-    if (equipoCodigo && !equipment) rowErrors.push("equipo_cï¿½digo no existe");
+    if (!equipoCodigo) rowErrors.push("equipo_código es obligatorio");
+    if (equipoCodigo && !equipment) rowErrors.push("equipo_código no existe");
     if (!nombre) rowErrors.push("nombre es obligatorio");
-    if (frecuenciaDias == null || frecuenciaDias <= 0) rowErrors.push("frecuencia_dï¿½as debe ser mayor a cero");
-    if (!lubricanteCodigo) rowErrors.push("lubricante_cï¿½digo es obligatorio");
-    if (lubricanteCodigo && !lubricant) rowErrors.push("lubricante_cï¿½digo no existe");
+    if (frecuenciaDias == null || frecuenciaDias <= 0) rowErrors.push("frecuencia_días debe ser mayor a cero");
+    if (!lubricanteCodigo) rowErrors.push("lubricante_código es obligatorio");
+    if (lubricanteCodigo && !lubricant) rowErrors.push("lubricante_código no existe");
     if (cantidad == null || cantidad < 0) rowErrors.push("cantidad debe ser mayor o igual a cero");
     if (!VALID_UNITS.has(unidad)) rowErrors.push("unidad debe ser L, ml, kg, g o BOMBAZOS");
-    if (tecnicoCodigo && !technician) rowErrors.push("tï¿½cnico_cï¿½digo no existe");
-    if (!ultimaFecha) rowErrors.push("ï¿½ltima_fecha_lubricaciï¿½n es obligatoria");
+    if (tecnicoCodigo && !technician) rowErrors.push("técnico_código no existe");
+    if (!ultimaFecha) rowErrors.push("última_fecha_lubricación es obligatoria");
     if (unidad === "BOMBAZOS") {
       if (equivalenciaBombazo == null || equivalenciaBombazo <= 0) {
         rowErrors.push("equivalencia_bombazo debe ser mayor a cero cuando la unidad es BOMBAZOS");
@@ -542,31 +542,31 @@ router.get("/template", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), async
     "instrucciones",
     ["seccion", "detalle"],
     [
-      ["Equipos", "Llena una fila por equipo. El cï¿½digo debe ser ï¿½nico por planta."],
+      ["Equipos", "Llena una fila por equipo. El código debe ser único por planta."],
       ["Lubricantes", "Usa unidad base L, ML, KG o G segun el producto."],
-      ["Tï¿½cnicos", "El cï¿½digo del tï¿½cnico debe ser ï¿½nico por planta."],
+      ["Técnicos", "El código del técnico debe ser único por planta."],
       ["Rutas", "Si unidad = BOMBAZOS, llena equivalencia_bombazo y unidad_equivalencia_bombazo."],
-      ["Rutas", "ï¿½ltima_fecha_lubricaciï¿½n debe ir en formato AAAA-MM-DD o DD/MM/AAAA."],
+      ["Rutas", "última_fecha_lubricación debe ir en formato AAAA-MM-DD o DD/MM/AAAA."],
     ]
   );
 
-  addTemplateSheet(workbook, "equipos", ["cï¿½digo", "nombre", "ï¿½rea", "ubicaciï¿½n", "estado", "criticidad", "descripciï¿½n"], [
-    ["EQ-001", "Compresor GA75", "Producciï¿½n", "Lï¿½nea 1", "Activo", "Alta", "Compresor principal"],
+  addTemplateSheet(workbook, "equipos", ["código", "nombre", "área", "ubicación", "estado", "criticidad", "descripción"], [
+    ["EQ-001", "Compresor GA75", "Producción", "Línea 1", "Activo", "Alta", "Compresor principal"],
   ]);
 
-  addTemplateSheet(workbook, "lubricantes", ["cï¿½digo", "nombre", "tipo", "viscosidad", "unidad", "stock", "minStock", "marca"], [
-    ["LUB-001", "Aceite hidrï¿½ulico ISO 68", "Aceite", "68", "L", 120, 20, "Shell"],
+  addTemplateSheet(workbook, "lubricantes", ["código", "nombre", "tipo", "viscosidad", "unidad", "stock", "minStock", "marca"], [
+    ["LUB-001", "Aceite hidráulico ISO 68", "Aceite", "68", "L", 120, 20, "Shell"],
   ]);
 
-  addTemplateSheet(workbook, "tï¿½cnicos", ["nombre", "cï¿½digo", "especialidad", "estatus"], [
-    ["Luis Hernï¿½ndez", "TEC-01", "Lubricaciï¿½n general", "Activo"],
+  addTemplateSheet(workbook, "técnicos", ["nombre", "código", "especialidad", "estatus"], [
+    ["Luis Hernï¿½ndez", "TEC-01", "Lubricación general", "Activo"],
   ]);
 
   addTemplateSheet(
     workbook,
     "rutas",
     [
-      "Equipo_cï¿½digo",
+      "Equipo_código",
       "Nombre",
       "Frecuencia_dias",
       "Lubricante_codigo",
@@ -574,12 +574,12 @@ router.get("/template", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), async
       "Unidad",
       "Equivalencia_bombazo",
       "Unidad_equivalencia_bombazo",
-      "Tï¿½cnico_codigo",
-      "ï¿½ltima_fecha_lubricaciï¿½n",
+      "Técnico_codigo",
+      "Última_fecha_lubricación",
       "Instrucciones",
     ],
     [
-      ["EQ-001", "Revisiï¿½n nivel aceite", 7, "LUB-001", 0.5, "L", "", "", "TEC-01", "2026-04-01", "Verificar nivel y rellenar si es necesario"],
+      ["EQ-001", "Revisión nivel aceite", 7, "LUB-001", 0.5, "L", "", "", "TEC-01", "2026-04-01", "Verificar nivel y rellenar si es necesario"],
       ["EQ-002", "Engrase de rodamientos", 15, "LUB-002", 3, "BOMBAZOS", 8, "G", "TEC-01", "2026-04-02", "Aplicar tres bombazos por punto"],
     ]
   );
