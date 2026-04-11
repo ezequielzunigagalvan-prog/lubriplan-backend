@@ -277,6 +277,11 @@ app.options("*", cors(corsOptions));
 
   // ✅ carpeta pública para archivos subidos
   const uploadsDir = ensureDir(getUploadsRoot());
+
+  const legacyUploadsDir = path.join(process.cwd(), "uploads");
+  if (path.resolve(legacyUploadsDir) !== path.resolve(uploadsDir)) {
+    app.use("/uploads", express.static(legacyUploadsDir));
+  }
   app.use("/uploads", express.static(uploadsDir));
 
   console.log("🔥 BACKEND CORRECTO CARGADO");
@@ -8133,6 +8138,7 @@ app.get("/api/health", async (req, res) => {
       process.exit(0);
     }
   });
+
 
 
 
