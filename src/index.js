@@ -4628,6 +4628,19 @@ app.put(
       );
 
       if (!Number.isFinite(id)) return res.status(400).json({ error: "id invalido" });
+
+      const existingRoute = await prisma.route.findFirst({
+        where: { id, plantId },
+        select: {
+          id: true,
+          imageUrl: true,
+        },
+      });
+
+      if (!existingRoute) {
+        return res.status(404).json({ error: "Ruta no encontrada" });
+      }
+
       if (!name || !lubricantType || !equipmentId) {
         return res.status(400).json({
           error: "name, lubricantType y equipmentId son obligatorios",
@@ -4848,7 +4861,10 @@ app.put(
           instructions: toNullIfEmpty(instructions),
           lastDate: parsedLast,
           nextDate: parsedNext,
-          imageUrl: toNullIfEmpty(imageUrl)?.trim?.() || toNullIfEmpty(imageUrl),
+          imageUrl:
+            imageUrl == null || String(imageUrl).trim() === ""
+              ? existingRoute.imageUrl
+              : toNullIfEmpty(imageUrl)?.trim?.() || toNullIfEmpty(imageUrl),
           equipmentId: eqId,
           lubricantId: lubIdNum,
           technicianId: techIdNum,
