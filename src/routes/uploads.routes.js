@@ -1,7 +1,7 @@
 import express from "express";
 import multer from "multer";
 import path from "path";
-import fs from "fs";
+import { getUploadsSubdir } from "../utils/uploads.js";
 
 export default function uploadsRoutes({ auth }) {
   if (typeof auth !== "function") {
@@ -9,12 +9,7 @@ export default function uploadsRoutes({ auth }) {
   }
 
   const router = express.Router();
-
-  const uploadDir = "uploads/routes";
-
-  if (!fs.existsSync(uploadDir)) {
-    fs.mkdirSync(uploadDir, { recursive: true });
-  }
+  const uploadDir = getUploadsSubdir("routes");
 
   const storage = multer.diskStorage({
     destination: (_req, _file, cb) => cb(null, uploadDir),
@@ -29,7 +24,7 @@ export default function uploadsRoutes({ auth }) {
   router.post("/routes-image", auth, upload.single("image"), async (req, res) => {
     try {
       if (!req.file) {
-        return res.status(400).json({ error: "No se recibió imagen" });
+        return res.status(400).json({ error: "No se recibio imagen" });
       }
 
       return res.json({
