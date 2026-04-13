@@ -7,7 +7,7 @@
     import fs from "fs";
     import multer from "multer";
     import { toStartOfDaySafe } from "./utils/dates.js";
-    import { ensureDir, getUploadsRoot } from "./utils/uploads.js";
+    import { ensureDir, getUploadsRoot, getUploadsRoots } from "./utils/uploads.js";
     import usersRouter from "./routes/users.js";
     import authRouter from "./routes/auth.js";
     import { requireAuth } from "./middleware/requireAuth.js";
@@ -277,12 +277,46 @@ app.options("*", cors(corsOptions));
 
   // OK carpeta publica para archivos subidos
   const uploadsDir = ensureDir(getUploadsRoot());
+  const uploadRoots = getUploadsRoots().map((dirPath) => ensureDir(dirPath));
 
-  const legacyUploadsDir = path.join(process.cwd(), "uploads");
-  if (path.resolve(legacyUploadsDir) !== path.resolve(uploadsDir)) {
-    app.use("/uploads", express.static(legacyUploadsDir));
+  app.get("/uploads/*", (req, res, next) => {
+    try {
+      const requestPath = decodeURIComponent(String(req.path || "")).replace(/^\/uploads\//, "");
+      const safePath = requestPath
+        .replaceAll("\\", "/")
+        .replaceAll("../", "")
+        .replaceAll("..", "");
+      const fileName = path.basename(safePath);
+
+      const exactCandidates = uploadRoots.map((rootDir) => path.join(rootDir, safePath));
+      for (const candidate of exactCandidates) {
+        if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+          return res.sendFile(candidate);
+        }
+      }
+
+      if (fileName) {
+        for (const rootDir of uploadRoots) {
+          const directCandidates = [
+            path.join(rootDir, "routes", fileName),
+            path.join(rootDir, "condition-reports", fileName),
+          ];
+          for (const candidate of directCandidates) {
+            if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+              return res.sendFile(candidate);
+            }
+          }
+        }
+      }
+    } catch (uploadServeError) {
+      console.error("uploads serve error:", uploadServeError);
+    }
+    return next();
+  });
+
+  for (const dirPath of uploadRoots) {
+    app.use("/uploads", express.static(dirPath));
   }
-  app.use("/uploads", express.static(uploadsDir));
 
   console.log("ðŸ”¥ BACKEND CORRECTO CARGADO");
 
