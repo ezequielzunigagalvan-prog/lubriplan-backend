@@ -1,4 +1,4 @@
-import express from "express";
+﻿import express from "express";
 
 export default function notificationsRoutes({ prisma, auth }) {
   if (!prisma) throw new Error("notificationsRoutes: prisma is required");
@@ -53,7 +53,7 @@ export default function notificationsRoutes({ prisma, auth }) {
       if (!userId) return res.status(401).json({ error: "No autenticado" });
 
       const id = Number(req.params.id);
-      if (!Number.isFinite(id)) return res.status(400).json({ error: "ID inválido" });
+      if (!Number.isFinite(id)) return res.status(400).json({ error: "ID invalido" });
 
       const r = await prisma.notification.updateMany({
         where: { id, userId, readAt: null, ...buildPlantScope(plantId) },
@@ -65,7 +65,7 @@ export default function notificationsRoutes({ prisma, auth }) {
       return res.json({ ok: true });
     } catch (e) {
       console.error(e);
-      return res.status(500).json({ error: "Error marcando como leída" });
+      return res.status(500).json({ error: "Error marcando como leida" });
     }
   });
 
@@ -83,9 +83,10 @@ export default function notificationsRoutes({ prisma, auth }) {
       return res.json({ ok: true, count: r.count, unreadCount: 0 });
     } catch (e) {
       console.error(e);
-      return res.status(500).json({ error: "Error marcando todas como leídas" });
+      return res.status(500).json({ error: "Error marcando todas como leidas" });
     }
   });
 
   return router;
 }
+

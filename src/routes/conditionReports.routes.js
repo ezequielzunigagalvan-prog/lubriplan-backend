@@ -1,10 +1,10 @@
-// src/routes/conditionReports.routes.js
+ï»¿// src/routes/conditionReports.routes.js
 import express from "express";
 import multer from "multer";
 import path from "path";
 import { getUploadsSubdir } from "../utils/uploads.js";
 
-import { notifyManagers } from "../notifications/notify.js";
+import { notifyManagers, notifyTechnicianAssignee } from "../notifications/notify.js";
 import { sseHub } from "../realtime/sseHub.js";
 import { sendConditionAlertEmail } from "../services/email/email.service.js";
 
@@ -24,9 +24,20 @@ const upload = multer({ storage });
 // helpers
 const up = (v) => String(v || "").trim().toUpperCase();
 
+const parseDateOnlyLocal = (value, endOfDay = false) => {
+  if (!value) return null;
+  const raw = String(value).trim().slice(0, 10);
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  if (!match) return null;
+  const [, year, month, day] = match;
+  return endOfDay
+    ? new Date(Number(year), Number(month) - 1, Number(day), 23, 59, 59, 999)
+    : new Date(Number(year), Number(month) - 1, Number(day), 12, 0, 0, 0);
+};
+
 const normCondition = (v) => {
   const s = up(v);
-  if (s === "CR?TICO") return "CRITICO";
+  if (s === "CRITICO" || s === "CRÃTICO") return "CRITICO";
   return s;
 };
 
@@ -66,8 +77,8 @@ export default function conditionReportsRoutes({ prisma, auth }) {
 
       if (from || to) {
         where.detectedAt = {};
-        if (from) where.detectedAt.gte = new Date(from);
-        if (to) where.detectedAt.lte = new Date(to);
+        if (from) where.detectedAt.gte = parseDateOnlyLocal(from) || new Date(from);
+        if (to) where.detectedAt.lte = parseDateOnlyLocal(to, true) || new Date(to);
       }
 
       const items = await prisma.conditionReport.findMany({
@@ -118,12 +129,12 @@ export default function conditionReportsRoutes({ prisma, auth }) {
 
       const validConditions = ["BUENO", "REGULAR", "MALO", "CRITICO"];
       if (!validConditions.includes(condition)) {
-        return res.status(400).json({ error: "Condici?n inv?lida" });
+        return res.status(400).json({ error: "CondiciÃ³n invÃ¡lida" });
       }
 
       const validCategories = ["FUGA", "RUIDO", "VIBRACION", "TEMPERATURA", "CONTAMINACION", "OTRO"];
       if (category && !validCategories.includes(category)) {
-        return res.status(400).json({ error: "Categor?a inv?lida" });
+        return res.status(400).json({ error: "CategorÃ­a invÃ¡lida" });
       }
 
       const evidenceImage = req.file
@@ -142,14 +153,14 @@ export default function conditionReportsRoutes({ prisma, auth }) {
         return res.status(404).json({ error: "Equipo no encontrado en la planta actual" });
       }
 
-      const detectedAtDate = new Date(detectedAt);
+      const detectedAtDate = parseDateOnlyLocal(detectedAt) || new Date(detectedAt);
       if (Number.isNaN(detectedAtDate.getTime())) {
-        return res.status(400).json({ error: "detectedAt invalido" });
+        return res.status(400).json({ error: "detectedAt invÃ¡lido" });
       }
 
       const item = await prisma.conditionReport.create({
         data: {
-          plantId, // ? importante para multi-planta
+          plantId,
           equipmentId,
           reportedById: userId,
           condition,
@@ -175,10 +186,10 @@ export default function conditionReportsRoutes({ prisma, auth }) {
       await notifyManagers(prisma, {
         plantId,
         type: "CONDITION_REPORTED",
-        title: "Condición anormal reportada",
+        title: "CondiciÃ³n anormal reportada",
         message: `${item.equipment?.name || "Equipo"}${
           item.equipment?.code ? ` (${item.equipment.code})` : ""
-        } · ${item.condition}`,
+        } Â· ${item.condition}`,
         link: "/condition-reports?status=OPEN",
       });
 
@@ -198,7 +209,7 @@ export default function conditionReportsRoutes({ prisma, auth }) {
               eq.area?.name ||
               item.equipment?.location ||
               eq.location ||
-              "—",
+              "â€”",
             reportedByName: item.reportedBy?.name || req.user?.name || "Usuario",
             severity: item.condition,
             category: item.category || "OTRO",
@@ -210,7 +221,7 @@ export default function conditionReportsRoutes({ prisma, auth }) {
           },
         });
       } catch (emailErr) {
-        console.error("Error enviando correo de condición anormal:", emailErr);
+        console.error("Error enviando correo de condiciÃ³n anormal:", emailErr);
       }
 
       // SSE
@@ -251,7 +262,7 @@ export default function conditionReportsRoutes({ prisma, auth }) {
       if (!can) return res.status(403).json({ error: "Sin permiso" });
 
       const id = Number(req.params.id);
-      if (!Number.isFinite(id)) return res.status(400).json({ error: "ID inválido" });
+      if (!Number.isFinite(id)) return res.status(400).json({ error: "ID invÃ¡lido" });
 
       const report = await prisma.conditionReport.findFirst({
         where: {
@@ -301,7 +312,7 @@ export default function conditionReportsRoutes({ prisma, auth }) {
         title: "Reporte descartado",
         message: `${updated.equipment?.name || "Equipo"}${
           updated.equipment?.code ? ` (${updated.equipment.code})` : ""
-        } · Reporte #${updated.id}`,
+        } Â· Reporte #${updated.id}`,
         link: "/condition-reports?status=DISMISSED",
       });
 
@@ -329,7 +340,7 @@ export default function conditionReportsRoutes({ prisma, auth }) {
   // =========================
   // POST /condition-reports/:id/corrective-execution
   // ADMIN/SUP
-  // crea SOLO ejecución manual, NO ruta
+  // crea SOLO ejecuciÃ³n manual, NO ruta
   // =========================
   router.post("/condition-reports/:id/corrective-execution", auth, async (req, res) => {
     try {
@@ -342,7 +353,7 @@ export default function conditionReportsRoutes({ prisma, auth }) {
 
       const reportId = Number(req.params.id);
       if (!Number.isFinite(reportId)) {
-        return res.status(400).json({ error: "ID inválido" });
+        return res.status(400).json({ error: "ID invÃ¡lido" });
       }
 
       const { scheduledAt, technicianId, instructions } = req.body || {};
@@ -353,14 +364,14 @@ export default function conditionReportsRoutes({ prisma, auth }) {
 
       const sched = new Date(scheduledAt);
       if (Number.isNaN(sched.getTime())) {
-        return res.status(400).json({ error: "scheduledAt inválido" });
+        return res.status(400).json({ error: "scheduledAt invÃ¡lido" });
       }
 
       const techId =
         technicianId != null && technicianId !== "" ? Number(technicianId) : null;
 
       if (techId != null && !Number.isFinite(techId)) {
-        return res.status(400).json({ error: "technicianId inválido" });
+        return res.status(400).json({ error: "technicianId invÃ¡lido" });
       }
 
       if (techId != null) {
@@ -370,7 +381,7 @@ export default function conditionReportsRoutes({ prisma, auth }) {
         });
 
         if (!tech) {
-          return res.status(400).json({ error: "Técnico inválido" });
+          return res.status(400).json({ error: "TÃ©cnico invÃ¡lido" });
         }
       }
 
@@ -396,23 +407,23 @@ export default function conditionReportsRoutes({ prisma, auth }) {
       if (report.status !== "OPEN") {
         return res
           .status(400)
-          .json({ error: "Solo reportes OPEN pueden programar acción correctiva" });
+          .json({ error: "Solo reportes OPEN pueden programar acciÃ³n correctiva" });
       }
 
       if (report.correctiveExecutionId) {
         return res.status(400).json({
-          error: "Este reporte ya tiene una acción correctiva ligada",
+          error: "Este reporte ya tiene una acciÃ³n correctiva ligada",
         });
       }
 
-      const manualTitle = `Correctiva · ${report.equipment?.name || "Equipo"}${
+      const manualTitle = `Correctiva Â· ${report.equipment?.name || "Equipo"}${
         report.equipment?.code ? ` (${report.equipment.code})` : ""
       }`;
 
       const manualInstructions =
         String(instructions || "").trim() ||
         String(report.description || "").trim() ||
-        "Acción correctiva por condición anormal";
+        "AcciÃ³n correctiva por condiciÃ³n anormal";
 
       const result = await prisma.$transaction(async (tx) => {
         const execution = await tx.execution.create({
@@ -454,15 +465,15 @@ export default function conditionReportsRoutes({ prisma, auth }) {
           },
         });
 
-        // Si notifyManagers te soporta este type, déjalo.
+        // Si notifyManagers te soporta este type, dÃ©jalo.
         // Si no, cambia el type por CONDITION_REPORTED o el que ya manejes.
         await notifyManagers(tx, {
           plantId,
           type: "CONDITION_REPORTED",
-          title: "Acción correctiva programada",
+          title: "AcciÃ³n correctiva programada",
           message: `${updated.equipment?.name || "Equipo"}${
             updated.equipment?.code ? ` (${updated.equipment.code})` : ""
-          } · Reporte #${updated.id} · Ejecución #${execution.id}`,
+          } Â· Reporte #${updated.id} Â· EjecuciÃ³n #${execution.id}`,
           link: "/condition-reports?status=IN_PROGRESS",
         });
 
@@ -487,13 +498,29 @@ export default function conditionReportsRoutes({ prisma, auth }) {
         return { report: updated, execution };
       });
 
+      if (techId != null) {
+        try {
+          await notifyTechnicianAssignee(prisma, {
+            plantId,
+            technicianId: techId,
+            type: "TECH_ACTIVITY_ASSIGNED",
+            title: "Accion correctiva asignada",
+            message: `${manualTitle} programada para ${String(scheduledAt).slice(0, 10)}`,
+            link: "/activities",
+          });
+        } catch (notifyErr) {
+          console.error("No se pudo notificar accion correctiva al tecnico:", notifyErr);
+        }
+      }
+
       return res.json(result);
     } catch (e) {
       console.error(e);
-      return res.status(500).json({ error: "Error programando acción correctiva" });
+      return res.status(500).json({ error: "Error programando acciÃ³n correctiva" });
     }
   });
 
   return router;
 }
+
 

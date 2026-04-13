@@ -179,7 +179,10 @@ async function validateEquipos(rows = [], plantId) {
   const seen = new Set();
   const codes = rows.map((r) => upper(rowValue(r, "codigo"))).filter(Boolean);
   const existing = codes.length
-    ? await prisma.equipment.findMany({ where: { code: { in: codes } }, select: { code: true, plantId: true } })
+    ? await prisma.equipment.findMany({
+        where: { plantId, code: { in: codes } },
+        select: { code: true, plantId: true },
+      })
     : [];
   const existingByCode = new Map(existing.map((x) => [upper(x.code), x]));
 

@@ -1,4 +1,4 @@
-    // index.js (o src/index.js según tu backend)
+﻿    // index.js (o src/index.js segun tu backend)
     import express from "express";
     import dotenv from "dotenv";
     dotenv.config();
@@ -16,7 +16,7 @@
     import conditionReportsRoutes from "./routes/conditionReports.routes.js";
     import notificationsRoutes from "./routes/notifications.routes.js";
     import { sseHub } from "./realtime/sseHub.js";
-    import { notifyManagers } from "./notifications/notify.js"; 
+    import { notifyManagers, notifyTechnicianAssignee } from "./notifications/notify.js"; 
     import realtimeRoutes from "./routes/realtime.routes.js";
     import adminLinksRoutes from "./routes/admin.links.routes.js";
     import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
@@ -47,7 +47,7 @@
 
 
 
-    // ✅ En DEV: lee rol de header y trae technicianId del User real
+    // OK En DEV: lee rol de header y trae technicianId del User real
     export const ROLES = {
       ADMIN: "ADMIN",
       SUPERVISOR: "SUPERVISOR",
@@ -56,17 +56,17 @@
 
     export async function devAttachUser(req, res, next) {
       try {
-        // ✅ Si ya hay user (porque algún middleware anterior lo puso), no hagas nada
+        // OK Si ya hay user (porque algun middleware anterior lo puso), no hagas nada
         if (req.user) return next();
 
-        // ✅ Si viene JWT, NO simules usuario
+        // OK Si viene JWT, NO simules usuario
         // (dejamos que requireAuth se encargue en las rutas protegidas)
         const auth = req.headers.authorization || "";
         if (auth.startsWith("Bearer ")) {
           return next();
         }
 
-        // ✅ DEV: usa un user real de BD vía header x-user-id (o fallback a 1)
+        // OK DEV: usa un user real de BD via header x-user-id (o fallback a 1)
         const userIdRaw = req.header("x-user-id") || req.header("X-User-Id");
         const userId =
           userIdRaw != null && String(userIdRaw).trim() !== "" ? Number(userIdRaw) : null;
@@ -100,7 +100,7 @@
       }
     }
 
-    // ✅ Requiere rol (RBAC)
+    // OK Requiere rol (RBAC)
     export function requireRole(allowed = []) {
       const allowedUpper = (allowed || []).map((r) => String(r).toUpperCase().trim());
       return (req, res, next) => {
@@ -175,7 +175,7 @@ app.options("*", cors(corsOptions));
       const t0 = Date.now();
       res.on("finish", () => {
         if (!req.originalUrl.startsWith("/api")) return;
-        console.log("🟦 IN", req.method, req.originalUrl, {
+        console.log("ðŸŸ¦ IN", req.method, req.originalUrl, {
           status: res.statusCode,
           ms: Date.now() - t0,
         });
@@ -192,13 +192,13 @@ app.options("*", cors(corsOptions));
     });
   }
 
-  /* ========= ROUTES PÚBLICAS ========= */
+  /* ========= ROUTES PUBLICAS ========= */
   app.use("/api/auth", authRouter);
 
-  // 6) resolver planta actual DESPUÉS de tener usuario
+  // 6) resolver planta actual DESPUES de tener usuario
   app.use(attachCurrentPlant);
 
-  // 7) tenant context DESPUÉS de resolver currentPlantId
+  // 7) tenant context DESPUES de resolver currentPlantId
   app.use((req, res, next) => {
     runWithTenant({ plantId: req.currentPlantId || null }, () => next());
   });
@@ -275,7 +275,7 @@ app.options("*", cors(corsOptions));
 
 
 
-  // ✅ carpeta pública para archivos subidos
+  // OK carpeta publica para archivos subidos
   const uploadsDir = ensureDir(getUploadsRoot());
 
   const legacyUploadsDir = path.join(process.cwd(), "uploads");
@@ -284,7 +284,7 @@ app.options("*", cors(corsOptions));
   }
   app.use("/uploads", express.static(uploadsDir));
 
-  console.log("🔥 BACKEND CORRECTO CARGADO");
+  console.log("ðŸ”¥ BACKEND CORRECTO CARGADO");
 
   startMonthlyExecutiveReportScheduler({
     prisma,
@@ -298,7 +298,7 @@ app.options("*", cors(corsOptions));
     baseUrl: process.env.APP_BASE_URL || "http://localhost:5173",
   });
 
-    /* ========= PROTECCIÓN GLOBAL ========= */
+    /* ========= PROTECCION GLOBAL ========= */
     process.on("unhandledRejection", (reason) => {
       console.error("Unhandled Rejection:", reason);
     });
@@ -409,7 +409,7 @@ app.options("*", cors(corsOptions));
       return out;
     };
 
-    // ✅ evita desfase UTC/local guardando scheduledAt a medio día
+    // OK evita desfase UTC/local guardando scheduledAt a medio dia
     const toSafeNoon = (d) => {
       const dt = d instanceof Date ? d : new Date(d);
       if (Number.isNaN(dt.getTime())) return null;
@@ -418,7 +418,7 @@ app.options("*", cors(corsOptions));
       return out;
     };
 
-    // ✅ parsea YYYY-MM-DD como “local” (no UTC)
+    // OK parsea YYYY-MM-DD como local (no UTC)
     const parseDateOnlyLocal = (ymd) => {
   if (!ymd) return null;
   const [y, m, d] = String(ymd).slice(0, 10).split("-").map(Number);
@@ -460,7 +460,7 @@ app.options("*", cors(corsOptions));
       const mass = { g: 1, kg: 1000 };
       if (mass[f] && mass[t]) return (v * mass[f]) / mass[t];
 
-      // ❌ No convertir peso <-> volumen
+      // NO convertir peso <-> volumen
       return null;
     };
     
@@ -471,7 +471,7 @@ app.options("*", cors(corsOptions));
         lubricant: true,
       },
     },
-    equipment: true,      // ✅ clave para MANUAL
+    equipment: true,      // OK clave para MANUAL
     technician: true,
     lubricantMovements: {
       include: {
@@ -502,7 +502,7 @@ app.options("*", cors(corsOptions));
   }
 
   function getIsoWeekday(date) {
-    const jsDay = date.getDay(); // 0 domingo ... 6 sábado
+    const jsDay = date.getDay(); // 0 domingo ... 6 sabado
     return jsDay === 0 ? 7 : jsDay;
   }
 
@@ -761,7 +761,7 @@ app.options("*", cors(corsOptions));
   }
 
   /**
-   * Convierte unidades homogéneas:
+   * Convierte unidades homogeneas:
    * volumen: ml <-> l
    * masa: g <-> kg
    */
@@ -984,13 +984,13 @@ app.options("*", cors(corsOptions));
     }
   }
 
-  // ✅ SSE: Real-time stream
+  // OK SSE: Real-time stream
 // GET /api/realtime/stream?token=JWT   (EventSource NO manda headers, por eso permitimos token en query)
 app.get(
   "/api/realtime/stream",
   (req, _res, next) => {
     try {
-      // ✅ Permitir token por query SOLO para SSE
+      // OK Permitir token por query SOLO para SSE
       // Si ya viene Authorization, lo respetamos.
       const qtoken = req.query?.token;
       const hasAuthHeader = String(req.headers.authorization || "").startsWith("Bearer ");
@@ -1046,7 +1046,7 @@ app.get(
   }
 );
 
-// ✅ exporta helpers para usarlos donde disparas eventos
+// OK exporta helpers para usarlos donde disparas eventos
 export const realtime = {
   broadcastToRole,
 };
@@ -1120,13 +1120,13 @@ app.get("/api/dashboard/alerts", requireAuth, requireRole(["ADMIN", "SUPERVISOR"
       },
     });
 
-    // 1) Actividades vencidas EN EL MES (no completadas y con d�a local anterior a hoy)
+    // 1) Actividades vencidas EN EL MES (no completadas y con día local anterior a hoy)
     const overdueActivities = (openExecutionsInMonth || []).filter((ex) => {
       const scheduledKey = dateKeyInTimezone(ex?.scheduledAt, plantTimezone);
       return Boolean(scheduledKey) && Boolean(todayKey) && scheduledKey < todayKey;
     }).length;
 
-    // 2) Pendientes sin técnico EN EL MES (solo status PENDING)
+    // 2) Pendientes sin tecnico EN EL MES (solo status PENDING)
     const unassignedPending = await prisma.execution.count({
       where: {
         plantId,
@@ -1152,7 +1152,7 @@ app.get("/api/dashboard/alerts", requireAuth, requireRole(["ADMIN", "SUPERVISOR"
       if (Number.isFinite(min) && Number.isFinite(stock) && stock <= min) lowStockCount += 1;
     }
 
-    // 4) Condición MALA EN EL MES (solo ejecutadas) ✅ SOLO "MALO"
+    // 4) Condicion MALA EN EL MES (solo ejecutadas) OK SOLO "MALO"
     const badConditionCount = await prisma.execution.count({
       where: {
         plantId,
@@ -1162,7 +1162,7 @@ app.get("/api/dashboard/alerts", requireAuth, requireRole(["ADMIN", "SUPERVISOR"
       },
     });
 
-    // 4b) ✅ Ejecuciones CRÍTICAS EN EL MES (solo ejecutadas)
+    // 4b) OK Ejecuciones CRITICAS EN EL MES (solo ejecutadas)
     const criticalExecutions = await prisma.execution.count({
       where: {
         plantId,
@@ -1180,7 +1180,7 @@ app.get("/api/dashboard/alerts", requireAuth, requireRole(["ADMIN", "SUPERVISOR"
       },
     });
 
-    // 6) Consumo fuera de rango EN EL MES (±30%)
+    // 6) Consumo fuera de rango EN EL MES (+/-30%)
     const outOfRangeExecs = await prisma.execution.findMany({
       where: {
         plantId,
@@ -1195,7 +1195,7 @@ app.get("/api/dashboard/alerts", requireAuth, requireRole(["ADMIN", "SUPERVISOR"
       },
     });
 
-    const TOL_PCT = 0.30; // ±30%
+    const TOL_PCT = 0.30; // +/-30%
     let outOfRangeConsumption = 0;
 
     for (const ex of outOfRangeExecs) {
@@ -1214,7 +1214,7 @@ app.get("/api/dashboard/alerts", requireAuth, requireRole(["ADMIN", "SUPERVISOR"
       if (deviation > TOL_PCT) outOfRangeConsumption += 1;
     }
 
-    // 7) ✅ Reportes de condición abiertos (OPEN / IN_PROGRESS) EN EL MES
+    // 7) OK Reportes de condicion abiertos (OPEN / IN_PROGRESS) EN EL MES
     const conditionReportsOpen = await prisma.conditionReport.count({
       where: {
         plantId,
@@ -1331,7 +1331,7 @@ app.get(
         return Boolean(scheduledKey) && Boolean(todayKey) && scheduledKey < todayKey;
       });
 
-      // B) Sin técnico
+      // B) Sin tecnico
       const unassignedExecs = (openExecsInMonth || []).filter((ex) => ex?.technicianId == null);
 
       // C) Reportes OPEN
@@ -1377,7 +1377,7 @@ app.get(
       });
 
       // =========================
-      // 2) Predictivo físico
+      // 2) Predictivo fisico
       // =========================
       const ym = `${year}-${String(monthNum).padStart(2, "0")}`;
 
@@ -1466,7 +1466,7 @@ app.get(
       repeatedFailures.sort((a, b) => (b.score - a.score) || (b.badTotal - a.badTotal));
 
       // =========================
-      // 2c) Crítico + sin técnico + vencido
+      // 2c) Critico + sin tecnico + vencido
       // =========================
       const criticalUnassignedOverdue = await prisma.execution.findMany({
         where: {
@@ -1541,8 +1541,8 @@ app.get(
           type: "EXEC_OVERDUE",
           severity: sevFromScore(score),
           score,
-          title: `Actividad vencida${isCritical ? " (cr��tica)" : ""}`,
-          reason: `Programada ${daysLate} d�a(s) atr�s${equipmentLabel(eq) ? ` � ${equipmentLabel(eq)}` : ""}`,
+          title: `Actividad vencida${isCritical ? " (crí­tica)" : ""}`,
+          reason: `Programada ${daysLate} día(s) atrás${equipmentLabel(eq) ? ` · ${equipmentLabel(eq)}` : ""}`,
           suggestedOwner: ex?.technicianId ? "TECHNICIAN" : "SUPERVISOR",
           entity: {
             executionId: ex.id,
@@ -1555,7 +1555,7 @@ app.get(
       for (const ex of unassignedExecs || []) {
         const eq = ex?.equipment || ex?.route?.equipment || null;
         const crit = String(eq?.criticality || "").toUpperCase();
-        const isCritical = ["ALTA", "CRITICA", "CRÍTICA"].includes(crit);
+        const isCritical = ["ALTA", "CRITICA", "CRITICA"].includes(crit);
 
         let score = 45;
         const scheduledKey = dateKeyInTimezone(ex?.scheduledAt, plantTimezone);
@@ -1571,8 +1571,8 @@ app.get(
           type: "EXEC_UNASSIGNED",
           severity: sevFromScore(score),
           score,
-          title: `Actividad sin t�cnico${isCritical ? " (cr��tica)" : ""}`,
-          reason: `${isOverdue ? "Vencida" : "Pendiente"}${equipmentLabel(eq) ? ` � ${equipmentLabel(eq)}` : ""}`,
+          title: `Actividad sin técnico${isCritical ? " (crí­tica)" : ""}`,
+          reason: `${isOverdue ? "Vencida" : "Pendiente"}${equipmentLabel(eq) ? ` · ${equipmentLabel(eq)}` : ""}`,
           suggestedOwner: "SUPERVISOR",
           entity: {
             executionId: ex.id,
@@ -1601,8 +1601,8 @@ app.get(
           type: "COND_REPORT",
           severity: sevFromScore(score),
           score,
-          title: `Condici�n anormal: ${lvl}`,
-          reason: `${r?.category ? String(r.category) : "Sin categor��a"}${equipmentLabel(eq) ? ` � ${equipmentLabel(eq)}` : ""}`,
+          title: `Condición anormal: ${lvl}`,
+          reason: `${r?.category ? String(r.category) : "Sin categorí­a"}${equipmentLabel(eq) ? ` · ${equipmentLabel(eq)}` : ""}`,
           suggestedOwner: "SUPERVISOR",
           entity: { reportId: r.id, equipmentId: eq?.id ?? null },
           link: `/condition-reports?status=OPEN`,
@@ -1612,7 +1612,7 @@ app.get(
       for (const it of repeatedFailures.slice(0, 20)) {
         const eq = it?.equipment || null;
         const crit = String(eq?.criticality || "").toUpperCase();
-        const isCriticalEq = ["ALTA", "CRITICA", "CRÍTICA"].includes(crit);
+        const isCriticalEq = ["ALTA", "CRITICA", "CRITICA"].includes(crit);
 
         let score = 55;
         if (String(it.risk).toUpperCase() === "HIGH") score += 25;
@@ -1627,7 +1627,7 @@ app.get(
           severity: sevFromScore(score),
           score,
           title: `Reincidencia MALO/CRITICO`,
-          reason: `Eventos: ${it.badTotal} � CRITICOS: ${it.critTotal}${equipmentLabel(eq) ? ` � ${equipmentLabel(eq)}` : ""}`,
+          reason: `Eventos: ${it.badTotal} · CRITICOS: ${it.critTotal}${equipmentLabel(eq) ? ` · ${equipmentLabel(eq)}` : ""}`,
           suggestedOwner: "SUPERVISOR",
           entity: { equipmentId: it.equipmentId },
           link: `/activities?filter=bad-condition&month=${ym}`,
@@ -1643,8 +1643,8 @@ app.get(
           type: "CRITICAL_UNASSIGNED_OVERDUE",
           severity: "CRITICAL",
           score,
-          title: `Cr��tica vencida sin t�cnico`,
-          reason: `${equipmentLabel(eq) || "Equipo"} � Ruta: ${ex?.route?.name || "-"}`,
+          title: `Crítica vencida sin técnico`,
+          reason: `${equipmentLabel(eq) || "Equipo"} · Ruta: ${ex?.route?.name || "-"}`,
           suggestedOwner: "SUPERVISOR",
           entity: { executionId: ex.id, equipmentId: eq?.id ?? null },
           link: `/activities?status=OVERDUE&month=${ym}`,
@@ -1681,10 +1681,10 @@ app.get(
           type: "DAYS_TO_EMPTY",
           severity: sevFromScore(score),
           score,
-          title: `Days-to-empty ${risk === "HIGH" ? "cr��tico" : "en riesgo"}`,
+          title: `Days-to-empty ${risk === "HIGH" ? "crítico" : "en riesgo"}`,
           reason: `${it.name || "Lubricante"} · DTE: ${
             it.daysToEmpty ?? it.dte ?? "—"
-          } d�a(s) · Stock: ${Number(it.stock || 0)} ${it.unit || ""}${it?.underMin ? " · Bajo m��nimo" : ""}`,
+          } día(s) · Stock: ${Number(it.stock || 0)} ${it.unit || ""}${it?.underMin ? " · Bajo mínimo" : ""}`,
           suggestedOwner: "ADMIN",
           entity: { lubricantId: it.lubricantId },
           link: `/inventory`,
@@ -1705,10 +1705,10 @@ app.get(
           type: "CONSUMPTION_ANOMALY",
           severity: sevFromScore(score),
           score,
-          title: `Anomal��a de consumo (${risk})`,
+          title: `Anomalí­a de consumo (${risk})`,
           reason: `${it.name || "Equipo"}${it.code ? ` (${it.code})` : ""} · Ratio: ${
             it.ratio ?? "—"
-          } · Base: ${it.baselineAvgDaily ?? "—"} · Últ.14: ${it.last14AvgDaily ?? it.lastNAvgDaily ?? "—"}`,
+          } · Base: ${it.baselineAvgDaily ?? "-"} · Ult.14: ${it.last14AvgDaily ?? it.lastNAvgDaily ?? "-"}`,
           suggestedOwner: "SUPERVISOR",
           entity: { equipmentId: it.equipmentId },
           link: `/analysis`,
@@ -1716,7 +1716,7 @@ app.get(
       }
 
       // =========================
-      // 4) Deduplicación + orden
+      // 4) Deduplicacion + orden
       // =========================
       const seen = new Set();
       const dedup = [];
@@ -1980,7 +1980,7 @@ app.get(
       alerts.repeatedFailuresTop = repeatedFailures.slice(0, 10);
       alerts.repeatedFailures = repeatedFailuresCount;
 
-      // 5) crítico + sin técnico
+      // 5) critico + sin tecnico
       const criticalUnassigned = await prisma.execution.findMany({
         where: {
           plantId,
@@ -1989,7 +1989,7 @@ app.get(
           technicianId: null,
           route: {
             equipment: {
-              criticality: { in: ["ALTA", "CRITICA", "CRÍTICA"] },
+              criticality: { in: ["ALTA", "CRITICA", "CRITICA"] },
             },
           },
         },
@@ -2028,7 +2028,7 @@ app.get(
       alerts.criticalUnassignedCount = criticalUnassignedCount;
       alerts.criticalUnassignedTop = criticalUnassignedTop;
 
-      // 6) predictivo físico
+      // 6) predictivo fisico
       const ym = `${year}-${String(monthNum).padStart(2, "0")}`;
 
       const metrics = await getPredictiveMetrics({
@@ -2122,9 +2122,9 @@ app.get(
         },
       });
 
-      // 2) Agregación por lubricante
+      // 2) Agregacion por lubricante
       const byLub = new Map();
-      // 3) Agregación por equipo
+      // 3) Agregacion por equipo
       const byEq = new Map();
 
       for (const mv of outMoves || []) {
@@ -2463,7 +2463,7 @@ app.get(
       });
 
       if (!technician) {
-        return res.status(404).json({ error: "T�cnico no encontrado en la planta actual" });
+        return res.status(404).json({ error: "Técnico no encontrado en la planta actual" });
       }
 
       const executions = await prisma.execution.findMany({
@@ -2688,7 +2688,7 @@ app.get(
 // GET /api/dashboard/technicians/efficiency-monthly?month=YYYY-MM
 // - ADMIN y SUPERVISOR
 // - MULTI-PLANTA
-// - Eficiencia por técnico del mes
+// - Eficiencia por tecnico del mes
 // -------------------------
 app.get(
   "/api/dashboard/technicians/efficiency-monthly",
@@ -3004,7 +3004,7 @@ app.get(
     }
   }
 );
- // ✅ Asignar t�cnico a una ejecución (quick assign)
+ // OK Asignar tecnico a una ejecucion (quick assign)
 // - MULTI-PLANTA
 app.patch(
   "/api/executions/:id/assign-technician",
@@ -3040,11 +3040,11 @@ app.patch(
       });
 
       if (!exec) {
-        return res.status(404).json({ error: "Ejecución no encontrada" });
+        return res.status(404).json({ error: "Ejecucion no encontrada" });
       }
 
       if (exec.status === "COMPLETED") {
-        return res.status(400).json({ error: "No se puede asignar a una ejecución COMPLETED" });
+        return res.status(400).json({ error: "No se puede asignar a una ejecucion COMPLETED" });
       }
 
       if (technicianId === null) {
@@ -3085,7 +3085,7 @@ app.patch(
       });
 
       if (!tech) {
-        return res.status(404).json({ error: "T�cnico no encontrado en la planta actual" });
+        return res.status(404).json({ error: "Técnico no encontrado en la planta actual" });
       }
 
       const updated = await prisma.execution.update({
@@ -3111,7 +3111,7 @@ app.patch(
   }
 );
 
-  // ✅ Asignar t�cnico a una ejecución
+  // OK Asignar tecnico a una ejecucion
 // - MULTI-PLANTA
 app.patch(
   "/api/executions/:id/assign",
@@ -3151,7 +3151,7 @@ app.patch(
       }
 
       if (exec.status === "COMPLETED") {
-        return res.status(400).json({ error: "No se puede asignar a una ejecución COMPLETED" });
+        return res.status(400).json({ error: "No se puede asignar a una ejecucion COMPLETED" });
       }
 
       if (technicianId !== null && !Number.isFinite(technicianId)) {
@@ -3244,7 +3244,7 @@ app.post("/api/equipment", requireAuth, requireManager, async (req, res) => {
       return res.status(400).json({ error: "areaId invalido" });
     }
 
-    // ✅ validar que el área pertenezca a la misma planta
+    // OK validar que el area pertenezca a la misma planta
     if (parsedAreaId != null) {
       const areaExists = await prisma.equipmentArea.findFirst({
         where: { id: parsedAreaId, plantId },
@@ -3252,7 +3252,7 @@ app.post("/api/equipment", requireAuth, requireManager, async (req, res) => {
       });
 
       if (!areaExists) {
-        return res.status(404).json({ error: "Área no encontrada en la planta actual" });
+        return res.status(404).json({ error: "Area no encontrada en la planta actual" });
       }
     }
 
@@ -3641,7 +3641,7 @@ app.get("/api/equipment/:id/detail", requireAuth, async (req, res) => {
       return res.status(404).json({ error: "No encontrado" });
     }
 
-    // técnico más usado
+    // tecnico mas usado
     const techUsageMap = new Map();
 
     for (const ex of equipment.executions || []) {
@@ -3725,7 +3725,7 @@ app.put("/api/equipment/:id", requireAuth, requireManager, async (req, res) => {
       });
 
       if (!areaExists) {
-        return res.status(404).json({ error: "Área no encontrada en la planta actual" });
+        return res.status(404).json({ error: "Area no encontrada en la planta actual" });
       }
     }
 
@@ -3787,9 +3787,9 @@ app.delete("/api/equipment/:id", requireAuth, requireManager, async (req, res) =
   }
 });
 
-// ===== ÁREAS DE EQUIPO =====
+// ===== AREAS DE EQUIPO =====
 
-// LISTAR ÁREAS
+// LISTAR AREAS
 app.get("/api/equipment-areas", requireAuth, async (req, res) => {
   try {
     const plantId = req.currentPlantId;
@@ -3803,11 +3803,11 @@ app.get("/api/equipment-areas", requireAuth, async (req, res) => {
     res.json({ ok: true, result: areas });
   } catch (e) {
     console.error(e);
-    res.status(500).json({ ok: false, error: "Error obteniendo áreas" });
+    res.status(500).json({ ok: false, error: "Error obteniendo areas" });
   }
 });
 
-// CREAR ÁREA
+// CREAR AREA
 app.post("/api/equipment-areas", requireAuth, requireManager, async (req, res) => {
   try {
     const plantId = req.currentPlantId;
@@ -3827,14 +3827,14 @@ app.post("/api/equipment-areas", requireAuth, requireManager, async (req, res) =
     console.error(e);
 
     if (e?.code === "P2002") {
-      return res.status(409).json({ ok: false, error: "Ya existe un área con ese nombre en esta planta" });
+      return res.status(409).json({ ok: false, error: "Ya existe un area con ese nombre en esta planta" });
     }
 
-    res.status(500).json({ ok: false, error: "Error creando área" });
+    res.status(500).json({ ok: false, error: "Error creando area" });
   }
 });
 
-// EDITAR ÁREA
+// EDITAR AREA
 app.put("/api/equipment-areas/:id", requireAuth, requireManager, async (req, res) => {
   try {
     const plantId = req.currentPlantId;
@@ -3861,7 +3861,7 @@ app.put("/api/equipment-areas/:id", requireAuth, requireManager, async (req, res
     });
 
     if (!updated.count) {
-      return res.status(404).json({ ok: false, error: "Área no encontrada" });
+      return res.status(404).json({ ok: false, error: "Area no encontrada" });
     }
 
     const area = await prisma.equipmentArea.findFirst({
@@ -3877,14 +3877,14 @@ app.put("/api/equipment-areas/:id", requireAuth, requireManager, async (req, res
     });
 
     if (e?.code === "P2002") {
-      return res.status(409).json({ ok: false, error: "Ya existe un área con ese nombre" });
+      return res.status(409).json({ ok: false, error: "Ya existe un area con ese nombre" });
     }
 
-    return res.status(500).json({ ok: false, error: "Error actualizando área" });
+    return res.status(500).json({ ok: false, error: "Error actualizando area" });
   }
 });
 
-// BORRAR ÁREA
+// BORRAR AREA
 app.delete("/api/equipment-areas/:id", requireAuth, requireManager, async (req, res) => {
   try {
     const plantId = req.currentPlantId;
@@ -3900,7 +3900,7 @@ app.delete("/api/equipment-areas/:id", requireAuth, requireManager, async (req, 
     if (count > 0) {
       return res.status(409).json({
         ok: false,
-        error: "No se puede borrar: hay equipos asignados a esta área",
+        error: "No se puede borrar: hay equipos asignados a esta area",
       });
     }
 
@@ -3909,13 +3909,13 @@ app.delete("/api/equipment-areas/:id", requireAuth, requireManager, async (req, 
     });
 
     if (!deleted.count) {
-      return res.status(404).json({ ok: false, error: "Área no encontrada" });
+      return res.status(404).json({ ok: false, error: "Area no encontrada" });
     }
 
     res.json({ ok: true });
   } catch (e) {
     console.error(e);
-    res.status(500).json({ ok: false, error: "Error eliminando área" });
+    res.status(500).json({ ok: false, error: "Error eliminando area" });
   }
 });
 
@@ -3977,7 +3977,7 @@ app.get("/api/technicians", requireAuth, async (req, res) => {
       return { ...rest, lastActivityAt };
     });
 
-    console.log("🔥🔥🔥 TECH ROUTE NUEVA", new Date().toISOString());
+    console.log("ðŸ”¥ðŸ”¥ðŸ”¥ TECH ROUTE NUEVA", new Date().toISOString());
 
     console.log(
       "TECHNICIANS RESULT",
@@ -3992,8 +3992,8 @@ app.get("/api/technicians", requireAuth, async (req, res) => {
 
     return res.json(result);
   } catch (error) {
-    console.error("Error obteniendo t�cnicos:", error);
-    return res.status(500).json({ error: "Error obteniendo t�cnicos" });
+    console.error("Error obteniendo técnicos:", error);
+    return res.status(500).json({ error: "Error obteniendo técnicos" });
   }
 });
 
@@ -4006,7 +4006,7 @@ app.post("/api/technicians", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), 
 
     if (!name || !code || !specialty) {
       return res.status(400).json({
-        error: "Nombre, c�digo y especialidad son obligatorios",
+        error: "Nombre, código y especialidad son obligatorios",
       });
     }
 
@@ -4023,13 +4023,13 @@ app.post("/api/technicians", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), 
 
     res.status(201).json({ ...technician, lastActivityAt: null });
   } catch (error) {
-    console.error("Error creando t�cnico:", error);
+    console.error("Error creando técnico:", error);
 
     if (error?.code === "P2002") {
-      return res.status(409).json({ error: "Ya existe un t�cnico con ese código en esta planta" });
+      return res.status(409).json({ error: "Ya existe un tecnico con ese codigo en esta planta" });
     }
 
-    res.status(500).json({ error: "Error creando t�cnico" });
+    res.status(500).json({ error: "Error creando técnico" });
   }
 });
 
@@ -4044,7 +4044,7 @@ app.put("/api/technicians/:id", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]
     if (!Number.isFinite(id)) return res.status(400).json({ error: "id invalido" });
     if (!name || !code || !specialty) {
       return res.status(400).json({
-        error: "Nombre, código y especialidad son obligatorios",
+        error: "Nombre, codigo y especialidad son obligatorios",
       });
     }
 
@@ -4054,7 +4054,7 @@ app.put("/api/technicians/:id", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]
     });
 
     if (!existing || existing.deletedAt) {
-      return res.status(404).json({ error: "T�cnico no encontrado" });
+      return res.status(404).json({ error: "Técnico no encontrado" });
     }
 
     const result = await prisma.technician.updateMany({
@@ -4068,7 +4068,7 @@ app.put("/api/technicians/:id", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]
     });
 
     if (!result.count) {
-      return res.status(404).json({ error: "T�cnico no encontrado" });
+      return res.status(404).json({ error: "Técnico no encontrado" });
     }
 
     const technician = await prisma.technician.findFirst({
@@ -4077,13 +4077,13 @@ app.put("/api/technicians/:id", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]
 
     res.json({ ...technician, lastActivityAt: null });
   } catch (error) {
-    console.error("Error actualizando t�cnico:", error);
+    console.error("Error actualizando técnico:", error);
 
     if (error?.code === "P2002") {
-      return res.status(409).json({ error: "Ya existe un t�cnico con ese código en esta planta" });
+      return res.status(409).json({ error: "Ya existe un tecnico con ese codigo en esta planta" });
     }
 
-    res.status(500).json({ error: "Error actualizando t�cnico" });
+    res.status(500).json({ error: "Error actualizando técnico" });
   }
 });
 
@@ -4101,7 +4101,7 @@ app.delete("/api/technicians/:id", requireAuth, requireRole(["ADMIN", "SUPERVISO
     });
 
     if (!existing || existing.deletedAt) {
-      return res.status(404).json({ error: "T�cnico no encontrado" });
+      return res.status(404).json({ error: "Técnico no encontrado" });
     }
 
     const result = await prisma.technician.updateMany({
@@ -4110,13 +4110,13 @@ app.delete("/api/technicians/:id", requireAuth, requireRole(["ADMIN", "SUPERVISO
     });
 
     if (!result.count) {
-      return res.status(404).json({ error: "T�cnico no encontrado" });
+      return res.status(404).json({ error: "Técnico no encontrado" });
     }
 
     res.json({ ok: true });
   } catch (error) {
-    console.error("❌ Error eliminando t�cnico:", error);
-    res.status(500).json({ error: "Error eliminando t�cnico" });
+    console.error("Error eliminando tecnico:", error);
+    res.status(500).json({ error: "Error eliminando técnico" });
   }
 });
 
@@ -4233,11 +4233,11 @@ app.post(
       const eqId = Number(equipmentId);
 
       if (!Number.isFinite(q) || q < 0) {
-        return res.status(400).json({ error: "quantity inválida" });
+        return res.status(400).json({ error: "quantity invalida" });
       }
 
       if (!Number.isFinite(f) || f <= 0) {
-        return res.status(400).json({ error: "frequencyDays inválida" });
+        return res.status(400).json({ error: "frequencyDays invalida" });
       }
 
       if (!Number.isFinite(eqId) || eqId <= 0) {
@@ -4248,7 +4248,7 @@ app.post(
       const allowedUnits = ["ML", "L", "G", "KG", "BOMBAZOS"];
 
       if (!allowedUnits.includes(unitNorm)) {
-        return res.status(400).json({ error: "unit inválida" });
+        return res.status(400).json({ error: "unit invalida" });
       }
 
       const pumpStrokeValueNum =
@@ -4265,7 +4265,7 @@ app.post(
         }
 
         if (!["g", "kg", "ml", "l"].includes(String(pumpStrokeUnitNorm || ""))) {
-          return res.status(400).json({ error: "pumpStrokeUnit inválida para bombazos" });
+          return res.status(400).json({ error: "pumpStrokeUnit invalida para bombazos" });
         }
       }
 
@@ -4273,7 +4273,7 @@ app.post(
         points === "" || points === undefined || points === null ? null : Number(points);
 
       if (pointsInt !== null && !Number.isFinite(pointsInt)) {
-        return res.status(400).json({ error: "points debe ser numérico" });
+        return res.status(400).json({ error: "points debe ser numerico" });
       }
 
       const lubIdNum =
@@ -4308,7 +4308,7 @@ app.post(
 
       if (normalizedFrequencyType === "WEEKLY" && weeklyDaysNorm.length === 0) {
         return res.status(400).json({
-          error: "weeklyDays es obligatorio para frecuencia semanal múltiple",
+          error: "weeklyDays es obligatorio para frecuencia semanal multiple",
         });
       }
 
@@ -4374,7 +4374,7 @@ app.post(
         });
 
         if (!technicianExists) {
-          return res.status(404).json({ error: "T�cnico no encontrado en la planta actual" });
+          return res.status(404).json({ error: "Técnico no encontrado en la planta actual" });
         }
       }
 
@@ -4407,7 +4407,7 @@ app.post(
 
       if (duplicatedRoute) {
         return res.status(409).json({
-          error: "Ya existe una ruta activa con el mismo equipo, nombre, lubricante y método.",
+          error: "Ya existe una ruta activa con el mismo equipo, nombre, lubricante y metodo.",
           code: "ROUTE_DUPLICATE",
           duplicatedRouteId: duplicatedRoute.id,
         });
@@ -4657,10 +4657,10 @@ app.put(
       const eqId = Number(equipmentId);
 
       if (!Number.isFinite(q) || q < 0) {
-        return res.status(400).json({ error: "quantity inválida" });
+        return res.status(400).json({ error: "quantity invalida" });
       }
       if (!Number.isFinite(f) || f <= 0) {
-        return res.status(400).json({ error: "frequencyDays inválida" });
+        return res.status(400).json({ error: "frequencyDays invalida" });
       }
       if (!Number.isFinite(eqId) || eqId <= 0) {
         return res.status(400).json({ error: "equipmentId invalido" });
@@ -4672,7 +4672,7 @@ app.put(
       const allowedUnits = ["ML", "L", "G", "KG", "BOMBAZOS"];
 
       if (!allowedUnits.includes(unitNorm)) {
-        return res.status(400).json({ error: "unit inválida" });
+        return res.status(400).json({ error: "unit invalida" });
       }
 
       const pumpStrokeValueNum =
@@ -4694,7 +4694,7 @@ app.put(
 
         if (!["g", "kg", "ml", "l"].includes(String(pumpStrokeUnitNorm || ""))) {
           return res.status(400).json({
-            error: "pumpStrokeUnit inválida para bombazos",
+            error: "pumpStrokeUnit invalida para bombazos",
           });
         }
       }
@@ -4705,7 +4705,7 @@ app.put(
           : Number(points);
 
       if (pointsInt !== null && !Number.isFinite(pointsInt)) {
-        return res.status(400).json({ error: "points debe ser numérico" });
+        return res.status(400).json({ error: "points debe ser numerico" });
       }
 
       const lubIdNum =
@@ -4734,7 +4734,7 @@ app.put(
 
         if (!technicianExists) {
           return res.status(404).json({
-            error: "T�cnico no encontrado en la planta actual",
+            error: "Técnico no encontrado en la planta actual",
           });
         }
       }
@@ -4785,7 +4785,7 @@ app.put(
       if (duplicatedRoute) {
         return res.status(409).json({
           error:
-            "Ya existe una ruta activa con el mismo equipo, nombre, lubricante y método.",
+            "Ya existe una ruta activa con el mismo equipo, nombre, lubricante y metodo.",
           code: "ROUTE_DUPLICATE",
           duplicatedRouteId: duplicatedRoute.id,
         });
@@ -4816,7 +4816,7 @@ app.put(
 
       if (normalizedFrequencyType === "WEEKLY" && weeklyDaysNorm.length === 0) {
         return res.status(400).json({
-          error: "weeklyDays es obligatorio para frecuencia semanal múltiple",
+          error: "weeklyDays es obligatorio para frecuencia semanal multiple",
         });
       }
 
@@ -5067,7 +5067,7 @@ app.patch(
           where: { id: technicianId, plantId, deletedAt: null },
           select: { id: true },
         });
-        if (!tech) return res.status(400).json({ error: "T�cnico invalido" });
+        if (!tech) return res.status(400).json({ error: "Técnico inválido" });
       }
 
       const updated = await prisma.execution.updateMany({
@@ -5076,7 +5076,7 @@ app.patch(
       });
 
       if (!updated.count) {
-        return res.status(404).json({ error: "Ejecuci�n no encontrada" });
+        return res.status(404).json({ error: "Ejecución no encontrada" });
       }
 
       const item = await prisma.execution.findFirst({
@@ -5125,7 +5125,7 @@ app.patch(
         where: { id: technicianId, plantId, deletedAt: null },
         select: { id: true, name: true, code: true, status: true },
       });
-      if (!tech) return res.status(404).json({ error: "T�cnico no encontrado" });
+      if (!tech) return res.status(404).json({ error: "Técnico no encontrado" });
 
       const where = {
         plantId,
@@ -5155,7 +5155,7 @@ app.patch(
       });
     } catch (e) {
       console.error("assign-technician-by-equipment:", e);
-      res.status(500).json({ error: "Error asignando t�cnico por equipo" });
+      res.status(500).json({ error: "Error asignando técnico por equipo" });
     }
   }
 );
@@ -5195,7 +5195,7 @@ app.patch(
         });
 
         if (!tech) {
-          return res.status(404).json({ error: "T�cnico no encontrado en la planta actual" });
+          return res.status(404).json({ error: "Técnico no encontrado en la planta actual" });
         }
       }
 
@@ -5234,7 +5234,7 @@ app.patch(
       return res.json({ ok: true, item: updated });
     } catch (e) {
       console.error("assign route technician error:", e);
-      return res.status(500).json({ error: "Error asignando t�cnico a ruta" });
+      return res.status(500).json({ error: "Error asignando técnico a ruta" });
     }
   }
 );
@@ -5270,8 +5270,8 @@ app.get(
 
       res.json({ items });
     } catch (error) {
-      console.error("Error obteniendo lubricantes para ejecución:", error);
-      res.status(500).json({ error: "Error obteniendo lubricantes para ejecución" });
+      console.error("Error obteniendo lubricantes para ejecucion:", error);
+      res.status(500).json({ error: "Error obteniendo lubricantes para ejecucion" });
     }
   }
 );
@@ -6838,6 +6838,21 @@ app.post(
         select: executionBaseSelect,
       });
 
+      if (technicianId != null) {
+        try {
+          await notifyTechnicianAssignee(prisma, {
+            plantId,
+            technicianId,
+            type: "TECH_ACTIVITY_ASSIGNED",
+            title: "Actividad manual asignada",
+            message: `${manualTitle} programada para ${String(req.body?.scheduledAt || "").slice(0, 10)}`,
+            link: "/activities",
+          });
+        } catch (notifyErr) {
+          console.error("No se pudo notificar actividad manual al tecnico:", notifyErr);
+        }
+      }
+
       return res.status(201).json(serializeExecutionForUi(created, todayStart));
     } catch (e) {
       console.error("Error creating manual execution:", e);
@@ -6913,7 +6928,7 @@ app.patch(
 
       if (role === "TECHNICIAN") {
         if (!Number.isFinite(myTechnicianId)) {
-          return res.status(403).json({ error: "Tu usuario no tiene t�cnico asociado" });
+          return res.status(403).json({ error: "Tu usuario no tiene técnico asociado" });
         }
 
         const assignedId =
@@ -7309,12 +7324,12 @@ app.patch(
           await notifyManagers(prisma, {
             plantId,
             type: "EXEC_CONDITION_CRITICAL",
-            title: "Actividad critica completada",
+            title: "Actividad crítica completada",
             message: `${updated.route?.equipment?.name || updated.equipment?.name || "Equipo"}${
               updated.route?.equipment?.code || updated.equipment?.code
                 ? ` (${updated.route?.equipment?.code || updated.equipment?.code})`
                 : ""
-            } � Ejecuci�n #${updated.id}`,
+            } · Ejecución #${updated.id}`,
             link: `/activities?filter=critical-risk&executionId=${updated.id}&focus=critical`,
           });
 
@@ -7332,8 +7347,8 @@ app.patch(
                 updated.route?.equipment?.code ||
                 updated.equipment?.code ||
                 "",
-              riskLevel: "CR�TICO",
-              reason: "Actividad completada con condici�n cr�tica",
+              riskLevel: "CRÍTICO",
+              reason: "Actividad completada con condición crítica",
               observation:
                 updated.observations ||
                 updated.evidenceNote ||
@@ -7380,8 +7395,8 @@ app.patch(
 if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
       const fromStr = String(req.query.from || "");
       const toStr = String(req.query.to || "");
-      const monthStr = String(req.query.month || "").trim(); // ✅ nuevo
-      const filter = String(req.query.filter || "").trim().toLowerCase(); // ✅ nuevo
+      const monthStr = String(req.query.month || "").trim(); // nuevo
+      const filter = String(req.query.filter || "").trim().toLowerCase(); // nuevo
 
       const conditionRaw = String(req.query.condition || "").toUpperCase().trim(); // ALL | BUENO | ...
       const q = String(req.query.q || "").trim();
@@ -7408,11 +7423,11 @@ if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
       let from = fromStr ? new Date(fromStr) : null;
       let to = toStr ? new Date(toStr) : null;
 
-      // Validación mínima
+      // Validacion minima
       if (from && Number.isNaN(from.getTime())) return res.status(400).json({ error: "from invalido" });
       if (to && Number.isNaN(to.getTime())) return res.status(400).json({ error: "to invalido" });
 
-      // Si NO mandan from/to pero sí month, usamos month
+      // Si NO mandan from/to pero si month, usamos month
       if ((!fromStr || !toStr) && monthStr && (!from || !to)) {
         const r = parseMonthRangeLocal(monthStr);
         if (r) {
@@ -7421,12 +7436,12 @@ if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
         }
       }
 
-      // Para incluir todo el día "to", lo llevamos a fin de día (si viene date simple)
+      // Para incluir todo el dia "to", lo llevamos a fin de dia (si viene date simple)
       if (to) to.setHours(23, 59, 59, 999);
 
       // =========================
   // RBAC scope (TECHNICIAN)
-  // - Historial: solo COMPLETED del técnico
+  // - Historial: solo COMPLETED del tecnico
   // =========================
   const role = String(req.user?.role || "").toUpperCase();
   const myTechId = req.user?.technicianId != null ? Number(req.user.technicianId) : null;
@@ -7434,7 +7449,7 @@ if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
   const scopeWhereByUser = (baseWhere = {}) => {
     if (role !== "TECHNICIAN") return baseWhere;
     if (!Number.isFinite(myTechId)) {
-      // si no sabemos qu� t�cnico es, no le muestres historial (seguro)
+      // si no sabemos qué técnico es, no le muestres historial (seguro)
       return { ...baseWhere, technicianId: -1 };
     }
     return { ...baseWhere, technicianId: myTechId };
@@ -7447,11 +7462,11 @@ if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
       const condition = validConditions.has(conditionRaw) ? conditionRaw : ""; // si viene basura, ignora
 
       let conditionWhere = {};
-      // prioridad: si el usuario manda condition explícito, úsalo
+      // prioridad: si el usuario manda condition explicito, usalo
       if (condition) {
         conditionWhere = { condition };
       } else if (filter === "bad-condition") {
-        // ✅ nuevo: ambas
+        // nuevo: ambas
         conditionWhere = { condition: { in: ["MALO", "CRITICO"] } };
       }
 
@@ -7530,7 +7545,7 @@ if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
           total,
           pages,
           totals,
-          query: { filter, month: monthStr, condition: conditionRaw, from: fromStr, to: toStr }, // ✅ opcional, útil
+          query: { filter, month: monthStr, condition: conditionRaw, from: fromStr, to: toStr }, // opcional, util
         },
       });
     } catch (e) {
@@ -7594,34 +7609,34 @@ app.post("/api/emergency-activities", requireAuth, async (req, res) => {
       select: { id: true, name: true, code: true },
     });
     if (!tech) {
-      return res.status(400).json({ error: "T�cnico invalido" });
+      return res.status(400).json({ error: "Técnico inválido" });
     }
 
     const qty = Number(quantity);
     if (!Number.isFinite(qty) || qty <= 0) {
-      return res.status(400).json({ error: "quantity inválida" });
+      return res.status(400).json({ error: "quantity invalida" });
     }
 
     const execDate = parseDateOnlyLocal(String(executedAt).slice(0, 10));
     if (!execDate || Number.isNaN(execDate.getTime())) {
-      return res.status(400).json({ error: "executedAt inválida" });
+      return res.status(400).json({ error: "executedAt invalida" });
     }
 
     const conditionNorm = String(condition || "BUENO").trim().toUpperCase();
     const allowedConditions = ["BUENO", "REGULAR", "MALO", "CRITICO"];
     if (!allowedConditions.includes(conditionNorm)) {
-      return res.status(400).json({ error: "condition inválida" });
+      return res.status(400).json({ error: "condition invalida" });
     }
 
     const result = await prisma.$transaction(async (tx) => {
-      // ✅ equipo debe ser de la planta actual
+      // OK equipo debe ser de la planta actual
       const eq = await tx.equipment.findFirst({
         where: { id: equipmentIdNum, plantId },
         select: { id: true, name: true, code: true },
       });
       if (!eq) throw new Error("Equipo no encontrado en la planta actual");
 
-      // ✅ lubricante debe ser de la planta actual
+      // OK lubricante debe ser de la planta actual
       const lub = await tx.lubricant.findFirst({
         where: { id: lubricantIdNum, plantId },
         select: {
@@ -7648,7 +7663,7 @@ app.post("/api/emergency-activities", requireAuth, async (req, res) => {
       const stockAfter =
         stockBefore != null ? Math.max(0, stockBefore - Number(usedInInvUnit)) : null;
 
-      const manualTitle = `EMERGENTE � ${eq.name || "Equipo"} � ${String(
+      const manualTitle = `EMERGENTE · ${eq.name || "Equipo"} · ${String(
         emergencyReason
       )
         .trim()
@@ -7661,7 +7676,7 @@ app.post("/api/emergency-activities", requireAuth, async (req, res) => {
         .filter(Boolean)
         .join("\n\n");
 
-      // 1) ejecuci�n irrepetible completada
+      // 1) ejecución irrepetible completada
       const execution = await tx.execution.create({
         data: {
           plantId,
@@ -7737,16 +7752,16 @@ app.post("/api/emergency-activities", requireAuth, async (req, res) => {
       };
     });
 
-    // condici�n cr�tica
+    // condición crítica
     if (conditionNorm === "CRITICO") {
       try {
         await notifyManagers(prisma, {
           plantId,
           type: "EXEC_CONDITION_CRITICAL",
-          title: "Actividad emergente cr�tica",
+          title: "Actividad emergente crítica",
           message: `${result.equipment?.name || "Equipo"}${
             result.equipment?.code ? ` (${result.equipment.code})` : ""
-          } � Ejecuci�n #${result.execution.id}`,
+          } · Ejecución #${result.execution.id}`,
           link: `/activities?filter=critical-risk&executionId=${result.execution.id}&focus=critical`,
         });
 
@@ -7757,8 +7772,8 @@ app.post("/api/emergency-activities", requireAuth, async (req, res) => {
             plantName: null,
             equipmentName: result.equipment?.name || "Equipo",
             equipmentCode: result.equipment?.code || "",
-            riskLevel: "CR�TICO",
-            reason: "Actividad emergente completada con condici�n cr�tica",
+            riskLevel: "CRÍTICO",
+            reason: "Actividad emergente completada con condición crítica",
             observation:
               result.execution?.observations ||
               result.execution?.evidenceNote ||
@@ -7780,11 +7795,11 @@ app.post("/api/emergency-activities", requireAuth, async (req, res) => {
           executedAt: result.execution.executedAt,
         });
       } catch (notifyErr) {
-        console.error("No se pudo notificar ejecuci�n cr�tica emergente:", notifyErr);
+        console.error("No se pudo notificar ejecución crítica emergente:", notifyErr);
       }
     }
 
-    // 🔔 low stock
+    // ðŸ”” low stock
     if (
       result.lubricant?.stockAfter != null &&
       result.lubricant?.stockBefore != null
@@ -7803,7 +7818,7 @@ app.post("/api/emergency-activities", requireAuth, async (req, res) => {
             plantId,
             type: "LOW_STOCK",
             title: "Stock bajo",
-            message: `${result.lubricant.name} quedó en ${result.lubricant.stockAfter} ${result.lubricant.unit || ""}`,
+            message: `${result.lubricant.name} quedo en ${result.lubricant.stockAfter} ${result.lubricant.unit || ""}`,
             link: "/inventory",
           });
 
@@ -7874,8 +7889,8 @@ app.get("/api/history/lubricant-movements", requireAuth, async (req, res) => {
 
     // =========================
     // Base WHERE por planta
-    // - manuales / ajustes sin ejecución: se filtran por lubricant.plantId
-    // - ligados a ejecución: se filtran por execution.plantId
+    // - manuales / ajustes sin ejecucion: se filtran por lubricant.plantId
+    // - ligados a ejecucion: se filtran por execution.plantId
     // =========================
     const baseWhere = {
       AND: [
@@ -7989,7 +8004,7 @@ app.get("/api/history/lubricant-movements", requireAuth, async (req, res) => {
 
   // =========================
   // GET /alerts/technician-overload?windowDays=7&overdueLookbackDays=30&capacityPerDay=6&warnRatio=1.1&criticalRatio=1.4
-  // Devuelve técnicos con carga vs capacidad (PENDING/OVERDUE)
+  // Devuelve tecnicos con carga vs capacidad (PENDING/OVERDUE)
   // =========================
   app.get(
     "/api/alerts/technician-overload",
@@ -8028,10 +8043,10 @@ app.get("/api/history/lubricant-movements", requireAuth, async (req, res) => {
       toDate.setDate(toDate.getDate() + windowDays);
       toDate.setHours(23, 59, 59, 999);
 
-      // capacidad simple: actividades por día * días de ventana
+      // capacidad simple: actividades por dia * dias de ventana
       const capacity = capacityPerDay * windowDays;
 
-      // 1) Conteo por técnico (solo tareas con técnico asignado)
+      // 1) Conteo por tecnico (solo tareas con tecnico asignado)
       const grouped = await prisma.execution.groupBy({
         by: ["technicianId"],
         where: {
@@ -8045,7 +8060,7 @@ app.get("/api/history/lubricant-movements", requireAuth, async (req, res) => {
 
       const techIds = grouped.map((g) => g.technicianId).filter(Boolean);
 
-      // 2) Traer nombres de técnicos
+      // 2) Traer nombres de tecnicos
       const techs = await prisma.technician.findMany({
         where: { id: { in: techIds }, plantId, deletedAt: null },
         select: { id: true, name: true }, // ajusta campos si tu modelo usa otros
@@ -8053,7 +8068,7 @@ app.get("/api/history/lubricant-movements", requireAuth, async (req, res) => {
 
       const techById = new Map(techs.map((t) => [t.id, t]));
 
-      // 3) También detectamos "sin técnico"
+      // 3) Tambien detectamos "sin tecnico"
       const unassignedCount = await prisma.execution.count({
         where: {
           plantId,
@@ -8073,7 +8088,7 @@ app.get("/api/history/lubricant-movements", requireAuth, async (req, res) => {
           if (ratio >= criticalRatio) level = "CRITICAL";
           else if (ratio >= warnRatio) level = "WARNING";
 
-          const tech = techById.get(g.technicianId) || { id: g.technicianId, name: "T�cnico" };
+          const tech = techById.get(g.technicianId) || { id: g.technicianId, name: "Técnico" };
 
           return {
             technician: tech,
@@ -8138,6 +8153,10 @@ app.get("/api/health", async (req, res) => {
       process.exit(0);
     }
   });
+
+
+
+
 
 
 

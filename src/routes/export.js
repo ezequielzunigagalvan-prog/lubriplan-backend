@@ -1,4 +1,4 @@
-import express from "express";
+﻿import express from "express";
 import ExcelJS from "exceljs";
 import PDFDocument from "pdfkit";
 import prisma from "../prisma.js";
@@ -7,9 +7,63 @@ import { requireRole } from "../middleware/requireRole.js";
 
 const router = express.Router();
 
+const DEFAULT_TIMEZONE = "America/Mexico_City";
+
+function parseDateOnlyLocal(value) {
+  if (!value) return null;
+  const raw = String(value).trim().slice(0, 10);
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  if (!match) return null;
+  const [, year, month, day] = match;
+  return new Date(Number(year), Number(month) - 1, Number(day), 12, 0, 0, 0);
+}
+
+function dateKeyInTimezone(value, timezone = DEFAULT_TIMEZONE) {
+  const dt = value instanceof Date ? value : new Date(value);
+  if (!Number.isFinite(dt.getTime())) return "";
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(dt);
+  const year = parts.find((p) => p.type === "year")?.value;
+  const month = parts.find((p) => p.type === "month")?.value;
+  const day = parts.find((p) => p.type === "day")?.value;
+  return year && month && day ? `${year}-${month}-${day}` : "";
+}
+
+function formatDateTimeInTimezone(value, timezone = DEFAULT_TIMEZONE) {
+  if (!value) return "";
+  const dt = value instanceof Date ? value : new Date(value);
+  if (!Number.isFinite(dt.getTime())) return "";
+  return new Intl.DateTimeFormat("es-MX", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(dt);
+}
+
+function formatDateInTimezone(value, timezone = DEFAULT_TIMEZONE) {
+  if (!value) return "";
+  const dt = value instanceof Date ? value : new Date(value);
+  if (!Number.isFinite(dt.getTime())) return "";
+  return new Intl.DateTimeFormat("es-MX", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(dt);
+}
+
 function toDateStart(v) {
   if (!v) return null;
-  const d = new Date(v);
+  const d = parseDateOnlyLocal(v) || new Date(v);
   if (Number.isNaN(d.getTime())) return null;
   d.setHours(0, 0, 0, 0);
   return d;
@@ -17,7 +71,7 @@ function toDateStart(v) {
 
 function toDateEnd(v) {
   if (!v) return null;
-  const d = new Date(v);
+  const d = parseDateOnlyLocal(v) || new Date(v);
   if (Number.isNaN(d.getTime())) return null;
   d.setHours(23, 59, 59, 999);
   return d;
@@ -55,12 +109,12 @@ function resourceLabel(resources = []) {
   return labels[key] || "datos";
 }
 
-async function buildExportFilename({ plantId, resources, extension }) {
+async function buildExportFilename({ plantId, resources, extension, timezone = DEFAULT_TIMEZONE }) {
   const plant = plantId
     ? await prisma.plant.findUnique({ where: { id: plantId }, select: { name: true } })
     : null;
   const plantSlug = slug(plant?.name) || "planta";
-  const date = new Date().toISOString().slice(0, 10);
+  const date = dateKeyInTimezone(new Date(), timezone);
   return `lubriplan_${plantSlug}_${resourceLabel(resources)}_${date}.${extension}`;
 }
 
@@ -120,7 +174,7 @@ function addPdfRows(doc, headers, rows) {
    HELPERS DE DATA
 ========================= */
 
-async function getExecutionsExportData({ currentPlantId, dateFrom, dateTo, req }) {
+async function getExecutionsExportData({ currentPlantId, dateFrom, dateTo, req, timezone }) {
   const where = {
     plantId: currentPlantId,
     ...(dateFrom || dateTo
@@ -181,14 +235,14 @@ async function getExecutionsExportData({ currentPlantId, dateFrom, dateTo, req }
         x.route?.lubricant?.unit ||
         "",
       tecnico: x.technician?.name || "",
-      programada: x.scheduledAt ? new Date(x.scheduledAt).toLocaleString("es-MX") : "",
-      ejecutada: x.executedAt ? new Date(x.executedAt).toLocaleString("es-MX") : "",
+      programada: x.scheduledAt ? formatDateTimeInTimezone(x.scheduledAt, timezone) : "",
+      ejecutada: x.executedAt ? formatDateTimeInTimezone(x.executedAt, timezone) : "",
       condicion: x.condition || "",
       observaciones: x.observations || "",
     };
   });
 }
-async function getMovementsExportData({ currentPlantId, dateFrom, dateTo, req }) {
+async function getMovementsExportData({ currentPlantId, dateFrom, dateTo, req, timezone }) {
   const where = {
     ...(dateFrom || dateTo
       ? {
@@ -238,7 +292,7 @@ async function getMovementsExportData({ currentPlantId, dateFrom, dateTo, req })
 
   return items.map((x) => ({
     id: x.id,
-    fecha: x.createdAt ? new Date(x.createdAt).toLocaleString("es-MX") : "",
+    fecha: x.createdAt ? formatDateTimeInTimezone(x.createdAt, timezone) : "",
     tipo: x.type || "",
     lubricante: x.lubricant?.name || "",
     cantidad: x.quantity ?? "",
@@ -254,7 +308,7 @@ async function getMovementsExportData({ currentPlantId, dateFrom, dateTo, req })
   }));
 }
 
-async function getRoutesExportData({ currentPlantId }) {
+async function getRoutesExportData({ currentPlantId, timezone }) {
   const items = await prisma.route.findMany({
     where: { plantId: currentPlantId },
     orderBy: { id: "desc" },
@@ -278,12 +332,12 @@ async function getRoutesExportData({ currentPlantId }) {
     puntos: x.points ?? "",
     frecuenciaDias: x.frequencyDays ?? "",
     tecnico: x.technician?.name || "",
-    ultimaFecha: x.lastDate ? new Date(x.lastDate).toLocaleDateString("es-MX") : "",
-    proximaFecha: x.nextDate ? new Date(x.nextDate).toLocaleDateString("es-MX") : "",
+    ultimaFecha: x.lastDate ? formatDateInTimezone(x.lastDate, timezone) : "",
+    proximaFecha: x.nextDate ? formatDateInTimezone(x.nextDate, timezone) : "",
   }));
 }
 
-async function getFailuresExportData({ currentPlantId, dateFrom, dateTo, req }) {
+async function getFailuresExportData({ currentPlantId, dateFrom, dateTo, req, timezone }) {
   const severity = String(req.query.severity || "ALL").toUpperCase();
 
   const conditionWhere =
@@ -322,7 +376,7 @@ async function getFailuresExportData({ currentPlantId, dateFrom, dateTo, req }) 
 
   return items.map((x) => ({
     id: x.id,
-    fecha: x.executedAt ? new Date(x.executedAt).toLocaleString("es-MX") : "",
+    fecha: x.executedAt ? formatDateTimeInTimezone(x.executedAt, timezone) : "",
     condicion: x.condition || "",
     actividad: x.route?.name || x.manualTitle || "",
     equipo: x.route?.equipment?.name || "",
@@ -365,6 +419,7 @@ async function getConditionReportsExportData({
   dateFrom,
   dateTo,
   req,
+  timezone,
 }) {
   const reportStatus = req.query.reportStatus
     ? String(req.query.reportStatus).toUpperCase()
@@ -404,7 +459,7 @@ async function getConditionReportsExportData({
 
   return items.map((x) => ({
     id: x.id,
-    fecha: x.createdAt ? new Date(x.createdAt).toLocaleString("es-MX") : "",
+    fecha: x.createdAt ? formatDateTimeInTimezone(x.createdAt, timezone) : "",
     equipo: x.equipment?.name || "",
     tag: x.equipment?.code || x.equipment?.tag || "",
     condicion: x.condition || "",
@@ -429,6 +484,12 @@ router.get("/xlsx", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), async (re
       return res.status(400).json({ error: "PLANT_REQUIRED" });
     }
 
+    const plant = await prisma.plant.findUnique({
+      where: { id: currentPlantId },
+      select: { timezone: true },
+    });
+    const plantTimezone = String(plant?.timezone || DEFAULT_TIMEZONE);
+
     const resourcesRaw = String(req.query.resources || "executions");
     const resources = resourcesRaw
       .split(",")
@@ -447,7 +508,13 @@ router.get("/xlsx", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), async (re
     workbook.created = new Date();
 
     if (resources.includes("executions")) {
-      const items = await getExecutionsExportData({ currentPlantId, dateFrom, dateTo, req });
+      const items = await getExecutionsExportData({
+        currentPlantId,
+        dateFrom,
+        dateTo,
+        req,
+        timezone: plantTimezone,
+      });
       const ws = workbook.addWorksheet("Ejecuciones");
 
       addHeaderRow(ws, [
@@ -456,16 +523,16 @@ router.get("/xlsx", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), async (re
         "Origen",
         "Actividad",
         "Equipo",
-        "TAG/Codigo",
+        "TAG/Código",
         "Lubricante",
         "Cantidad captura",
         "Unidad captura",
         "Cantidad inventario",
         "Unidad inventario",
-        "Tecnico",
+        "Técnico",
         "Programada",
         "Ejecutada",
-        "Condicion",
+        "Condición",
         "Observaciones",
       ]);
 
@@ -494,7 +561,13 @@ router.get("/xlsx", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), async (re
     }
 
     if (resources.includes("movements")) {
-      const items = await getMovementsExportData({ currentPlantId, dateFrom, dateTo, req });
+      const items = await getMovementsExportData({
+        currentPlantId,
+        dateFrom,
+        dateTo,
+        req,
+        timezone: plantTimezone,
+      });
       const ws = workbook.addWorksheet("Movimientos");
 
       addHeaderRow(ws, [
@@ -508,10 +581,10 @@ router.get("/xlsx", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), async (re
         "Unidad captura",
         "Cantidad convertida",
         "Unidad convertida",
-        "Ejecucion",
+        "Ejecución",
         "Ruta",
         "Equipo",
-        "Tecnico",
+        "Técnico",
       ]);
 
       for (const x of items) {
@@ -537,7 +610,7 @@ router.get("/xlsx", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), async (re
     }
 
     if (resources.includes("routes")) {
-      const items = await getRoutesExportData({ currentPlantId });
+      const items = await getRoutesExportData({ currentPlantId, timezone: plantTimezone });
       const ws = workbook.addWorksheet("Rutas");
 
       addHeaderRow(ws, [
@@ -580,7 +653,13 @@ router.get("/xlsx", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), async (re
     }
 
     if (resources.includes("failures")) {
-      const items = await getFailuresExportData({ currentPlantId, dateFrom, dateTo, req });
+      const items = await getFailuresExportData({
+        currentPlantId,
+        dateFrom,
+        dateTo,
+        req,
+        timezone: plantTimezone,
+      });
       const ws = workbook.addWorksheet("Fallas");
 
       addHeaderRow(ws, [
@@ -651,6 +730,7 @@ router.get("/xlsx", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), async (re
         dateFrom,
         dateTo,
         req,
+        timezone: plantTimezone,
       });
 
       const ws = workbook.addWorksheet("Condición reportada");
@@ -701,6 +781,7 @@ router.get("/xlsx", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), async (re
       plantId: currentPlantId,
       resources,
       extension: "xlsx",
+      timezone: plantTimezone,
     });
 
     res.setHeader(
@@ -728,6 +809,12 @@ router.get("/pdf", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), async (req
       return res.status(400).json({ error: "PLANT_REQUIRED" });
     }
 
+    const plant = await prisma.plant.findUnique({
+      where: { id: currentPlantId },
+      select: { timezone: true },
+    });
+    const plantTimezone = String(plant?.timezone || DEFAULT_TIMEZONE);
+
     const resourcesRaw = String(req.query.resources || "executions");
     const resources = resourcesRaw
       .split(",")
@@ -745,6 +832,7 @@ router.get("/pdf", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), async (req
       plantId: currentPlantId,
       resources,
       extension: "pdf",
+      timezone: plantTimezone,
     });
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
@@ -756,22 +844,22 @@ router.get("/pdf", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), async (req
     });
     doc.pipe(res);
 
-    doc.fontSize(18).fillColor("#0f172a").text("LubriPlan - Exportacion", {
+    doc.fontSize(18).fillColor("#0f172a").text("LubriPlan - Exportación", {
       align: "center",
     });
     doc.moveDown(0.4);
     doc.fontSize(10).fillColor("#64748b").text(
-      `Fecha de generacion: ${new Date().toLocaleString("es-MX")}`,
+      `Fecha de generación: ${formatDateTimeInTimezone(new Date(), plantTimezone)}`,
       { align: "center" }
     );
     doc.moveDown(1);
 
     if (resources.includes("executions")) {
-      const items = await getExecutionsExportData({ currentPlantId, dateFrom, dateTo, req });
+      const items = await getExecutionsExportData({ currentPlantId, dateFrom, dateTo, req, timezone: plantTimezone });
       addPdfSectionTitle(doc, "Actividades / Ejecuciones");
       addPdfRows(
         doc,
-        ["ID", "Estado", "Actividad", "Equipo", "Captura", "Inventario", "Tecnico", "Programada", "Condicion"],
+        ["ID", "Estado", "Actividad", "Equipo", "Captura", "Inventario", "Técnico", "Programada", "Condición"],
         items.map((x) => [
           x.id,
           x.estado,
@@ -787,7 +875,7 @@ router.get("/pdf", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), async (req
     }
 
     if (resources.includes("movements")) {
-      const items = await getMovementsExportData({ currentPlantId, dateFrom, dateTo, req });
+      const items = await getMovementsExportData({ currentPlantId, dateFrom, dateTo, req, timezone: plantTimezone });
       addPdfSectionTitle(doc, "Movimientos");
       addPdfRows(
         doc,
@@ -805,11 +893,11 @@ router.get("/pdf", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), async (req
     }
 
     if (resources.includes("routes")) {
-      const items = await getRoutesExportData({ currentPlantId });
+      const items = await getRoutesExportData({ currentPlantId, timezone: plantTimezone });
       addPdfSectionTitle(doc, "Rutas");
       addPdfRows(
         doc,
-        ["ID", "Nombre", "Equipo", "Lubricante", "Cantidad", "Metodo", "Tecnico"],
+        ["ID", "Nombre", "Equipo", "Lubricante", "Cantidad", "Método", "Técnico"],
         items.map((x) => [
           x.id,
           x.nombre,
@@ -823,11 +911,11 @@ router.get("/pdf", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), async (req
     }
 
     if (resources.includes("failures")) {
-      const items = await getFailuresExportData({ currentPlantId, dateFrom, dateTo, req });
+      const items = await getFailuresExportData({ currentPlantId, dateFrom, dateTo, req, timezone: plantTimezone });
       addPdfSectionTitle(doc, "Fallas");
       addPdfRows(
         doc,
-        ["ID", "Fecha", "Condicion", "Actividad", "Equipo", "Tecnico"],
+        ["ID", "Fecha", "Condición", "Actividad", "Equipo", "Técnico"],
         items.map((x) => [
           x.id,
           x.fecha,
@@ -844,7 +932,7 @@ router.get("/pdf", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), async (req
       addPdfSectionTitle(doc, "Actividades emergentes");
       addPdfRows(
         doc,
-        ["ID", "Nombre", "Equipo", "Tecnico", "Lubricante", "Metodo"],
+        ["ID", "Nombre", "Equipo", "Técnico", "Lubricante", "Método"],
         items.map((x) => [
           x.id,
           x.nombre,
@@ -862,12 +950,13 @@ router.get("/pdf", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), async (req
         dateFrom,
         dateTo,
         req,
+        timezone: plantTimezone,
       });
 
-      addPdfSectionTitle(doc, "Condicion reportada");
+      addPdfSectionTitle(doc, "Condición reportada");
       addPdfRows(
         doc,
-        ["ID", "Fecha", "Equipo", "Condicion", "Categoria", "Estado", "Reportado por"],
+        ["ID", "Fecha", "Equipo", "Condición", "Categoría", "Estado", "Reportado por"],
         items.map((x) => [
           x.id,
           x.fecha,
@@ -890,5 +979,6 @@ router.get("/pdf", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), async (req
 });
 
 export default router;
+
 
 

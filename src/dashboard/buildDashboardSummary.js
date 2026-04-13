@@ -1,4 +1,4 @@
-import { getPredictiveMetrics } from "./predictiveMetrics.js";
+﻿import { getPredictiveMetrics } from "./predictiveMetrics.js";
 
 const isAdmin = (role) => role === "ADMIN";
 const isTechnician = (role) => role === "TECHNICIAN";
@@ -10,8 +10,8 @@ function toNum(v) {
 }
 
 function normalizeCondition(v) {
-  const s = String(v || "").trim().toUpperCase();
-  if (s === "CRÍTICO") return "CRITICO";
+  const s = String(v || '').trim().toUpperCase();
+  if (s === 'CRITICO' || s === 'CRÍTICO') return 'CRITICO';
   return s;
 }
 
@@ -117,6 +117,7 @@ export async function buildDashboardSummary({
 
   prevTo.setTime(from.getTime() - 1);
   prevFrom.setTime(prevTo.getTime() - rangeMs);
+  const prevTodayKey = dateKeyInTimezone(prevTo, plantTimezone);
 
   const [totalRoutes, totalEquipments] = await Promise.all([
     prisma.route.count({
@@ -215,7 +216,7 @@ export async function buildDashboardSummary({
   }
 
   for (const e of scheduledOpenPrevExecs) {
-    if (isBeforeTodayInTimezone(e?.scheduledAt, todayKey, plantTimezone)) overduePrev++;
+    if (isBeforeTodayInTimezone(e?.scheduledAt, prevTodayKey, plantTimezone)) overduePrev++;
     else pendingPrev++;
   }
 
@@ -709,3 +710,4 @@ export async function buildDashboardSummary({
     upcomingMeta: isAdmin(role) ? upcomingMeta : undefined,
   };
 }
+

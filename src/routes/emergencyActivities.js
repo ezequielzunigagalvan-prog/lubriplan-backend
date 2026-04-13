@@ -1,5 +1,5 @@
 ﻿import express from "express";
-import { notifyManagers } from "../notifications/notify.js";
+import { notifyManagers, notifyTechnicianAssignee } from "../notifications/notify.js";
 import { sseHub } from "../realtime/sseHub.js";
 import { sendCriticalActivityEmail } from "../services/email/email.service.js";
 
@@ -17,7 +17,7 @@ export default function emergencyActivitiesRoutes({ prisma, auth }) {
     const fromU = normUnit(fromUnit);
     const toU = normUnit(lubricantUnit);
 
-    // lÃ­quidos: ml <-> L
+    // liquidos: ml <-> L
     if (fromU === "l" && toU === "ml") return q * 1000;
     if (fromU === "ml" && toU === "l") return q / 1000;
 
@@ -82,14 +82,14 @@ export default function emergencyActivitiesRoutes({ prisma, auth }) {
             .json({ error: "emergencyReason requerido" });
         }
         if (!Number.isFinite(qty) || qty <= 0) {
-          return res.status(400).json({ error: "quantity invÃ¡lida" });
+          return res.status(400).json({ error: "quantity inválida" });
         }
 
         const executedAtDT = new Date(
           `${String(executedAt).slice(0, 10)}T12:00:00`
         );
         if (Number.isNaN(executedAtDT.getTime())) {
-          return res.status(400).json({ error: "executedAt invÃ¡lido" });
+          return res.status(400).json({ error: "executedAt inválido" });
         }
 
         const result = await prisma.$transaction(async (tx) => {
@@ -124,7 +124,7 @@ export default function emergencyActivitiesRoutes({ prisma, auth }) {
             throw new Error("Cantidad inválida después de la conversión");
           }
 
-          const manualTitle = `EMERGENTE Â· ${equipment.name || `Equipo ${eqId}`} Â· ${String(
+          const manualTitle = `EMERGENTE · ${equipment.name || `Equipo ${eqId}`} · ${String(
             emergencyReason
           )
             .trim()
@@ -188,7 +188,7 @@ export default function emergencyActivitiesRoutes({ prisma, auth }) {
               convertedQuantity: qtyNormalized,
               convertedUnit: lubUnit,
               reason: "EMERGENCY",
-              note: `Equipo: ${equipment.code || equipment.name || eqId} Â· ${String(
+              note: `Equipo: ${equipment.code || equipment.name || eqId} · ${String(
                 emergencyReason
               ).trim()}`,
               stockBefore,
@@ -257,7 +257,22 @@ export default function emergencyActivitiesRoutes({ prisma, auth }) {
               executedAt: result.execution.executedAt,
             });
           } catch (notifyErr) {
-            console.error("No se pudo notificar actividad emergente crÃ­tica:", notifyErr);
+            console.error("No se pudo notificar actividad emergente crítica:", notifyErr);
+          }
+        }
+
+        if (techId) {
+          try {
+            await notifyTechnicianAssignee(prisma, {
+              plantId,
+              technicianId: techId,
+              type: "TECH_ACTIVITY_ASSIGNED",
+              title: "Actividad emergente asignada",
+              message: `${result.execution?.manualTitle || "Actividad emergente"} programada para ${String(executedAt).slice(0, 10)}`,
+              link: "/activities",
+            });
+          } catch (notifyErr) {
+            console.error("No se pudo notificar actividad emergente al tecnico:", notifyErr);
           }
         }
 
@@ -279,7 +294,7 @@ export default function emergencyActivitiesRoutes({ prisma, auth }) {
                 plantId,
                 type: "LOW_STOCK",
                 title: "Stock bajo",
-                message: `${result.lubricant.name} quedÃ³ en ${result.lubricant.stockAfter} ${result.lubricant.unit || ""}`,
+                message: `${result.lubricant.name} quedó en ${result.lubricant.stockAfter} ${result.lubricant.unit || ""}`,
                 link: "/inventory",
               });
 
@@ -308,6 +323,8 @@ export default function emergencyActivitiesRoutes({ prisma, auth }) {
 
   return router;
 }
+
+
 
 
 

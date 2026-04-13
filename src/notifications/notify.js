@@ -26,6 +26,58 @@ export async function notifyUser(prisma, userId, payload) {
   return created;
 }
 
+export async function notifyTechnicianAssignee(prisma, payload) {
+  const scopedPlantId =
+    payload?.plantId != null && Number.isFinite(Number(payload.plantId))
+      ? Number(payload.plantId)
+      : null;
+  const technicianId =
+    payload?.technicianId != null && Number.isFinite(Number(payload.technicianId))
+      ? Number(payload.technicianId)
+      : null;
+
+  if (!technicianId) return { notified: 0 };
+
+  const user = await prisma.user.findFirst({
+    where: {
+      active: true,
+      technicianId,
+      ...(scopedPlantId != null
+        ? {
+            OR: [
+              {
+                technician: {
+                  plantId: scopedPlantId,
+                },
+              },
+              {
+                userPlants: {
+                  some: {
+                    plantId: scopedPlantId,
+                    active: true,
+                  },
+                },
+              },
+            ],
+          }
+        : {}),
+    },
+    select: { id: true },
+  });
+
+  if (!user?.id) return { notified: 0 };
+
+  await notifyUser(prisma, user.id, {
+    plantId: scopedPlantId,
+    type: payload.type,
+    title: payload.title,
+    message: payload.message || null,
+    link: payload.link || null,
+  });
+
+  return { notified: 1, userId: user.id };
+}
+
 export async function notifyManagers(prisma, payload) {
   const scopedPlantId = payload.plantId != null ? Number(payload.plantId) : null;
 
