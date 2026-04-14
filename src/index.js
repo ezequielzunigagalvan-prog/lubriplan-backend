@@ -6101,7 +6101,10 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
 
     const where = {
       type: { in: ["SALIDA", "OUT"] },
-      createdAt: { gte: from },
+      OR: [
+        { createdAt: { gte: from } },
+        { execution: { is: { executedAt: { gte: from } } } },
+      ],
       ...(lubricantId != null ? { lubricantId } : {}),
       lubricant: {
         plantId,
@@ -6118,6 +6121,11 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
       select: {
         createdAt: true,
         quantity: true,
+        execution: {
+          select: {
+            executedAt: true,
+          },
+        },
         lubricant: {
           select: {
             id: true,
@@ -6133,7 +6141,7 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
     const byMonth = {};
 
     for (const mv of mvs) {
-      const d = new Date(mv.createdAt);
+      const d = new Date(mv.execution?.executedAt || mv.createdAt);
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
       const qBase = toBaseQuantity(mv.quantity, mv?.lubricant?.unit);
       byMonth[key] = (byMonth[key] || 0) + qBase;
@@ -7190,7 +7198,7 @@ app.patch(
           return res.status(400).json({ error: "Stock insuficiente" });
         }
 
-        inventoryDeductedAt = new Date();
+        inventoryDeductedAt = new Date(executedAt);
         movementData = {
           lubricantId: lubricant.id,
           quantity: round2(inventoryQty),
@@ -7200,6 +7208,7 @@ app.patch(
           convertedUnit: usedConvertedUnit,
           stockBefore: round2(stockBefore),
           stockAfter: round2(stockAfter),
+          occurredAt: new Date(executedAt),
           note: [
             `Ejecucion #${execution.id}`,
             route?.name ? `Ruta: ${route.name}` : null,
@@ -7257,6 +7266,7 @@ app.patch(
               note: movementData.note,
               stockBefore: movementData.stockBefore,
               stockAfter: movementData.stockAfter,
+              createdAt: movementData.occurredAt,
             },
           });
 
@@ -7454,8 +7464,24 @@ if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
         return { from, to };
       };
 
-      let from = fromStr ? new Date(fromStr) : null;
-      let to = toStr ? new Date(toStr) : null;
+      const parseQueryDateLocal = (value, endOfDay = false) => {
+        if (!value) return null;
+        const local = parseDateOnlyLocal(String(value).slice(0, 10));
+        if (local && !Number.isNaN(local.getTime())) {
+          if (endOfDay) local.setHours(23, 59, 59, 999);
+          else local.setHours(0, 0, 0, 0);
+          return local;
+        }
+
+        const dt = new Date(value);
+        if (Number.isNaN(dt.getTime())) return null;
+        if (endOfDay) dt.setHours(23, 59, 59, 999);
+        else dt.setHours(0, 0, 0, 0);
+        return dt;
+      };
+
+      let from = parseQueryDateLocal(fromStr, false);
+      let to = parseQueryDateLocal(toStr, true);
 
       // Validacion minima
       if (from && Number.isNaN(from.getTime())) return res.status(400).json({ error: "from invalido" });
@@ -7469,9 +7495,6 @@ if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
           to = r.to;
         }
       }
-
-      // Para incluir todo el dia "to", lo llevamos a fin de dia (si viene date simple)
-      if (to) to.setHours(23, 59, 59, 999);
 
       // =========================
   // RBAC scope (TECHNICIAN)
@@ -7733,7 +7756,7 @@ app.post("/api/emergency-activities", requireAuth, async (req, res) => {
           evidenceNote:
             String(evidenceNote || "").trim() ||
             `EMERGENCY: ${String(emergencyReason).trim()}`,
-          inventoryDeductedAt: new Date(),
+          inventoryDeductedAt: execDate,
         },
         include: {
           route: { include: { equipment: true, lubricant: true } },
@@ -7762,6 +7785,7 @@ app.post("/api/emergency-activities", requireAuth, async (req, res) => {
           ].join(" | "),
           stockBefore,
           stockAfter,
+          createdAt: execDate,
         },
       });
 
@@ -7904,8 +7928,24 @@ app.get("/api/history/lubricant-movements", requireAuth, async (req, res) => {
       ? Math.min(Math.max(1, pageSizeRaw), 200)
       : 20;
 
-    const from = fromStr ? new Date(fromStr) : null;
-    const to = toStr ? new Date(toStr) : null;
+    const parseQueryDateLocal = (value, endOfDay = false) => {
+      if (!value) return null;
+      const local = parseDateOnlyLocal(String(value).slice(0, 10));
+      if (local && !Number.isNaN(local.getTime())) {
+        if (endOfDay) local.setHours(23, 59, 59, 999);
+        else local.setHours(0, 0, 0, 0);
+        return local;
+      }
+
+      const dt = new Date(value);
+      if (Number.isNaN(dt.getTime())) return null;
+      if (endOfDay) dt.setHours(23, 59, 59, 999);
+      else dt.setHours(0, 0, 0, 0);
+      return dt;
+    };
+
+    const from = parseQueryDateLocal(fromStr, false);
+    const to = parseQueryDateLocal(toStr, true);
 
     if (from && Number.isNaN(from.getTime())) {
       return res.status(400).json({ error: "from invalido" });
@@ -7914,8 +7954,6 @@ app.get("/api/history/lubricant-movements", requireAuth, async (req, res) => {
     if (to && Number.isNaN(to.getTime())) {
       return res.status(400).json({ error: "to invalido" });
     }
-
-    if (to) to.setHours(23, 59, 59, 999);
 
     const role = String(req.user?.role || "").toUpperCase();
     const myTechId =
@@ -7937,10 +7975,24 @@ app.get("/api/history/lubricant-movements", requireAuth, async (req, res) => {
         ...(from || to
           ? [
               {
-                createdAt: {
-                  ...(from ? { gte: from } : {}),
-                  ...(to ? { lte: to } : {}),
-                },
+                OR: [
+                  {
+                    createdAt: {
+                      ...(from ? { gte: from } : {}),
+                      ...(to ? { lte: to } : {}),
+                    },
+                  },
+                  {
+                    execution: {
+                      is: {
+                        executedAt: {
+                          ...(from ? { gte: from } : {}),
+                          ...(to ? { lte: to } : {}),
+                        },
+                      },
+                    },
+                  },
+                ],
               },
             ]
           : []),

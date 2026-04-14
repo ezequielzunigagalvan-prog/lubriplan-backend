@@ -179,10 +179,20 @@ async function getExecutionsExportData({ currentPlantId, dateFrom, dateTo, req, 
     plantId: currentPlantId,
     ...(dateFrom || dateTo
       ? {
-          scheduledAt: {
-            ...(dateFrom ? { gte: dateFrom } : {}),
-            ...(dateTo ? { lte: dateTo } : {}),
-          },
+          OR: [
+            {
+              scheduledAt: {
+                ...(dateFrom ? { gte: dateFrom } : {}),
+                ...(dateTo ? { lte: dateTo } : {}),
+              },
+            },
+            {
+              executedAt: {
+                ...(dateFrom ? { gte: dateFrom } : {}),
+                ...(dateTo ? { lte: dateTo } : {}),
+              },
+            },
+          ],
         }
       : {}),
     ...(req.query.status ? { status: String(req.query.status).toUpperCase() } : {}),
@@ -246,10 +256,24 @@ async function getMovementsExportData({ currentPlantId, dateFrom, dateTo, req, t
   const where = {
     ...(dateFrom || dateTo
       ? {
-          createdAt: {
-            ...(dateFrom ? { gte: dateFrom } : {}),
-            ...(dateTo ? { lte: dateTo } : {}),
-          },
+          OR: [
+            {
+              createdAt: {
+                ...(dateFrom ? { gte: dateFrom } : {}),
+                ...(dateTo ? { lte: dateTo } : {}),
+              },
+            },
+            {
+              execution: {
+                is: {
+                  executedAt: {
+                    ...(dateFrom ? { gte: dateFrom } : {}),
+                    ...(dateTo ? { lte: dateTo } : {}),
+                  },
+                },
+              },
+            },
+          ],
         }
       : {}),
     ...(req.query.type ? { type: String(req.query.type).toUpperCase() } : {}),
@@ -292,7 +316,11 @@ async function getMovementsExportData({ currentPlantId, dateFrom, dateTo, req, t
 
   return items.map((x) => ({
     id: x.id,
-    fecha: x.createdAt ? formatDateTimeInTimezone(x.createdAt, timezone) : "",
+    fecha: x.execution?.executedAt
+      ? formatDateTimeInTimezone(x.execution.executedAt, timezone)
+      : x.createdAt
+      ? formatDateTimeInTimezone(x.createdAt, timezone)
+      : "",
     tipo: x.type || "",
     lubricante: x.lubricant?.name || "",
     cantidad: x.quantity ?? "",

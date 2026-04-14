@@ -160,7 +160,7 @@ export default function emergencyActivitiesRoutes({ prisma, auth }) {
               evidenceNote:
                 String(evidenceNote || "").trim() ||
                 `EMERGENCY: ${String(emergencyReason).trim()}`,
-              inventoryDeductedAt: new Date(),
+              inventoryDeductedAt: executedAtDT,
             },
           });
 
@@ -193,6 +193,7 @@ export default function emergencyActivitiesRoutes({ prisma, auth }) {
               ).trim()}`,
               stockBefore,
               stockAfter,
+              createdAt: executedAtDT,
             },
           });
 
