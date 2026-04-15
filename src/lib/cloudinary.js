@@ -8,20 +8,33 @@ const requiredVars = [
 ];
 
 export function isCloudinaryConfigured() {
+  const cloudinaryUrl = String(process.env.CLOUDINARY_URL || "").trim();
+  if (cloudinaryUrl) return true;
   return requiredVars.every((key) => String(process.env[key] || "").trim() !== "");
 }
 
 export function getCloudinary() {
   if (!isCloudinaryConfigured()) {
-    throw new Error("Cloudinary no esta configurado en el backend.");
+    throw new Error(
+      "Cloudinary no esta configurado. Define CLOUDINARY_URL o las variables CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY y CLOUDINARY_API_SECRET."
+    );
   }
 
-  cloudinary.config({
-    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-    api_key: process.env.CLOUDINARY_API_KEY,
-    api_secret: process.env.CLOUDINARY_API_SECRET,
-    secure: true,
-  });
+  const cloudinaryUrl = String(process.env.CLOUDINARY_URL || "").trim();
+
+  if (cloudinaryUrl) {
+    cloudinary.config({
+      secure: true,
+      cloudinary_url: cloudinaryUrl,
+    });
+  } else {
+    cloudinary.config({
+      cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+      api_key: process.env.CLOUDINARY_API_KEY,
+      api_secret: process.env.CLOUDINARY_API_SECRET,
+      secure: true,
+    });
+  }
 
   return cloudinary;
 }

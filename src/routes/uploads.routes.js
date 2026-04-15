@@ -42,7 +42,11 @@ export default function uploadsRoutes({ auth }) {
       });
     } catch (error) {
       console.error("upload routes-image error:", error);
-      return res.status(500).json({ error: "Error subiendo imagen de ruta" });
+      const message = String(error?.message || "").trim();
+      const status = /Cloudinary no esta configurado/i.test(message) ? 503 : 500;
+      return res.status(status).json({
+        error: message || "Error subiendo imagen de ruta",
+      });
     }
   });
 
