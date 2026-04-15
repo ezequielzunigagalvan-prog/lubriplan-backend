@@ -231,6 +231,7 @@ model Route {
   nextDate DateTime?
 
   imageUrl String?
+  imagePublicId String?
 
   equipmentId Int
   equipment   Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
@@ -290,6 +291,7 @@ model Execution {
   usedConvertedUnit      String?
 
   evidenceImage String?
+  evidenceImagePublicId String?
   evidenceNote  String?
 
   inventoryDeductedAt DateTime?
@@ -351,6 +353,7 @@ model ConditionReport {
   description   String
   detectedAt    DateTime                 @db.Date
   evidenceImage String?
+  evidenceImagePublicId String?
 
   status ConditionReportStatus @default(OPEN)
 

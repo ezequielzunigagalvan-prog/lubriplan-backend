@@ -1,8 +1,7 @@
 ﻿// src/routes/conditionReports.routes.js
 import express from "express";
 import multer from "multer";
-import path from "path";
-import { getUploadsSubdir } from "../utils/uploads.js";
+import { normalizeImageInput, uploadBufferToCloudinary } from "../lib/cloudinary.js";
 
 import { notifyManagers, notifyTechnicianAssignee } from "../notifications/notify.js";
 import { sseHub } from "../realtime/sseHub.js";
@@ -11,15 +10,12 @@ import { sendConditionAlertEmail } from "../services/email/email.service.js";
 // =========================
 // Multer config
 // =========================
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, getUploadsSubdir("condition-reports")),
-  filename: (req, file, cb) => {
-    const ext = (path.extname(file.originalname) || ".jpg").toLowerCase();
-    cb(null, `cr_${Date.now()}_${Math.random().toString(16).slice(2)}${ext}`);
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 8 * 1024 * 1024,
   },
 });
-
-const upload = multer({ storage });
 
 // helpers
 const up = (v) => String(v || "").trim().toUpperCase();
@@ -137,9 +133,23 @@ export default function conditionReportsRoutes({ prisma, auth }) {
         return res.status(400).json({ error: "Categoría inválida" });
       }
 
-      const evidenceImage = req.file
-        ? `/uploads/condition-reports/${req.file.filename}`
-        : String(req.body?.evidenceImage || "").trim() || null;
+      const uploadedEvidence = req.file?.buffer
+        ? await uploadBufferToCloudinary(req.file.buffer, {
+            folder: "lubriplan/condition-reports",
+            publicId: `condition_report_${equipmentId}_${Date.now()}_${Math.random()
+              .toString(16)
+              .slice(2)}`,
+          })
+        : await normalizeImageInput(req.body?.evidenceImage, {
+            folder: "lubriplan/condition-reports",
+            publicId: `condition_report_${equipmentId}_${Date.now()}_${Math.random()
+              .toString(16)
+              .slice(2)}`,
+          });
+
+      const evidenceImage = uploadedEvidence?.secure_url || uploadedEvidence?.imageUrl || null;
+      const evidenceImagePublicId =
+        uploadedEvidence?.public_id || uploadedEvidence?.imagePublicId || null;
 
       const eq = await prisma.equipment.findFirst({
         where: { id: equipmentId, plantId },
@@ -168,6 +178,7 @@ export default function conditionReportsRoutes({ prisma, auth }) {
           description,
           detectedAt: detectedAtDate,
           evidenceImage,
+          evidenceImagePublicId,
           status: "OPEN",
         },
         include: {

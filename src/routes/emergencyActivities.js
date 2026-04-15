@@ -2,6 +2,7 @@
 import { notifyManagers, notifyTechnicianAssignee } from "../notifications/notify.js";
 import { sseHub } from "../realtime/sseHub.js";
 import { sendCriticalActivityEmail } from "../services/email/email.service.js";
+import { normalizeImageInput } from "../lib/cloudinary.js";
 
 export default function emergencyActivitiesRoutes({ prisma, auth }) {
   const router = express.Router();
@@ -92,6 +93,11 @@ export default function emergencyActivitiesRoutes({ prisma, auth }) {
           return res.status(400).json({ error: "executedAt inválido" });
         }
 
+        const uploadedEvidence = await normalizeImageInput(evidenceImage, {
+          folder: "lubriplan/execution-evidence",
+          publicId: `emergency_${eqId}_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+        });
+
         const result = await prisma.$transaction(async (tx) => {
           const equipment = await tx.equipment.findFirst({
             where: { id: eqId, plantId },
@@ -156,7 +162,8 @@ export default function emergencyActivitiesRoutes({ prisma, auth }) {
               usedConvertedUnit: lubUnit,
               condition: condition || null,
               observations: manualInstructions || null,
-              evidenceImage: String(evidenceImage || "").trim() || null,
+              evidenceImage: uploadedEvidence?.imageUrl || null,
+              evidenceImagePublicId: uploadedEvidence?.imagePublicId || null,
               evidenceNote:
                 String(evidenceNote || "").trim() ||
                 `EMERGENCY: ${String(emergencyReason).trim()}`,
@@ -324,6 +331,10 @@ export default function emergencyActivitiesRoutes({ prisma, auth }) {
 
   return router;
 }
+
+
+
+
 
 
 

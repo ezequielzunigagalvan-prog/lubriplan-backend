@@ -4,15 +4,15 @@
   "type": "module",
   "main": "src/index.js",
   "scripts": {
-  "dev": "nodemon src/index.js",
-  "start": "node src/index.js",
-  "seed": "node prisma/seed.js"
-},
-
+    "dev": "nodemon src/index.js",
+    "start": "node src/index.js",
+    "seed": "node prisma/seed.js"
+  },
   "dependencies": {
     "@prisma/client": "^5.22.0",
     "bcrypt": "^6.0.0",
     "bcryptjs": "^3.0.3",
+    "cloudinary": "^2.9.0",
     "cors": "^2.8.6",
     "dotenv": "^17.2.3",
     "exceljs": "^4.4.0",
@@ -22,6 +22,7 @@
     "openai": "^6.1.0",
     "pdfkit": "^0.18.0",
     "resend": "^6.9.3",
+    "streamifier": "^0.1.1",
     "zod": "^4.3.6"
   },
   "devDependencies": {

@@ -38,6 +38,7 @@
   import uploadsRoutes from "./routes/uploads.routes.js";
   import exportRoutes from "./routes/export.js";
   import importRoutes from "./routes/import.js";
+  import { destroyCloudinaryImage, normalizeImageInput } from "./lib/cloudinary.js";
   import { startMonthlyExecutiveReportScheduler } from "./jobs/monthlyExecutiveReport.job.js";
   import monthlyReportRoutes from "./routes/monthlyReport.routes.js";
 
@@ -4248,6 +4249,7 @@ app.post(
         nextDate,
         lastDate,
         imageUrl,
+        imagePublicId,
       } = req.body;
 
       if (
@@ -4478,6 +4480,7 @@ app.post(
         nextDate: parsedNextDate,
 
         imageUrl: imageUrl?.trim?.() || imageUrl || null,
+        imagePublicId: imagePublicId?.trim?.() || imagePublicId || null,
 
         ...(lubIdNum ? { lubricant: { connect: { id: lubIdNum } } } : {}),
       };
@@ -4637,6 +4640,7 @@ app.put(
         technicianId,
         lubricantId,
         imageUrl,
+        imagePublicId,
       } = req.body;
 
       const normalizedName = normalizeRouteName(name);
@@ -4673,6 +4677,7 @@ app.put(
         select: {
           id: true,
           imageUrl: true,
+          imagePublicId: true,
         },
       });
 
@@ -4875,6 +4880,20 @@ app.put(
         stamp()
       );
 
+      const nextImageUrl =
+        imageUrl == null || String(imageUrl).trim() === ""
+          ? existingRoute.imageUrl
+          : toNullIfEmpty(imageUrl)?.trim?.() || toNullIfEmpty(imageUrl);
+
+      const nextImagePublicId =
+        imageUrl == null || String(imageUrl).trim() === ""
+          ? existingRoute.imagePublicId
+          : imagePublicId == null || String(imagePublicId).trim() === ""
+          ? nextImageUrl === existingRoute.imageUrl
+            ? existingRoute.imagePublicId
+            : null
+          : toNullIfEmpty(imagePublicId)?.trim?.() || toNullIfEmpty(imagePublicId);
+
       const updatedCount = await prisma.route.updateMany({
         where: { id, plantId },
         data: {
@@ -4900,10 +4919,8 @@ app.put(
           instructions: toNullIfEmpty(instructions),
           lastDate: parsedLast,
           nextDate: parsedNext,
-          imageUrl:
-            imageUrl == null || String(imageUrl).trim() === ""
-              ? existingRoute.imageUrl
-              : toNullIfEmpty(imageUrl)?.trim?.() || toNullIfEmpty(imageUrl),
+          imageUrl: nextImageUrl,
+          imagePublicId: nextImagePublicId,
           equipmentId: eqId,
           lubricantId: lubIdNum,
           technicianId: techIdNum,
@@ -4912,6 +4929,14 @@ app.put(
 
       if (!updatedCount.count) {
         return res.status(404).json({ error: "Ruta no encontrada" });
+      }
+
+      if (
+        existingRoute.imagePublicId &&
+        nextImagePublicId &&
+        existingRoute.imagePublicId !== nextImagePublicId
+      ) {
+        await destroyCloudinaryImage(existingRoute.imagePublicId);
       }
 
       const updated = await prisma.route.findFirst({
@@ -6835,6 +6860,12 @@ app.post(
         req.body?.evidenceImage != null ? String(req.body.evidenceImage).trim() : null;
       const evidenceNote =
         req.body?.evidenceNote != null ? String(req.body.evidenceNote).trim() : null;
+      const uploadedEvidence = await normalizeImageInput(evidenceImage, {
+        folder: "lubriplan/execution-evidence",
+        publicId: `manual_execution_${equipmentId}_${Date.now()}_${Math.random()
+          .toString(16)
+          .slice(2)}`,
+      });
 
       const technicianIdRaw = req.body?.technicianId;
       const technicianId =
@@ -6874,7 +6905,8 @@ app.post(
           scheduledAt,
           technicianId,
           status: initialStatus,
-          evidenceImage: evidenceImage || null,
+          evidenceImage: uploadedEvidence?.imageUrl || null,
+          evidenceImagePublicId: uploadedEvidence?.imagePublicId || null,
           evidenceNote: evidenceNote || null,
         },
         select: executionBaseSelect,
@@ -6995,6 +7027,12 @@ app.patch(
 
       const evidenceNote =
         req.body?.evidenceNote != null ? String(req.body.evidenceNote).trim() : null;
+      const uploadedEvidence = await normalizeImageInput(evidenceImage, {
+        folder: "lubriplan/execution-evidence",
+        publicId: `execution_complete_${id}_${Date.now()}_${Math.random()
+          .toString(16)
+          .slice(2)}`,
+      });
 
       const settings = await prisma.appSettings.upsert({
         where: { id: 1 },
@@ -7235,7 +7273,8 @@ app.patch(
         technicianId: finalTechnicianId,
         condition,
         observations,
-        evidenceImage,
+        evidenceImage: uploadedEvidence?.imageUrl || null,
+        evidenceImagePublicId: uploadedEvidence?.imagePublicId || null,
         evidenceNote,
         usedQuantity,
         usedInputQuantity,
@@ -7685,6 +7724,13 @@ app.post("/api/emergency-activities", requireAuth, async (req, res) => {
       return res.status(400).json({ error: "condition invalida" });
     }
 
+    const uploadedEvidence = await normalizeImageInput(evidenceImage, {
+      folder: "lubriplan/execution-evidence",
+      publicId: `emergency_${equipmentIdNum}_${Date.now()}_${Math.random()
+        .toString(16)
+        .slice(2)}`,
+    });
+
     const result = await prisma.$transaction(async (tx) => {
       // OK equipo debe ser de la planta actual
       const eq = await tx.equipment.findFirst({
@@ -7752,7 +7798,8 @@ app.post("/api/emergency-activities", requireAuth, async (req, res) => {
           usedInputUnit: finalUnit,
           usedConvertedQuantity: Number(usedInInvUnit),
           usedConvertedUnit: lub.unit || null,
-          evidenceImage: String(evidenceImage || "").trim() || null,
+          evidenceImage: uploadedEvidence?.imageUrl || null,
+          evidenceImagePublicId: uploadedEvidence?.imagePublicId || null,
           evidenceNote:
             String(evidenceNote || "").trim() ||
             `EMERGENCY: ${String(emergencyReason).trim()}`,
