@@ -313,6 +313,8 @@ export async function buildDashboardSummary({
       select: {
         id: true,
         name: true,
+        brand: true,
+        type: true,
         code: true,
         stock: true,
         minStock: true,
@@ -330,6 +332,8 @@ export async function buildDashboardSummary({
         lowStockItems.push({
           id: l.id,
           name: l.name || "Lubricante",
+          brand: l.brand || "",
+          type: l.type || "",
           code: l.code || "",
           stock,
           minStock: min,
