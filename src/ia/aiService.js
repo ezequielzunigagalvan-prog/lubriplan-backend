@@ -200,15 +200,19 @@ Reglas obligatorias:
 - Usa el bloque "priorities" para señalar concentración de riesgo.
 - Si hay alertas predictivas, intégralas al diagnóstico; no las menciones como sección aislada sin interpretación.
 - Si existen vencidas, sin asignar o reportes abiertos críticos, deben influir en riesgos o recomendaciones.
+- Si overdue es mayor que 0, las actividades vencidas deben aparecer como frente principal en el executiveSummary, highlights o risks.
+- Si una actividad vencida corresponde a un equipo con criticidad ALTA o CRITICA, trátala como prioridad operativa dominante.
+- No presentes la carga o la falta de asignación como riesgo principal si ya existen actividades vencidas activas, salvo que esa falta de asignación explique directamente el atraso.
 - Si mencionas un equipo específico, incluye también su código entre paréntesis cuando exista en los datos. Ejemplo: "MEZCLADOR (MEZ-14)".
 - No menciones equipos solo por nombre si el código está disponible.
 
 Qué debes priorizar al analizar:
-1. Actividades vencidas y pendientes críticas.
-2. Reportes de condición abiertos o en progreso.
-3. Consumos anómalos o señales predictivas.
-4. Carga operativa mal distribuida o actividades sin asignar.
-5. Cambios contra el periodo anterior.
+1. Actividades vencidas en equipos con criticidad ALTA o CRITICA.
+2. Resto de actividades vencidas y pendientes críticas.
+3. Reportes de condición abiertos o en progreso.
+4. Consumos anómalos o señales predictivas.
+5. Carga operativa mal distribuida o actividades sin asignar.
+6. Cambios contra el periodo anterior.
 
 Formato esperado:
 - title: "Lectura ejecutiva operativa"
@@ -274,13 +278,19 @@ function fallbackSummary({ month, plantId, dashboard }) {
 
   const topOverdue = shortList(priorities?.overdueTop, 1)[0];
   const topCondition = shortList(priorities?.conditionRiskTop, 1)[0];
+  const topOverdueCriticality = String(topOverdue?.criticality || "").toUpperCase();
+  const topOverdueIsCritical = ["ALTA", "CRITICA", "CRÍTICA"].includes(
+    topOverdueCriticality
+  );
   const highlights = [];
 
   if (overdue > 0) {
     highlights.push(
-      overdueDelta > 0
-        ? "Las actividades vencidas siguen siendo el principal foco y además crecieron vs el periodo anterior."
-        : "Las actividades vencidas se mantienen como la principal fricción operativa del periodo."
+      topOverdueIsCritical
+        ? `La principal presión operativa está en actividades vencidas sobre equipo crítico, encabezadas por ${topOverdue.equipmentName}${topOverdue.equipmentCode ? ` (${topOverdue.equipmentCode})` : ""}.`
+        : overdueDelta > 0
+          ? "Las actividades vencidas siguen siendo el principal foco y además crecieron vs el periodo anterior."
+          : "Las actividades vencidas se mantienen como la principal fricción operativa del periodo."
     );
   }
 
@@ -314,11 +324,15 @@ function fallbackSummary({ month, plantId, dashboard }) {
 
   if (overdue > 0) {
     risks.push({
-      level: overdue >= 5 ? "HIGH" : "MEDIUM",
+      level: topOverdueIsCritical || overdue >= 5 ? "HIGH" : "MEDIUM",
       message: topOverdue
-        ? `Hay actividades vencidas y la más sensible corresponde a ${topOverdue.equipmentName}${topOverdue.equipmentCode ? ` (${topOverdue.equipmentCode})` : ""}, con ${toNum(topOverdue.overdueDays)} días de atraso.`
+        ? topOverdueIsCritical
+          ? `Hay actividades vencidas en equipo crítico y la más sensible corresponde a ${topOverdue.equipmentName}${topOverdue.equipmentCode ? ` (${topOverdue.equipmentCode})` : ""}, con ${toNum(topOverdue.overdueDays)} días de atraso.`
+          : `Hay actividades vencidas y la más sensible corresponde a ${topOverdue.equipmentName}${topOverdue.equipmentCode ? ` (${topOverdue.equipmentCode})` : ""}, con ${toNum(topOverdue.overdueDays)} días de atraso.`
         : `Hay ${overdue} actividades vencidas que ya comprometen cumplimiento operativo.`,
-      action: "Reprogramar primero las vencidas críticas, asignar responsable y cerrar la recuperación en la semana.",
+      action: topOverdueIsCritical
+        ? "Atender hoy mismo las vencidas del equipo crítico, asignar responsable y cerrar la recuperación antes de tomar frentes secundarios."
+        : "Reprogramar primero las vencidas críticas, asignar responsable y cerrar la recuperación en la semana.",
     });
   }
 
@@ -355,7 +369,9 @@ function fallbackSummary({ month, plantId, dashboard }) {
 
   const recommendations = [
     overdue > 0
-      ? "Cerrar primero el bloque de actividades vencidas con mayor criticidad, atraso y falta de asignación."
+      ? topOverdueIsCritical
+        ? `Cerrar primero las vencidas asociadas a ${topOverdue.equipmentName}${topOverdue.equipmentCode ? ` (${topOverdue.equipmentCode})` : ""} antes de liberar capacidad a otros frentes.`
+        : "Cerrar primero el bloque de actividades vencidas con mayor criticidad, atraso y falta de asignación."
       : "Sostener el cumplimiento del plan semanal evitando que pendientes migren a vencidas.",
 
     topCondition
@@ -386,9 +402,13 @@ function fallbackSummary({ month, plantId, dashboard }) {
     risks: risks.slice(0, 3),
     recommendations: recommendations.slice(0, 3),
     executiveSummary:
-      predictiveSignalsCount > 0
-        ? "Se detectan riesgos operativos que requieren priorización inmediata, especialmente en vencidas, reportes abiertos y señales predictivas de consumo. La ejecución debe enfocarse en los frentes con mayor impacto operativo."
-        : "La operación presenta focos que requieren priorización táctica, principalmente en vencidas, reportes abiertos y balance de ejecución. Conviene atacar primero lo que más compromete cumplimiento y continuidad.",
+      overdue > 0
+        ? topOverdueIsCritical
+          ? `El principal riesgo operativo está en actividades vencidas sobre equipo crítico, encabezadas por ${topOverdue.equipmentName}${topOverdue.equipmentCode ? ` (${topOverdue.equipmentCode})` : ""}. La ejecución debe recuperar ese frente antes de atender carga secundaria o señales de apoyo.`
+          : "El principal riesgo operativo está en las actividades vencidas, que ya deben recuperarse antes de atender carga secundaria. La ejecución debe enfocarse primero en cerrar atraso para proteger cumplimiento y disponibilidad."
+        : predictiveSignalsCount > 0
+          ? "Se detectan riesgos operativos que requieren priorización inmediata, especialmente en reportes abiertos y señales predictivas de consumo. La ejecución debe enfocarse en los frentes con mayor impacto operativo."
+          : "La operación presenta focos que requieren priorización táctica, principalmente en reportes abiertos y balance de ejecución. Conviene atacar primero lo que más compromete cumplimiento y continuidad.",
   };
 }
 
@@ -480,6 +500,8 @@ Debes cumplir exactamente estas reglas:
 - no repetir literalmente KPIs si no aportan interpretación
 - redactar en español ejecutivo, técnico y directo
 - priorizar vencidas, reportes abiertos, anomalías de consumo y carga no asignada
+- si overdue es mayor que 0, las actividades vencidas deben aparecer como frente principal
+- si una vencida corresponde a equipo ALTA o CRITICA, debe tratarse como prioridad operativa dominante
 - usar los datos entregados, no frases genéricas
 - si mencionas un equipo específico, incluye su código entre paréntesis cuando exista en los datos
 
