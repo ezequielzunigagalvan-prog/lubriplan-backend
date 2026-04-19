@@ -14,12 +14,13 @@
     import techniciansRoutes from "./routes/technicians.routes.js";
     import emergencyActivitiesRoutes from "./routes/emergencyActivities.js";
     import conditionReportsRoutes from "./routes/conditionReports.routes.js";
-    import notificationsRoutes from "./routes/notifications.routes.js";
-    import { sseHub } from "./realtime/sseHub.js";
-    import { notifyManagers, notifyTechnicianAssignee } from "./notifications/notify.js"; 
-    import realtimeRoutes from "./routes/realtime.routes.js";
-    import adminLinksRoutes from "./routes/admin.links.routes.js";
-    import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
+import notificationsRoutes from "./routes/notifications.routes.js";
+import { sseHub } from "./realtime/sseHub.js";
+import { notifyManagers, notifyTechnicianAssignee } from "./notifications/notify.js"; 
+import realtimeRoutes from "./routes/realtime.routes.js";
+import adminLinksRoutes from "./routes/admin.links.routes.js";
+import adminOnboardingRoutes from "./routes/admin.onboarding.routes.js";
+import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
     import aiRouter from "./ia/aiRouter.js";
     import prisma from "./prisma.js";
     import { getPredictiveMetrics } from "./dashboard/predictiveMetrics.js";
@@ -232,6 +233,14 @@ app.options("*", cors(corsOptions));
     })
   );
   app.use("/api", adminLinksRoutes({ prisma, auth: requireAuth }));
+  app.use(
+    "/api/admin",
+    adminOnboardingRoutes({
+      prisma,
+      auth: requireAuth,
+      requireRole,
+    })
+  );
   app.use(
     "/api",
     settingsRoutes({
