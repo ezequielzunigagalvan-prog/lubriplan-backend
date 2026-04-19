@@ -7284,11 +7284,13 @@ app.patch(
         inventoryDeductedAt,
       };
 
-      const updated = await prisma.$transaction(async (tx) => {
+      const completionResult = await prisma.$transaction(async (tx) => {
         const saved = await tx.execution.update({
           where: { id },
           data,
         });
+
+        let resolvedConditionReport = null;
 
         if (movementData) {
           await tx.lubricantMovement.create({
@@ -7392,14 +7394,100 @@ app.patch(
           }
         }
 
-        return tx.execution.findFirst({
+        const linkedConditionReport = await tx.conditionReport.findFirst({
+          where: {
+            plantId,
+            correctiveExecutionId: saved.id,
+            status: { in: ["OPEN", "IN_PROGRESS"] },
+          },
+          select: {
+            id: true,
+            plantId: true,
+            equipmentId: true,
+            equipment: {
+              select: {
+                id: true,
+                name: true,
+                code: true,
+              },
+            },
+          },
+        });
+
+        if (linkedConditionReport) {
+          resolvedConditionReport = await tx.conditionReport.update({
+            where: { id: linkedConditionReport.id },
+            data: {
+              status: "RESOLVED",
+              resolvedAt: saved.executedAt || executedAt,
+            },
+            select: {
+              id: true,
+              plantId: true,
+              equipmentId: true,
+              status: true,
+              resolvedAt: true,
+              equipment: {
+                select: {
+                  id: true,
+                  name: true,
+                  code: true,
+                },
+              },
+            },
+          });
+        }
+
+        const refreshedExecution = await tx.execution.findFirst({
           where: { id: saved.id, plantId },
           select: executionBaseSelect,
         });
+
+        return {
+          execution: refreshedExecution,
+          resolvedConditionReport,
+        };
       });
+
+      const updated = completionResult?.execution || null;
 
       if (!updated) {
         return res.status(500).json({ error: "No se pudo refrescar la actividad completada" });
+      }
+
+      if (completionResult?.resolvedConditionReport) {
+        const resolvedReport = completionResult.resolvedConditionReport;
+
+        try {
+          await notifyManagers(prisma, {
+            plantId,
+            type: "CONDITION_RESOLVED",
+            title: "Reporte resuelto",
+            message: `${resolvedReport.equipment?.name || "Equipo"}${
+              resolvedReport.equipment?.code
+                ? ` (${resolvedReport.equipment.code})`
+                : ""
+            } · Reporte #${resolvedReport.id}`,
+            link: "/condition-reports?status=RESOLVED",
+          });
+        } catch (notifyErr) {
+          console.error("No se pudo notificar resolucion de reporte:", notifyErr);
+        }
+
+        sseHub.broadcast("condition-report.resolved", {
+          plantId,
+          reportId: resolvedReport.id,
+          equipmentId: resolvedReport.equipmentId,
+          status: resolvedReport.status,
+          resolvedAt: resolvedReport.resolvedAt,
+        });
+
+        sseHub.broadcast("condition-report.status-updated", {
+          plantId,
+          reportId: resolvedReport.id,
+          equipmentId: resolvedReport.equipmentId,
+          status: resolvedReport.status,
+        });
       }
 
       if (condition === "CRITICO") {
