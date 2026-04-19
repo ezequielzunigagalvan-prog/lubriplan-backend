@@ -1,4 +1,4 @@
-// src/ia/aiSchema.zod.js
+﻿// src/ia/aiSchema.zod.js
 import { z } from "zod";
 
 // Mantén esto chico al inicio. Luego crecemos.
