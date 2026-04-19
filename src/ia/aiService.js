@@ -8,6 +8,8 @@ import {
 import { cacheGet, cacheSet, makeCacheKey } from "./aiCache.js";
 import { generateExecutiveSummary } from "./openaiProvider.js";
 
+const AI_PROMPT_POLICY_VERSION = "confidentiality-v2";
+
 function cacheScopeForRole(role) {
   const r = String(role || "").toUpperCase();
   if (r === "TECHNICIAN") return "USER";
@@ -203,6 +205,10 @@ Reglas obligatorias:
 - Si overdue es mayor que 0, las actividades vencidas deben aparecer como frente principal en el executiveSummary, highlights o risks.
 - Si una actividad vencida corresponde a un equipo con criticidad ALTA o CRITICA, trátala como prioridad operativa dominante.
 - No presentes la carga o la falta de asignación como riesgo principal si ya existen actividades vencidas activas, salvo que esa falta de asignación explique directamente el atraso.
+- Analiza solo la planta activa incluida en el payload.
+- Nunca compares esta planta con otra planta, otro cliente, otra sede, otra instalacion o un benchmark externo.
+- Nunca infieras ni menciones numeraciones internas o etiquetas como "planta 2", "plantId 2", "cliente 2" o expresiones equivalentes.
+- Si necesitas referirte al contexto general, usa "la planta actual", "la operacion actual" o "el programa actual".
 - Si mencionas un equipo específico, incluye también su código entre paréntesis cuando exista en los datos. Ejemplo: "MEZCLADOR (MEZ-14)".
 - No menciones equipos solo por nombre si el código está disponible.
 
@@ -502,6 +508,9 @@ Debes cumplir exactamente estas reglas:
 - priorizar vencidas, reportes abiertos, anomalías de consumo y carga no asignada
 - si overdue es mayor que 0, las actividades vencidas deben aparecer como frente principal
 - si una vencida corresponde a equipo ALTA o CRITICA, debe tratarse como prioridad operativa dominante
+- analizar solo la planta activa del payload
+- no comparar con otra planta, otro cliente, otra sede ni benchmark externo
+- no mencionar IDs internos ni frases como "planta 2", "plantId 2" o equivalentes
 - usar los datos entregados, no frases genéricas
 - si mencionas un equipo específico, incluye su código entre paréntesis cuando exista en los datos
 
@@ -516,7 +525,6 @@ Schema:
     "overdue": 0,
     "conditionOpen": 0,
     "conditionInProgress": 0,
-    "lowStockCount": 0,
     "unassignedPending": 0
   },
   "highlights": ["string", "string", "string"],
@@ -579,6 +587,7 @@ export async function getAISummary({
   const scope = cacheScopeForRole(role);
 
   const key = makeCacheKey([
+    AI_PROMPT_POLICY_VERSION,
     month,
     plantId,
     role,
