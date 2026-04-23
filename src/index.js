@@ -4728,7 +4728,6 @@ app.put(
           id,
           plantId,
           name,
-          normalizedName,
           normalizedMethod,
           equipmentId,
           lubricantType,
