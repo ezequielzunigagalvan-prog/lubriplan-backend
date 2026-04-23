@@ -205,10 +205,11 @@ model Route {
 
   name           String
   normalizedName String
-  lubricantType  String
+  routeKind      String  @default("LUBRICATION")
+  lubricantType  String?
   lubricantName  String?
 
-  quantity Float
+  quantity Float?
   unit     String? @default("ml")
 
   pumpStrokeValue Float?

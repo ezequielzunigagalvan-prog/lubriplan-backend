@@ -413,6 +413,30 @@ app.options("*", cors(corsOptions));
       .trim();
   }
 
+  function normalizeRouteKind(value) {
+    const raw = String(value || "").trim().toUpperCase();
+    return raw === "INSPECTION" ? "INSPECTION" : "LUBRICATION";
+  }
+
+  function getRouteKindLabel(routeKind) {
+    return normalizeRouteKind(routeKind) === "INSPECTION"
+      ? "Inspección de"
+      : "Lubricación de";
+  }
+
+  function stripRouteKindLabel(value) {
+    return String(value || "")
+      .trim()
+      .replace(/^(inspecci[oó]n|lubricaci[oó]n)\s+de\s+/i, "")
+      .trim();
+  }
+
+  function buildRouteDisplayName(value, routeKind) {
+    const baseName = stripRouteKindLabel(value);
+    if (!baseName) return "";
+    return `${getRouteKindLabel(routeKind)} ${baseName}`.trim();
+  }
+
     /* ========= HELPERS ========= */
     function parseDateOrNull(value) {
     if (!value) return null;
@@ -3654,6 +3678,7 @@ app.get("/api/equipment/:id/detail", requireAuth, async (req, res) => {
               select: {
                 id: true,
                 name: true,
+                routeKind: true,
                 lubricantType: true,
                 nextDate: true,
               },
@@ -3719,6 +3744,26 @@ app.get("/api/equipment/:id/detail", requireAuth, async (req, res) => {
 
     const payload = {
       ...equipment,
+      routes: Array.isArray(equipment?.routes)
+        ? equipment.routes.map((route) => ({
+            ...route,
+            name: buildRouteDisplayName(route?.name, route?.routeKind),
+          }))
+        : [],
+      executions: Array.isArray(equipment?.executions)
+        ? equipment.executions.map((execution) => ({
+            ...execution,
+            route: execution?.route
+              ? {
+                  ...execution.route,
+                  name: buildRouteDisplayName(
+                    execution.route?.name,
+                    execution.route?.routeKind
+                  ),
+                }
+              : execution?.route || null,
+          }))
+        : [],
       routesCount: equipment._count?.routes || 0,
       executionsCount: equipment._count?.executions || 0,
       conditionReportsCount: equipment._count?.conditionReports || 0,
@@ -4239,6 +4284,7 @@ app.post(
 
       const {
         name,
+        routeKind,
         equipmentId,
         lubricantType,
         quantity,
@@ -4261,23 +4307,27 @@ app.post(
         imagePublicId,
       } = req.body;
 
-      if (
-        !name ||
-        !equipmentId ||
-        !lubricantType ||
-        quantity === undefined ||
-        frequencyDays === undefined
-      ) {
+      if (!name || !equipmentId || frequencyDays === undefined) {
         return res.status(400).json({
-          error: "name, equipmentId, lubricantType, quantity y frequencyDays son obligatorios",
+          error: "name, equipmentId y frequencyDays son obligatorios",
         });
       }
 
-      const q = Number(quantity);
+      const normalizedRouteKind = normalizeRouteKind(routeKind);
+      const finalRouteName = buildRouteDisplayName(name, normalizedRouteKind);
+      const requiresBaseConsumption = normalizedRouteKind === "LUBRICATION";
+      const q =
+        quantity === "" || quantity == null
+          ? null
+          : Number(quantity);
       const f = Number(frequencyDays);
       const eqId = Number(equipmentId);
 
-      if (!Number.isFinite(q) || q < 0) {
+      if (requiresBaseConsumption && (!Number.isFinite(q) || q < 0)) {
+        return res.status(400).json({ error: "quantity invalida" });
+      }
+
+      if (!requiresBaseConsumption && q != null && (!Number.isFinite(q) || q < 0)) {
         return res.status(400).json({ error: "quantity invalida" });
       }
 
@@ -4287,6 +4337,16 @@ app.post(
 
       if (!Number.isFinite(eqId) || eqId <= 0) {
         return res.status(400).json({ error: "equipmentId invalido" });
+      }
+
+      const finalLubricantType = String(lubricantType || "").trim() || null;
+
+      if (!finalRouteName) {
+        return res.status(400).json({ error: "name invalido" });
+      }
+
+      if (requiresBaseConsumption && !finalLubricantType) {
+        return res.status(400).json({ error: "lubricantType obligatorio para rutas de lubricacion" });
       }
 
       const unitNorm = String(unit || "ml").trim().toUpperCase();
@@ -4304,7 +4364,7 @@ app.post(
           ? null
           : String(pumpStrokeUnit).trim().toLowerCase();
 
-      if (unitNorm === "BOMBAZOS") {
+      if (unitNorm === "BOMBAZOS" && q != null) {
         if (!Number.isFinite(pumpStrokeValueNum) || pumpStrokeValueNum <= 0) {
           return res.status(400).json({ error: "pumpStrokeValue invalido para bombazos" });
         }
@@ -4433,8 +4493,14 @@ app.post(
         monthlyAnchorDay: monthlyAnchorDayNorm,
       });
 
-      const normalizedName = normalizeRouteName(name);
+      const normalizedName = normalizeRouteName(finalRouteName);
       const normalizedMethod = normalizeRouteMethod(method);
+      const finalUnit =
+        !requiresBaseConsumption && q == null
+          ? null
+          : unitNorm === "BOMBAZOS"
+          ? "BOMBAZOS"
+          : String(unit || "ml").trim().toLowerCase();
 
       const duplicatedRoute = await prisma.route.findFirst({
         where: {
@@ -4461,9 +4527,10 @@ app.post(
       const routeData = {
         plant: { connect: { id: plantId } },
 
-        name: String(name).trim().replace(/\s+/g, " "),
+        name: finalRouteName,
         normalizedName,
-        lubricantType,
+        routeKind: normalizedRouteKind,
+        lubricantType: finalLubricantType,
         quantity: q,
         frequencyDays: f,
         frequencyType: normalizedFrequencyType,
@@ -4478,9 +4545,9 @@ app.post(
           : undefined,
 
         lubricantName: lubIdNum ? null : lubricantName?.trim?.() || lubricantName || null,
-        unit: unitNorm === "BOMBAZOS" ? "BOMBAZOS" : String(unit || "ml").trim().toLowerCase(),
-        pumpStrokeValue: unitNorm === "BOMBAZOS" ? pumpStrokeValueNum : null,
-        pumpStrokeUnit: unitNorm === "BOMBAZOS" ? pumpStrokeUnitNorm : null,
+        unit: finalUnit,
+        pumpStrokeValue: unitNorm === "BOMBAZOS" && q != null ? pumpStrokeValueNum : null,
+        pumpStrokeUnit: unitNorm === "BOMBAZOS" && q != null ? pumpStrokeUnitNorm : null,
         method: normalizedMethod,
         points: pointsInt,
         instructions: instructions?.trim?.() || instructions || null,
@@ -4630,6 +4697,7 @@ app.put(
 
       const {
         name,
+        routeKind,
         lubricantType,
         lubricantName,
         quantity,
@@ -4652,7 +4720,6 @@ app.put(
         imagePublicId,
       } = req.body;
 
-      const normalizedName = normalizeRouteName(name);
       const normalizedMethod = normalizeRouteMethod(method);
 
       console.log(
@@ -4685,6 +4752,7 @@ app.put(
         where: { id, plantId },
         select: {
           id: true,
+          routeKind: true,
           imageUrl: true,
           imagePublicId: true,
         },
@@ -4694,17 +4762,27 @@ app.put(
         return res.status(404).json({ error: "Ruta no encontrada" });
       }
 
-      if (!name || !lubricantType || !equipmentId) {
+      if (!name || !equipmentId) {
         return res.status(400).json({
-          error: "name, lubricantType y equipmentId son obligatorios",
+          error: "name y equipmentId son obligatorios",
         });
       }
 
-      const q = Number(quantity);
+      const normalizedRouteKind = normalizeRouteKind(routeKind || existingRoute.routeKind);
+      const finalRouteName = buildRouteDisplayName(name, normalizedRouteKind);
+      const normalizedName = normalizeRouteName(finalRouteName);
+      const requiresBaseConsumption = normalizedRouteKind === "LUBRICATION";
+      const q =
+        quantity === "" || quantity == null
+          ? null
+          : Number(quantity);
       const f = Number(frequencyDays);
       const eqId = Number(equipmentId);
 
-      if (!Number.isFinite(q) || q < 0) {
+      if (requiresBaseConsumption && (!Number.isFinite(q) || q < 0)) {
+        return res.status(400).json({ error: "quantity invalida" });
+      }
+      if (!requiresBaseConsumption && q != null && (!Number.isFinite(q) || q < 0)) {
         return res.status(400).json({ error: "quantity invalida" });
       }
       if (!Number.isFinite(f) || f <= 0) {
@@ -4733,7 +4811,7 @@ app.put(
           ? null
           : String(pumpStrokeUnit).trim().toLowerCase();
 
-      if (unitNorm === "BOMBAZOS") {
+      if (unitNorm === "BOMBAZOS" && q != null) {
         if (!Number.isFinite(pumpStrokeValueNum) || pumpStrokeValueNum <= 0) {
           return res.status(400).json({
             error: "pumpStrokeValue invalido para bombazos",
@@ -4790,6 +4868,21 @@ app.put(
       const finalLubricantName = lubIdNum
         ? null
         : String(lubricantName || "").trim() || null;
+      const finalLubricantType = String(lubricantType || "").trim() || null;
+      const finalUnit =
+        !requiresBaseConsumption && q == null
+          ? null
+          : unitNorm === "BOMBAZOS"
+          ? "BOMBAZOS"
+          : toNullIfEmpty(unit)?.trim?.().toLowerCase() || "ml";
+
+      if (requiresBaseConsumption && !finalLubricantType) {
+        return res.status(400).json({ error: "lubricantType obligatorio para rutas de lubricacion" });
+      }
+
+      if (!finalRouteName) {
+        return res.status(400).json({ error: "name invalido" });
+      }
 
       const equipmentExists = await prisma.equipment.findFirst({
         where: { id: eqId, plantId },
@@ -4906,9 +4999,10 @@ app.put(
       const updatedCount = await prisma.route.updateMany({
         where: { id, plantId },
         data: {
-          name: String(name).trim().replace(/\s+/g, " "),
+          name: finalRouteName,
           normalizedName,
-          lubricantType,
+          routeKind: normalizedRouteKind,
+          lubricantType: finalLubricantType,
           lubricantName: finalLubricantName,
           quantity: q,
           frequencyDays: f,
@@ -4917,12 +5011,9 @@ app.put(
           monthlyAnchorDay:
             monthlyAnchorDayNorm ?? (parsedLast ? parsedLast.getDate() : null),
           customIntervalDays: null,
-          unit:
-            unitNorm === "BOMBAZOS"
-              ? "BOMBAZOS"
-              : toNullIfEmpty(unit)?.trim?.().toLowerCase() || "ml",
-          pumpStrokeValue: unitNorm === "BOMBAZOS" ? pumpStrokeValueNum : null,
-          pumpStrokeUnit: unitNorm === "BOMBAZOS" ? pumpStrokeUnitNorm : null,
+          unit: finalUnit,
+          pumpStrokeValue: unitNorm === "BOMBAZOS" && q != null ? pumpStrokeValueNum : null,
+          pumpStrokeUnit: unitNorm === "BOMBAZOS" && q != null ? pumpStrokeUnitNorm : null,
           method: normalizedMethod,
           points: pointsInt,
           instructions: toNullIfEmpty(instructions),
@@ -6530,6 +6621,7 @@ const executionBaseSelect = {
     select: {
       id: true,
       name: true,
+      routeKind: true,
       instructions: true,
       quantity: true,
       unit: true,
@@ -7102,10 +7194,13 @@ app.patch(
 
       const route = execution?.route || null;
       const isManual = String(execution?.origin || "").toUpperCase() === "MANUAL";
+      const isInspectionRoute =
+        String(route?.routeKind || "").trim().toUpperCase() === "INSPECTION";
       const routeLubricantId =
         route?.lubricantId != null ? Number(route.lubricantId) : null;
       const routeQty = Number(route?.quantity || 0);
-      const usesOptionalConsumption = isManual || !routeLubricantId || !(routeQty > 0);
+      const usesOptionalConsumption =
+        isManual || isInspectionRoute || !routeLubricantId || !(routeQty > 0);
 
       const usedQuantityRaw = req.body?.usedQuantity;
       const usedQuantity =
