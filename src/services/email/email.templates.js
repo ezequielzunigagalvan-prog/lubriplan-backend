@@ -313,11 +313,12 @@ export function monthlyExecutiveReportTemplate(payload) {
     opEfficiency,
     lowStock,
     unassigned,
+    conditionReported,
+    conditionAttended,
     conditionOpen,
     executiveSummary,
     highlights,
     recommendations,
-    risks,
     link,
   } = payload;
 
@@ -338,7 +339,9 @@ export function monthlyExecutiveReportTemplate(payload) {
       ${detailRow("Eficiencia operativa", `${Number(opEfficiency ?? 0)}%`)}
       ${detailRow("Lubricantes bajo stock", String(lowStock ?? 0))}
       ${detailRow("Pendientes sin técnico", String(unassigned ?? 0))}
-      ${detailRow("Condición abierta / en progreso", String(conditionOpen ?? 0))}
+      ${detailRow("Condiciones reportadas", String(conditionReported ?? 0))}
+      ${detailRow("Condiciones atendidas", String(conditionAttended ?? 0))}
+      ${detailRow("Condiciones activas", String(conditionOpen ?? 0))}
     </table>
 
     <div style="margin-top:22px;">
@@ -354,21 +357,14 @@ export function monthlyExecutiveReportTemplate(payload) {
       <div style="font-size:14px;font-weight:800;color:#0f172a;margin-bottom:8px;">
         Hallazgos clave
       </div>
-      ${renderList(highlights)}
-    </div>
-
-    <div style="margin-top:22px;">
-      <div style="font-size:14px;font-weight:800;color:#0f172a;margin-bottom:8px;">
-        Riesgos principales
-      </div>
-      ${renderRisks(risks)}
+      ${renderList(Array.isArray(highlights) ? highlights.slice(0, 3) : [])}
     </div>
 
     <div style="margin-top:22px;">
       <div style="font-size:14px;font-weight:800;color:#0f172a;margin-bottom:8px;">
         Recomendaciones
       </div>
-      ${renderList(recommendations)}
+      ${renderList(Array.isArray(recommendations) ? recommendations.slice(0, 3) : [])}
     </div>
   `;
 

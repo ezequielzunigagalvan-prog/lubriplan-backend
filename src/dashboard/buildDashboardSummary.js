@@ -46,6 +46,20 @@ function isBeforeTodayInTimezone(value, todayKey, timezone = DEFAULT_TIMEZONE) {
   return Boolean(valueKey) && Boolean(todayKey) && valueKey < todayKey;
 }
 
+function normalizeText(value, fallback = "") {
+  const text = String(value || "").trim();
+  return text || fallback;
+}
+
+function formatLubricantLabel(item) {
+  const name =
+    normalizeText(item?.name) ||
+    normalizeText(item?.lubricantName) ||
+    [normalizeText(item?.brand), normalizeText(item?.type)].filter(Boolean).join(" ");
+  const code = normalizeText(item?.code);
+  return code ? `${name} (${code})` : name || "Lubricante";
+}
+
 export async function buildDashboardSummary({
   prisma,
   user,
@@ -143,50 +157,52 @@ export async function buildDashboardSummary({
     prisma.execution.count({ where: completedPrevWhere }),
   ]);
 
+  const executionOpenSelect = {
+    id: true,
+    status: true,
+    scheduledAt: true,
+    technicianId: true,
+    manualTitle: true,
+    origin: true,
+    route: {
+      select: {
+        id: true,
+        name: true,
+        equipment: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+            criticality: true,
+            location: true,
+          },
+        },
+      },
+    },
+    equipment: {
+      select: {
+        id: true,
+        name: true,
+        code: true,
+        criticality: true,
+        location: true,
+      },
+    },
+    technician: {
+      select: {
+        id: true,
+        name: true,
+        code: true,
+      },
+    },
+  };
+
   const scheduledOpenExecs = await prisma.execution.findMany({
     where: scopeWhereByUser({
       scheduledAt: { gte: from, lte: to },
       status: { not: "COMPLETED" },
     }),
-    select: {
-      id: true,
-      status: true,
-      scheduledAt: true,
-      technicianId: true,
-      manualTitle: true,
-      origin: true,
-      route: {
-        select: {
-          id: true,
-          name: true,
-          equipment: {
-            select: {
-              id: true,
-              name: true,
-              code: true,
-              criticality: true,
-              location: true,
-            },
-          },
-        },
-      },
-      equipment: {
-        select: {
-          id: true,
-          name: true,
-          code: true,
-          criticality: true,
-          location: true,
-        },
-      },
-      technician: {
-        select: {
-          id: true,
-          name: true,
-          code: true,
-        },
-      },
-    },
+    select: executionOpenSelect,
   });
 
   const scheduledOpenPrevExecs = await prisma.execution.findMany({
@@ -664,6 +680,172 @@ export async function buildDashboardSummary({
     };
   });
 
+  const weekStart = new Date(today);
+  const weekEnd = new Date(today);
+  weekEnd.setDate(weekEnd.getDate() + 6);
+  const weekStartKey = dateKeyInTimezone(weekStart, plantTimezone);
+  const weekEndKey = dateKeyInTimezone(weekEnd, plantTimezone);
+  const weeklyOpenExecs = await prisma.execution.findMany({
+    where: scopeWhereByUser({
+      scheduledAt: { gte: weekStart, lte: weekEnd },
+      status: { not: "COMPLETED" },
+    }),
+    select: executionOpenSelect,
+  });
+
+  const overdueWeeklyExecs = await prisma.execution.findMany({
+    where: scopeWhereByUser({
+      scheduledAt: { lt: weekStart },
+      status: { not: "COMPLETED" },
+    }),
+    select: executionOpenSelect,
+  });
+
+  const weeklyDueExecs = weeklyOpenExecs.filter((e) => {
+    const scheduledKey = dateKeyInTimezone(e?.scheduledAt, plantTimezone);
+    return Boolean(scheduledKey) && scheduledKey >= weekStartKey && scheduledKey <= weekEndKey;
+  });
+
+  const weeklyOverdueExecs = overdueWeeklyExecs.filter((e) =>
+    isBeforeTodayInTimezone(e?.scheduledAt, todayKey, plantTimezone)
+  );
+
+  const weeklyCriticalExecs = weeklyDueExecs.filter((e) => {
+    const criticality = normalizeCondition(e?.route?.equipment?.criticality || e?.equipment?.criticality || "");
+    return criticality === "ALTA" || criticality === "CRITICO";
+  });
+
+  const weeklyUnassignedExecs = weeklyDueExecs.filter((e) => !e?.technicianId);
+
+  const weeklyTechnicianLoadMap = new Map();
+  for (const e of weeklyDueExecs) {
+    if (!e?.technicianId) continue;
+    const key = String(e.technicianId);
+    const prev = weeklyTechnicianLoadMap.get(key) || {
+      technicianId: e.technicianId,
+      technicianName: e?.technician?.name || "Tecnico",
+      technicianCode: e?.technician?.code || "",
+      assignedCount: 0,
+      criticalCount: 0,
+    };
+    prev.assignedCount += 1;
+    const criticality = normalizeCondition(e?.route?.equipment?.criticality || e?.equipment?.criticality || "");
+    if (criticality === "ALTA" || criticality === "CRITICO") prev.criticalCount += 1;
+    weeklyTechnicianLoadMap.set(key, prev);
+  }
+
+  const weeklyTechnicianFocus = [...weeklyTechnicianLoadMap.values()]
+    .sort((a, b) => {
+      if (toNum(b.criticalCount) !== toNum(a.criticalCount)) {
+        return toNum(b.criticalCount) - toNum(a.criticalCount);
+      }
+      return toNum(b.assignedCount) - toNum(a.assignedCount);
+    })
+    .find((item) => toNum(item.assignedCount) > 0) || null;
+
+  const weeklyEquipmentFocusSource =
+    weeklyOverdueExecs[0] || weeklyCriticalExecs[0] || weeklyDueExecs[0] || null;
+  const weeklyEquipmentFocus = weeklyEquipmentFocusSource
+    ? {
+        equipmentId:
+          weeklyEquipmentFocusSource?.route?.equipment?.id ||
+          weeklyEquipmentFocusSource?.equipment?.id ||
+          null,
+        equipmentName:
+          weeklyEquipmentFocusSource?.route?.equipment?.name ||
+          weeklyEquipmentFocusSource?.equipment?.name ||
+          "Equipo",
+        equipmentCode:
+          weeklyEquipmentFocusSource?.route?.equipment?.code ||
+          weeklyEquipmentFocusSource?.equipment?.code ||
+          "",
+        routeName:
+          weeklyEquipmentFocusSource?.route?.name ||
+          weeklyEquipmentFocusSource?.manualTitle ||
+          "Actividad",
+      }
+    : null;
+
+  const weeklyActions = [];
+  if (weeklyOverdueExecs.length > 0) {
+    weeklyActions.push(
+      `Cerrar ${weeklyOverdueExecs.length} atrasada(s) antes de expandir la carga semanal.`
+    );
+  }
+  if (weeklyUnassignedExecs.length > 0) {
+    weeklyActions.push(
+      `Asignar ${weeklyUnassignedExecs.length} actividad(es) sin tecnico dentro de la ventana de 7 dias.`
+    );
+  }
+  if (weeklyTechnicianFocus && weeklyTechnicianFocus.assignedCount >= 4) {
+    weeklyActions.push(
+      `Redistribuir la carga de ${normalizeText(weeklyTechnicianFocus.technicianName, "tecnico foco")} para sostener cumplimiento.`
+    );
+  }
+  if (weeklyActions.length === 0 && weeklyCriticalExecs.length > 0) {
+    weeklyActions.push("Proteger la ruta critica de la semana y evitar que entre en atraso.");
+  }
+  if (weeklyActions.length === 0) {
+    weeklyActions.push("Mantener la programacion semanal y revisar avance diario contra el plan.");
+  }
+
+  const weeklyPlan = {
+    overdueCount: weeklyOverdueExecs.length,
+    dueNext7DaysCount: weeklyDueExecs.length,
+    criticalNext7DaysCount: weeklyCriticalExecs.length,
+    unassignedNext7DaysCount: weeklyUnassignedExecs.length,
+    technicianFocus: weeklyTechnicianFocus,
+    equipmentFocus: weeklyEquipmentFocus,
+    actions: weeklyActions.slice(0, 3),
+  };
+
+  const supplyCritical = Array.isArray(predictive?.lubricantDaysToEmptyTop)
+    ? predictive.lubricantDaysToEmptyTop.find((item) => {
+        const risk = String(item?.risk || "").toUpperCase();
+        return risk === "HIGH" || risk === "MED";
+      }) || null
+    : null;
+  const supplyLow = Array.isArray(alerts?.lowStockTop) ? alerts.lowStockTop[0] || null : null;
+  const supplyFocus = supplyCritical || supplyLow || topLubricantsOut[0] || null;
+  const supplyMode = supplyCritical ? "DTE" : supplyLow ? "LOW_STOCK" : supplyFocus ? "DEMAND" : "CLEAR";
+
+  const supplySuggestion = {
+    mode: supplyMode,
+    lowStockCount: Array.isArray(alerts?.lowStockTop) ? alerts.lowStockTop.length : 0,
+    riskNextDaysCount: Array.isArray(predictive?.lubricantDaysToEmptyTop)
+      ? predictive.lubricantDaysToEmptyTop.length
+      : 0,
+    focus: supplyFocus
+      ? {
+          lubricantId: supplyFocus?.lubricantId || supplyFocus?.id || null,
+          label: formatLubricantLabel(supplyFocus),
+          stock: supplyFocus?.stock ?? null,
+          minStock: supplyFocus?.minStock ?? null,
+          unit: normalizeText(supplyFocus?.unit),
+          gap: supplyFocus?.gap ?? null,
+          daysToEmpty: supplyFocus?.daysToEmpty ?? supplyFocus?.dte ?? null,
+          avgDailyOut: supplyFocus?.avgDailyOut ?? null,
+          consumed: supplyFocus?.consumed ?? null,
+        }
+      : null,
+    actions:
+      supplyMode === "DTE" && supplyFocus
+        ? [
+            `Programar reposicion de ${formatLubricantLabel(supplyFocus)} antes del siguiente frente semanal.`,
+            `Revisar salida media de ${toNum(supplyFocus?.avgDailyOut).toFixed(2)} ${normalizeText(supplyFocus?.unit, "u")}/dia y validar cobertura real.`,
+          ]
+        : supplyMode === "LOW_STOCK" && supplyFocus
+        ? [
+            `Restablecer minimo operativo de ${formatLubricantLabel(supplyFocus)} para recuperar margen de seguridad.`,
+            "Confirmar consumo reciente por ruta y equipo antes de cerrar la semana.",
+          ]
+        : supplyMode === "DEMAND" && supplyFocus
+        ? [
+            `Monitorear consumo de ${formatLubricantLabel(supplyFocus)} y sostener la cobertura del plan semanal.`,
+          ]
+        : ["Inventario estable para la ventana semanal actual."],
+  };
+
   const trends = {
     completedDelta: completed - completedPrev,
     pendingDelta: pendingDue - pendingPrev,
@@ -702,6 +884,8 @@ export async function buildDashboardSummary({
     trends,
     alerts,
     predictive,
+    weeklyPlan,
+    supplySuggestion,
     priorities: {
       overdueTop,
       unassignedPendingTop,

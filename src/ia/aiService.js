@@ -8,7 +8,7 @@ import {
 import { cacheGet, cacheSet, makeCacheKey } from "./aiCache.js";
 import { generateExecutiveSummary } from "./openaiProvider.js";
 
-const AI_PROMPT_POLICY_VERSION = "confidentiality-v2";
+const AI_PROMPT_POLICY_VERSION = "confidentiality-v3-entities";
 
 function cacheScopeForRole(role) {
   const r = String(role || "").toUpperCase();
@@ -34,6 +34,13 @@ function normalizeRiskLevel(level) {
   const s = String(level || "").toUpperCase().trim();
   if (["LOW", "MEDIUM", "HIGH", "CRITICAL"].includes(s)) return s;
   return "MEDIUM";
+}
+
+function markAiEntity(label, code = "") {
+  const name = String(label || "").trim();
+  const ref = String(code || "").trim();
+  const full = name ? `${name}${ref ? ` (${ref})` : ""}` : ref;
+  return full ? `[[${full}]]` : "";
 }
 
 function getModelLabel() {
@@ -211,6 +218,10 @@ Reglas obligatorias:
 - Si necesitas referirte al contexto general, usa "la planta actual", "la operacion actual" o "el programa actual".
 - Si mencionas un equipo específico, incluye también su código entre paréntesis cuando exista en los datos. Ejemplo: "MEZCLADOR (MEZ-14)".
 - No menciones equipos solo por nombre si el código está disponible.
+- Cuando menciones un equipo, técnico o lubricante específico, envuelve la entidad exacta entre [[ y ]].
+- Ejemplos válidos: [[PULIDORA DOBLE (PUL-03)]], [[Raúl Ortiz (LUB-02)]], [[Shell Tellus 68 (S-2312)]].
+- Usa ese formato solo en entidades reales presentes en el payload. No resaltes palabras genéricas.
+- En "risks", no repitas literalmente un hallazgo. Resume solo el impacto si no se actúa hoy, en una frase corta y diferente.
 
 Qué debes priorizar al analizar:
 1. Actividades vencidas en equipos con criticidad ALTA o CRITICA.
@@ -293,7 +304,7 @@ function fallbackSummary({ month, plantId, dashboard }) {
   if (overdue > 0) {
     highlights.push(
       topOverdueIsCritical
-        ? `La principal presión operativa está en actividades vencidas sobre equipo crítico, encabezadas por ${topOverdue.equipmentName}${topOverdue.equipmentCode ? ` (${topOverdue.equipmentCode})` : ""}.`
+        ? `La principal presión operativa está en actividades vencidas sobre equipo crítico, encabezadas por ${markAiEntity(topOverdue.equipmentName, topOverdue.equipmentCode)}.`
         : overdueDelta > 0
           ? "Las actividades vencidas siguen siendo el principal foco y además crecieron vs el periodo anterior."
           : "Las actividades vencidas se mantienen como la principal fricción operativa del periodo."
@@ -302,7 +313,7 @@ function fallbackSummary({ month, plantId, dashboard }) {
 
   if (topCondition) {
     highlights.push(
-      `El mayor riesgo técnico está concentrado en ${topCondition.equipmentName}${topCondition.equipmentCode ? ` (${topCondition.equipmentCode})` : ""}, con reporte ${String(topCondition.condition || "").toUpperCase()} ${topCondition.status === "OPEN" ? "aún abierto" : "en atención"}.`
+      `El mayor riesgo técnico está concentrado en ${markAiEntity(topCondition.equipmentName, topCondition.equipmentCode)}, con reporte ${String(topCondition.condition || "").toUpperCase()} ${topCondition.status === "OPEN" ? "aún abierto" : "en atención"}.`
     );
   }
 
@@ -333,8 +344,8 @@ function fallbackSummary({ month, plantId, dashboard }) {
       level: topOverdueIsCritical || overdue >= 5 ? "HIGH" : "MEDIUM",
       message: topOverdue
         ? topOverdueIsCritical
-          ? `Hay actividades vencidas en equipo crítico y la más sensible corresponde a ${topOverdue.equipmentName}${topOverdue.equipmentCode ? ` (${topOverdue.equipmentCode})` : ""}, con ${toNum(topOverdue.overdueDays)} días de atraso.`
-          : `Hay actividades vencidas y la más sensible corresponde a ${topOverdue.equipmentName}${topOverdue.equipmentCode ? ` (${topOverdue.equipmentCode})` : ""}, con ${toNum(topOverdue.overdueDays)} días de atraso.`
+          ? `Hay actividades vencidas en equipo crítico y la más sensible corresponde a ${markAiEntity(topOverdue.equipmentName, topOverdue.equipmentCode)}, con ${toNum(topOverdue.overdueDays)} días de atraso.`
+          : `Hay actividades vencidas y la más sensible corresponde a ${markAiEntity(topOverdue.equipmentName, topOverdue.equipmentCode)}, con ${toNum(topOverdue.overdueDays)} días de atraso.`
         : `Hay ${overdue} actividades vencidas que ya comprometen cumplimiento operativo.`,
       action: topOverdueIsCritical
         ? "Atender hoy mismo las vencidas del equipo crítico, asignar responsable y cerrar la recuperación antes de tomar frentes secundarios."
@@ -348,7 +359,7 @@ function fallbackSummary({ month, plantId, dashboard }) {
         String(topCondition.condition || "").toUpperCase() === "CRITICO"
           ? "CRITICAL"
           : "HIGH",
-      message: `Existe riesgo técnico en ${topCondition.equipmentName}${topCondition.equipmentCode ? ` (${topCondition.equipmentCode})` : ""} por condición ${String(topCondition.condition || "").toUpperCase()} en estado ${topCondition.status}.`,
+      message: `Existe riesgo técnico en ${markAiEntity(topCondition.equipmentName, topCondition.equipmentCode)} por condición ${String(topCondition.condition || "").toUpperCase()} en estado ${topCondition.status}.`,
       action: "Atender primero ese equipo, validar condición real y definir acción correctiva con fecha compromiso.",
     });
   }
@@ -376,12 +387,12 @@ function fallbackSummary({ month, plantId, dashboard }) {
   const recommendations = [
     overdue > 0
       ? topOverdueIsCritical
-        ? `Cerrar primero las vencidas asociadas a ${topOverdue.equipmentName}${topOverdue.equipmentCode ? ` (${topOverdue.equipmentCode})` : ""} antes de liberar capacidad a otros frentes.`
+        ? `Cerrar primero las vencidas asociadas a ${markAiEntity(topOverdue.equipmentName, topOverdue.equipmentCode)} antes de liberar capacidad a otros frentes.`
         : "Cerrar primero el bloque de actividades vencidas con mayor criticidad, atraso y falta de asignación."
       : "Sostener el cumplimiento del plan semanal evitando que pendientes migren a vencidas.",
 
     topCondition
-      ? `Resolver el frente técnico de ${topCondition.equipmentName}${topCondition.equipmentCode ? ` (${topCondition.equipmentCode})` : ""} antes de ampliar carga en otros equipos.`
+      ? `Resolver el frente técnico de ${markAiEntity(topCondition.equipmentName, topCondition.equipmentCode)} antes de ampliar carga en otros equipos.`
       : "Cerrar reportes OPEN e IN_PROGRESS con responsable, fecha compromiso y criterio de cierre.",
 
     anomalyCount > 0 || predictiveSignalsCount > 0
@@ -410,7 +421,7 @@ function fallbackSummary({ month, plantId, dashboard }) {
     executiveSummary:
       overdue > 0
         ? topOverdueIsCritical
-          ? `El principal riesgo operativo está en actividades vencidas sobre equipo crítico, encabezadas por ${topOverdue.equipmentName}${topOverdue.equipmentCode ? ` (${topOverdue.equipmentCode})` : ""}. La ejecución debe recuperar ese frente antes de atender carga secundaria o señales de apoyo.`
+          ? `El principal riesgo operativo está en actividades vencidas sobre equipo crítico, encabezadas por ${markAiEntity(topOverdue.equipmentName, topOverdue.equipmentCode)}. La ejecución debe recuperar ese frente antes de atender carga secundaria o señales de apoyo.`
           : "El principal riesgo operativo está en las actividades vencidas, que ya deben recuperarse antes de atender carga secundaria. La ejecución debe enfocarse primero en cerrar atraso para proteger cumplimiento y disponibilidad."
         : predictiveSignalsCount > 0
           ? "Se detectan riesgos operativos que requieren priorización inmediata, especialmente en reportes abiertos y señales predictivas de consumo. La ejecución debe enfocarse en los frentes con mayor impacto operativo."
@@ -513,6 +524,8 @@ Debes cumplir exactamente estas reglas:
 - no mencionar IDs internos ni frases como "planta 2", "plantId 2" o equivalentes
 - usar los datos entregados, no frases genéricas
 - si mencionas un equipo específico, incluye su código entre paréntesis cuando exista en los datos
+- si mencionas un equipo, técnico o lubricante específico, envuélvelo entre [[ y ]]
+- no dupliques en risks lo que ya dijiste en highlights; en risks resume impacto potencial en una frase corta
 
 Schema:
 {

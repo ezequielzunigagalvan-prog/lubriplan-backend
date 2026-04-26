@@ -169,11 +169,24 @@ export async function runMonthlyExecutiveReportJob({
 
       const mt = dashboard?.monthlyTotals || dashboard?.activities || {};
       const alerts = dashboard?.alerts || {};
+      const conditionReports =
+        dashboard?.activities?.conditionReports ||
+        mt?.conditionReports ||
+        {};
 
       const completed = Number(mt.completed || 0);
       const pending = Number(mt.pending || 0);
       const overdue = Number(mt.overdue || 0);
       const total = Number(mt.total || completed + pending + overdue || 0);
+      const conditionReported =
+        Number(conditionReports.OPEN || 0) +
+        Number(conditionReports.IN_PROGRESS || 0) +
+        Number(conditionReports.RESOLVED || 0) +
+        Number(conditionReports.DISMISSED || 0);
+      const conditionAttended =
+        Number(conditionReports.IN_PROGRESS || 0) +
+        Number(conditionReports.RESOLVED || 0) +
+        Number(conditionReports.DISMISSED || 0);
 
       const compliance = safePct(completed, total);
       const penalty = total > 0 ? Math.round((overdue / total) * 100) : 0;
@@ -206,6 +219,8 @@ export async function runMonthlyExecutiveReportJob({
           opEfficiency,
           lowStock: Number(alerts?.lowStockCount || 0),
           unassigned: Number(alerts?.unassignedPending || 0),
+          conditionReported,
+          conditionAttended,
           conditionOpen:
             Number(alerts?.conditionOpenCount || 0) +
             Number(alerts?.conditionInProgressCount || 0),

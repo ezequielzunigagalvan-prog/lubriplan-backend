@@ -5724,6 +5724,32 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
     }
   });
 
+  const startOfLocalMonth = (value) => {
+    const d = new Date(value);
+    d.setDate(1);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  };
+
+  const monthBucketKey = (value) => {
+    const d = new Date(value);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  };
+
+  const buildMonthKeysInclusive = (fromDate, toDate) => {
+    const start = startOfLocalMonth(fromDate);
+    const end = startOfLocalMonth(toDate);
+    const keys = [];
+    let cursor = new Date(start);
+
+    while (cursor <= end) {
+      keys.push(monthBucketKey(cursor));
+      cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1, 0, 0, 0, 0);
+    }
+
+    return keys;
+  };
+
   /* =========================================================
     ANALYTICS: SUMMARY
     GET /analytics/summary?days=180&kind=ACEITE|GRASA|ALL&lubricantId=123
@@ -5747,14 +5773,21 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
       return res.status(400).json({ error: "lubricantId invalido" });
     }
 
-    const from = new Date();
+    const now = new Date();
+    const from = new Date(now);
     from.setDate(from.getDate() - days);
+
+    const minTrendFrom = new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0, 0);
+    const trendFrom =
+      startOfLocalMonth(from).getTime() <= minTrendFrom.getTime()
+        ? startOfLocalMonth(from)
+        : minTrendFrom;
 
     const executions = await prisma.execution.findMany({
       where: {
         plantId,
         status: "COMPLETED",
-        executedAt: { not: null, gte: from },
+        executedAt: { not: null, gte: trendFrom },
       },
       select: {
         id: true,
@@ -5807,10 +5840,14 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
       try {
         if (!executionMatchesAnalyticsFilters(ex, { kind, lubricantId })) continue;
 
+        const executedAt = ex.executedAt ? new Date(ex.executedAt) : null;
+        if (!executedAt || Number.isNaN(executedAt.getTime())) continue;
+
         const cons = resolveExecutionConsumptionForAnalytics(ex);
         const comparable = Number(cons.comparableBaseQuantity || 0);
         if (!(comparable > 0)) continue;
 
+        const inWindow = executedAt >= from;
         const eq = ex?.route?.equipment || ex?.equipment || null;
         const eqId = eq?.id ?? ex?.equipmentId ?? ex?.route?.equipmentId ?? null;
 
@@ -5821,7 +5858,7 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
         const lubId =
           lub?.id ?? ex?.route?.lubricantId ?? movement?.lubricantId ?? null;
 
-        if (eqId) {
+        if (inWindow && eqId) {
           if (!byEquipment.has(eqId)) {
             byEquipment.set(eqId, {
               id: eqId,
@@ -5856,7 +5893,7 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
           }
         }
 
-        if (lubId) {
+        if (inWindow && lubId) {
           if (!byLubricant.has(lubId)) {
             byLubricant.set(lubId, {
               id: lubId,
@@ -5890,8 +5927,8 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
           }
         }
 
-        if (ex.executedAt) {
-          const mk = monthKey(ex.executedAt);
+        if (executedAt >= trendFrom) {
+          const mk = monthBucketKey(executedAt);
           if (!byMonth.has(mk)) byMonth.set(mk, 0);
           byMonth.set(mk, Number(byMonth.get(mk) || 0) + comparable);
         }
@@ -5947,9 +5984,10 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
       [...byLubricant.values()].sort((a, b) => Number(b.totalBaseQuantity || 0) - Number(a.totalBaseQuantity || 0))[0] || null
     );
 
-    const monthsSorted = [...byMonth.entries()]
-      .sort((a, b) => String(a[0]).localeCompare(String(b[0])))
-      .map(([month, total]) => ({ month, total: round2(total) }));
+    const monthsSorted = buildMonthKeysInclusive(trendFrom, now).map((month) => ({
+      month,
+      total: round2(Number(byMonth.get(month) || 0)),
+    }));
 
     const last = monthsSorted[monthsSorted.length - 1]?.total ?? 0;
     const prev = monthsSorted[monthsSorted.length - 2]?.total ?? null;
@@ -6220,14 +6258,20 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
       return res.status(400).json({ error: "lubricantId invalido" });
     }
 
-    const from = new Date();
+    const now = new Date();
+    const from = new Date(now);
     from.setDate(from.getDate() - days);
+    const minChartFrom = new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0, 0);
+    const chartFrom =
+      startOfLocalMonth(from).getTime() <= minChartFrom.getTime()
+        ? startOfLocalMonth(from)
+        : minChartFrom;
 
     const where = {
       type: { in: ["SALIDA", "OUT"] },
       OR: [
-        { createdAt: { gte: from } },
-        { execution: { is: { executedAt: { gte: from } } } },
+        { createdAt: { gte: chartFrom } },
+        { execution: { is: { executedAt: { gte: chartFrom } } } },
       ],
       ...(lubricantId != null ? { lubricantId } : {}),
       lubricant: {
@@ -6262,21 +6306,19 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
       orderBy: { createdAt: "asc" },
     });
 
-    const byMonth = {};
+    const byMonth = new Map();
 
     for (const mv of mvs) {
       const d = new Date(mv.execution?.executedAt || mv.createdAt);
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      const key = monthBucketKey(d);
       const qBase = toBaseQuantity(mv.quantity, mv?.lubricant?.unit);
-      byMonth[key] = (byMonth[key] || 0) + qBase;
+      byMonth.set(key, Number(byMonth.get(key) || 0) + qBase);
     }
 
-    const series = Object.keys(byMonth)
-      .sort()
-      .map((k) => ({
-        month: k,
-        total: byMonth[k],
-      }));
+    const series = buildMonthKeysInclusive(chartFrom, now).map((month) => ({
+      month,
+      total: Number(byMonth.get(month) || 0),
+    }));
 
     return res.json({
       ok: true,
@@ -6349,32 +6391,58 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
 
       const daysRaw = Number(req.query.days ?? 90);
       const days = Number.isFinite(daysRaw) ? Math.min(Math.max(daysRaw, 1), 3650) : 90;
+      const severityRaw = String(req.query.severity ?? "ALL").toUpperCase();
+      const severity =
+        severityRaw === "CRITICO" || severityRaw === "MALO" ? severityRaw : "ALL";
+
       const from = new Date();
       from.setDate(from.getDate() - days);
+      const prevFrom = new Date(from);
+      prevFrom.setDate(prevFrom.getDate() - days);
 
-      const badExecs = await prisma.execution.findMany({
-        where: {
-          plantId,
-          status: "COMPLETED",
-          executedAt: { gte: from },
-          condition: { in: ["MALO", "CRITICO"] },
-        },
-        select: {
-          executedAt: true,
-          condition: true,
-          route: {
-            select: {
-              equipmentId: true,
-              equipment: {
-                select: { id: true, name: true, code: true, location: true },
-              },
+      const conditionFilter =
+        severity === "CRITICO"
+          ? ["CRITICO"]
+          : severity === "MALO"
+          ? ["MALO"]
+          : ["MALO", "CRITICO"];
+
+      const selectShape = {
+        executedAt: true,
+        condition: true,
+        route: {
+          select: {
+            equipmentId: true,
+            equipment: {
+              select: { id: true, name: true, code: true, location: true },
             },
           },
-          equipment: {
-            select: { id: true, name: true, code: true, location: true },
-          },
         },
-      });
+        equipment: {
+          select: { id: true, name: true, code: true, location: true },
+        },
+      };
+
+      const [badExecs, prevExecs] = await Promise.all([
+        prisma.execution.findMany({
+          where: {
+            plantId,
+            status: "COMPLETED",
+            executedAt: { gte: from },
+            condition: { in: conditionFilter },
+          },
+          select: selectShape,
+        }),
+        prisma.execution.findMany({
+          where: {
+            plantId,
+            status: "COMPLETED",
+            executedAt: { gte: prevFrom, lt: from },
+            condition: { in: conditionFilter },
+          },
+          select: selectShape,
+        }),
+      ]);
 
       const byEquipment = new Map();
       for (const ex of badExecs) {
@@ -6387,11 +6455,14 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
             equipmentId: eq.id,
             equipmentName: eq.name,
             equipmentCode: eq.code || null,
+            name: eq.name,
+            code: eq.code || null,
             location: eq.location || null,
             badCount: 0,
             criticalCount: 0,
             total: 0,
             lastFailureAt: null,
+            deltaTotal: 0,
           });
         }
 
@@ -6405,12 +6476,39 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
         if (ts > currentTs) row.lastFailureAt = ex.executedAt;
       }
 
+      const prevByEquipment = new Map();
+      let prevTotals = { total: 0, critico: 0, malo: 0 };
+      for (const ex of prevExecs) {
+        const eq = ex.route?.equipment || ex.equipment;
+        const eqId = ex.route?.equipmentId ?? ex.equipment?.id;
+        if (!eq || !eqId) continue;
+
+        prevByEquipment.set(eqId, Number(prevByEquipment.get(eqId) || 0) + 1);
+        prevTotals.total += 1;
+        if (String(ex.condition).toUpperCase() === "CRITICO") prevTotals.critico += 1;
+        else prevTotals.malo += 1;
+      }
+
+      for (const [eqId, row] of byEquipment.entries()) {
+        row.deltaTotal = row.total - Number(prevByEquipment.get(eqId) || 0);
+      }
+
       const items = Array.from(byEquipment.values()).sort((a, b) => {
         if (b.total !== a.total) return b.total - a.total;
         return new Date(b.lastFailureAt || 0).getTime() - new Date(a.lastFailureAt || 0).getTime();
       });
 
-      return res.json({ ok: true, plantId, days, items });
+      return res.json({
+        ok: true,
+        plantId,
+        days,
+        severity,
+        items,
+        meta: {
+          updatedAt: new Date().toISOString(),
+          prevTotals,
+        },
+      });
     } catch (e) {
       console.error("Error analytics failures-by-equipment:", e);
       return res.status(500).json({ error: "Error analytics failures-by-equipment" });
@@ -6422,16 +6520,29 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
       const plantId = req.currentPlantId;
       if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
 
-      const monthsRaw = Number(req.query.months ?? 6);
-      const months = Number.isFinite(monthsRaw) ? Math.min(Math.max(monthsRaw, 1), 24) : 6;
-      const start = new Date();
-      start.setMonth(start.getMonth() - (months - 1), 1);
-      start.setHours(0, 0, 0, 0);
+      const yearRaw = Number(req.query.year ?? new Date().getFullYear());
+      const year = Number.isFinite(yearRaw) ? yearRaw : new Date().getFullYear();
+      const technicianIdRaw = req.query.techId;
+      const technicianId =
+        technicianIdRaw == null || String(technicianIdRaw).trim() === ""
+          ? null
+          : Number(technicianIdRaw);
+
+      if (technicianId != null && !Number.isFinite(technicianId)) {
+        return res.status(400).json({ error: "techId invalido" });
+      }
+
+      const start = new Date(year, 0, 1, 0, 0, 0, 0);
+      const end = new Date(year + 1, 0, 1, 0, 0, 0, 0);
 
       const execs = await prisma.execution.findMany({
         where: {
           plantId,
-          OR: [{ scheduledAt: { gte: start } }, { executedAt: { gte: start } }],
+          ...(technicianId != null ? { technicianId } : {}),
+          OR: [
+            { scheduledAt: { gte: start, lt: end } },
+            { executedAt: { gte: start, lt: end } },
+          ],
         },
         select: {
           status: true,
@@ -6443,8 +6554,8 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
       const buckets = new Map();
       const keyFor = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 
-      for (let i = 0; i < months; i += 1) {
-        const d = new Date(start.getFullYear(), start.getMonth() + i, 1);
+      for (let i = 0; i < 12; i += 1) {
+        const d = new Date(year, i, 1);
         buckets.set(keyFor(d), {
           month: keyFor(d),
           scheduled: 0,
@@ -6468,7 +6579,13 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
         }
       }
 
-      return res.json({ ok: true, plantId, items: Array.from(buckets.values()) });
+      return res.json({
+        ok: true,
+        plantId,
+        year,
+        technicianId,
+        items: Array.from(buckets.values()),
+      });
     } catch (e) {
       console.error("Error analytics executions/monthly:", e);
       return res.status(500).json({ error: "Error analytics executions/monthly" });
@@ -6480,46 +6597,85 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
       const plantId = req.currentPlantId;
       if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
 
+      const daysRaw = Number(req.query.days ?? 180);
+      const days = Number.isFinite(daysRaw) ? Math.min(Math.max(daysRaw, 1), 3650) : 180;
+      const technicianIdRaw = req.query.techId;
+      const technicianId =
+        technicianIdRaw == null || String(technicianIdRaw).trim() === ""
+          ? null
+          : Number(technicianIdRaw);
+
+      if (technicianId != null && !Number.isFinite(technicianId)) {
+        return res.status(400).json({ error: "techId invalido" });
+      }
+
       const now = new Date();
       const monthStart = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
       const today = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
       const last30 = new Date(now);
       last30.setDate(last30.getDate() - 30);
+      const from = new Date(now);
+      from.setDate(from.getDate() - days);
 
-      const [pending, overdue, completedMonth, completed30d] = await Promise.all([
-        prisma.execution.count({ where: { plantId, status: "PENDING" } }),
+      const baseWhere = {
+        plantId,
+        ...(technicianId != null ? { technicianId } : {}),
+      };
+
+      const [pending, overdue, completedMonth, completed30d, scheduledWindow] = await Promise.all([
         prisma.execution.count({
           where: {
-            plantId,
-            status: { in: ["PENDING", "OVERDUE"] },
-            scheduledAt: { lt: today },
+            ...baseWhere,
+            status: "PENDING",
+            scheduledAt: { gte: today },
           },
         }),
         prisma.execution.count({
           where: {
-            plantId,
+            ...baseWhere,
+            status: { in: ["PENDING", "OVERDUE"] },
+            scheduledAt: { gte: from, lt: today },
+          },
+        }),
+        prisma.execution.count({
+          where: {
+            ...baseWhere,
             status: "COMPLETED",
             executedAt: { gte: monthStart },
           },
         }),
         prisma.execution.count({
           where: {
-            plantId,
+            ...baseWhere,
             status: "COMPLETED",
             executedAt: { gte: last30 },
           },
         }),
+        prisma.execution.count({
+          where: {
+            ...baseWhere,
+            scheduledAt: { gte: from },
+          },
+        }),
       ]);
+
+      const totalScheduled = scheduledWindow;
+      const completionRate = totalScheduled > 0 ? (completedMonth / totalScheduled) * 100 : 0;
 
       return res.json({
         ok: true,
         plantId,
-        summary: {
-          pending,
-          overdue,
-          completedMonth,
-          completed30d,
-        },
+        days,
+        technicianId,
+        totalScheduled,
+        completed: completedMonth,
+        completed30d,
+        onTime: completedMonth,
+        late: 0,
+        pendingDue: pending,
+        overdue,
+        completionRate: round2(completionRate),
+        onTimeRate: round2(completionRate),
       });
     } catch (e) {
       console.error("Error analytics executions/summary:", e);
