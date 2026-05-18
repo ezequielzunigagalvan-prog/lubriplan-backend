@@ -63,12 +63,13 @@ model User {
   technician   Technician? @relation("UserTechnician", fields: [technicianId], references: [id], onDelete: SetNull)
 
   notifications    Notification[]
-  conditionReports ConditionReport[] // inversa de ConditionReport.reportedBy
+  conditionReports ConditionReport[]
   dismissedConditionReports ConditionReport[] @relation("ConditionReportDismissedBy")
   requestedPurchaseOrders PurchaseOrder[] @relation("PORequester")
   approvedPurchaseOrders  PurchaseOrder[] @relation("POApprover")
+  auditLogs    AuditLog[]
 
-   userPlants UserPlant[]
+  userPlants UserPlant[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -492,6 +493,7 @@ model Plant {
   purchaseOrders   PurchaseOrder[]
   oilSamples       OilSample[]
   webhookEndpoints WebhookEndpoint[]
+  auditLogs        AuditLog[]
 }
 
 model UserPlant {
@@ -616,16 +618,19 @@ model AuditLog {
   userId    Int?
   userEmail String?
 
-  action   String  // CREATE | UPDATE | DELETE
-  model    String  // Route | Equipment | Lubricant | Technician | ...
-  recordId Int
-  changes  Json?   // { before: {}, after: {} }
+  action   String   // CREATE | UPDATE | DELETE
+  model    String   // Route | Equipment | Lubricant | Technician | ...
+  recordId String?
+  changes  Json?    // { before: {}, after: {} }
 
   ip        String?
   createdAt DateTime @default(now())
 
+  plant Plant? @relation(fields: [plantId], references: [id], onDelete: SetNull)
+  user  User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
+
   @@index([plantId])
-  @@index([model, recordId])
+  @@index([model])
   @@index([userId])
   @@index([createdAt])
 }
