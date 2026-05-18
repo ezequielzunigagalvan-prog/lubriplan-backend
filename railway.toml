@@ -1,0 +1,5 @@
+[build]
+buildCommand = "npm run db:deploy"
+
+[deploy]
+startCommand = "npm start"
