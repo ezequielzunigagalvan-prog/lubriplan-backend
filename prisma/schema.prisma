@@ -65,6 +65,8 @@ model User {
   notifications    Notification[]
   conditionReports ConditionReport[] // inversa de ConditionReport.reportedBy
   dismissedConditionReports ConditionReport[] @relation("ConditionReportDismissedBy")
+  requestedPurchaseOrders PurchaseOrder[] @relation("PORequester")
+  approvedPurchaseOrders  PurchaseOrder[] @relation("POApprover")
 
    userPlants UserPlant[]
 
@@ -83,6 +85,7 @@ model Technician {
   specialty String
   status    String    @default("Activo")
   createdAt DateTime  @default(now())
+  updatedAt DateTime  @default(now()) @updatedAt
   deletedAt DateTime?
 
   executions Execution[]
@@ -128,8 +131,10 @@ model Equipment {
   criticality String?
 
   conditionReports ConditionReport[]
+  oilSamples       OilSample[]
 
   createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   routes     Route[]
   executions Execution[]
@@ -159,8 +164,20 @@ model Lubricant {
   supplier String?
   unitCost Float?
 
+  // Ficha técnica
+  isoVg            String?
+  nlgiGrade        String?
+  baseType         String?   // MINERAL | SINTETICO | SEMISINT
+  operatingTempMin Float?
+  operatingTempMax Float?
+  sdsUrl           String?
+  sdsPublicId      String?
+  compatibility    String?   // texto libre o JSON con IDs compatibles
+
   routes Route[] @relation("LubricantRoutes")
   movements LubricantMovement[]
+  oilSamples OilSample[]
+  purchaseOrderItems PurchaseOrderItem[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -245,6 +262,9 @@ model Route {
 
   executions Execution[]
 
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
   @@index([plantId])
   @@index([equipmentId])
   @@index([lubricantId])
@@ -297,6 +317,12 @@ model Execution {
 
   inventoryDeductedAt DateTime?
 
+  // Clave de idempotencia para operaciones offline. El cliente genera un UUID v4 y lo envía en el body.
+  clientId String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
   @@index([plantId])
   @@index([routeId])
   @@index([equipmentId])
@@ -338,6 +364,31 @@ enum ConditionReportCategory {
 
 enum ScheduledJobType {
   MONTHLY_EXEC_REPORT
+  OVERDUE_SUMMARY
+}
+
+enum PurchaseOrderStatus {
+  DRAFT
+  REQUESTED
+  APPROVED
+  RECEIVED
+  CANCELLED
+}
+
+enum OilSampleStatus {
+  PENDING
+  NORMAL
+  CAUTION
+  CRITICAL
+}
+
+enum WebhookEvent {
+  EXECUTION_COMPLETED
+  CONDITION_REPORT_CREATED
+  LUBRICANT_LOW_STOCK
+  OIL_SAMPLE_ALERT
+  PURCHASE_ORDER_APPROVED
+  PURCHASE_ORDER_RECEIVED
 }
 
 model ConditionReport {
@@ -438,6 +489,9 @@ model Plant {
   notifications  Notification[]
   technicians Technician[]
   scheduledJobRuns ScheduledJobRun[]
+  purchaseOrders   PurchaseOrder[]
+  oilSamples       OilSample[]
+  webhookEndpoints WebhookEndpoint[]
 }
 
 model UserPlant {
@@ -455,6 +509,166 @@ model UserPlant {
 
   @@unique([userId, plantId])
   @@index([plantId])
+}
+
+// =========================
+// ÓRDENES DE COMPRA
+// =========================
+model PurchaseOrder {
+  id      Int                 @id @default(autoincrement())
+  plantId Int
+  plant   Plant               @relation(fields: [plantId], references: [id], onDelete: Cascade)
+
+  status  PurchaseOrderStatus @default(DRAFT)
+  notes   String?
+
+  requestedById Int
+  requestedBy   User  @relation("PORequester", fields: [requestedById], references: [id], onDelete: Cascade)
+  approvedById  Int?
+  approvedBy    User? @relation("POApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+
+  approvedAt   DateTime?
+  receivedAt   DateTime?
+  expectedDate DateTime?
+
+  items PurchaseOrderItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([plantId])
+  @@index([status])
+}
+
+model PurchaseOrderItem {
+  id              Int           @id @default(autoincrement())
+  purchaseOrderId Int
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+
+  lubricantId  Int
+  lubricant    Lubricant @relation(fields: [lubricantId], references: [id], onDelete: Cascade)
+
+  requestedQty Float
+  receivedQty  Float?
+  unit         String
+  unitCost     Float?
+  notes        String?
+
+  @@index([purchaseOrderId])
+  @@index([lubricantId])
+}
+
+// =========================
+// ANÁLISIS DE ACEITE
+// =========================
+model OilSample {
+  id        Int      @id @default(autoincrement())
+  plantId   Int
+  plant     Plant    @relation(fields: [plantId], references: [id], onDelete: Cascade)
+
+  equipmentId Int
+  equipment   Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+
+  lubricantId Int?
+  lubricant   Lubricant? @relation(fields: [lubricantId], references: [id], onDelete: SetNull)
+
+  sampledAt    DateTime
+  labReference String?
+  labReportUrl String?
+
+  // Propiedades físico-químicas
+  viscosity40  Float?   // cSt a 40°C
+  viscosity100 Float?   // cSt a 100°C
+  tan          Float?   // Total Acid Number mg KOH/g
+  tbn          Float?   // Total Base Number mg KOH/g
+  waterPct     Float?   // % agua
+  flashPoint   Float?   // °C punto de inflamación
+
+  // Metales de desgaste (ppm)
+  ironPpm     Float?
+  copperPpm   Float?
+  aluminumPpm Float?
+  leadPpm     Float?
+  chromiumPpm Float?
+  siliconPpm  Float?
+
+  // Contaminación
+  particleCount  Int?     // ISO 4406
+  particleIso    String?  // e.g. "18/16/13"
+
+  status OilSampleStatus @default(PENDING)
+  notes  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([plantId])
+  @@index([equipmentId])
+  @@index([sampledAt])
+}
+
+// =========================
+// AUDIT LOG
+// =========================
+model AuditLog {
+  id        Int      @id @default(autoincrement())
+  plantId   Int?
+  userId    Int?
+  userEmail String?
+
+  action   String  // CREATE | UPDATE | DELETE
+  model    String  // Route | Equipment | Lubricant | Technician | ...
+  recordId Int
+  changes  Json?   // { before: {}, after: {} }
+
+  ip        String?
+  createdAt DateTime @default(now())
+
+  @@index([plantId])
+  @@index([model, recordId])
+  @@index([userId])
+  @@index([createdAt])
+}
+
+// =========================
+// WEBHOOKS
+// =========================
+model WebhookEndpoint {
+  id      Int     @id @default(autoincrement())
+  plantId Int
+  plant   Plant   @relation(fields: [plantId], references: [id], onDelete: Cascade)
+
+  url    String
+  secret String
+  events WebhookEvent[]
+  active Boolean        @default(true)
+  description String?
+
+  deliveries WebhookDelivery[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([plantId])
+}
+
+model WebhookDelivery {
+  id         Int             @id @default(autoincrement())
+  endpointId Int
+  endpoint   WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+
+  event          String
+  payload        Json
+  status         String   @default("PENDING") // PENDING | SUCCESS | FAILED
+  attempts       Int      @default(0)
+  lastAttemptAt  DateTime?
+  responseStatus Int?
+  responseBody   String?
+
+  createdAt DateTime @default(now())
+
+  @@index([endpointId, status])
+  @@index([status, createdAt])
 }
 
 model ScheduledJobRun {

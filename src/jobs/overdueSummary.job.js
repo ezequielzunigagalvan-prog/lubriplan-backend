@@ -1,9 +1,5 @@
-import fs from "fs";
-import path from "path";
 import { sendOverdueSummaryEmail } from "../services/email/email.service.js";
 
-const STATE_DIR = path.resolve(process.cwd(), "data");
-const STATE_FILE = path.join(STATE_DIR, "overdue-summary-state.json");
 const DEFAULT_HOUR = Number(process.env.OVERDUE_SUMMARY_HOUR || 8);
 
 function up(v) {
@@ -37,27 +33,50 @@ function getLocalParts(date = new Date(), timezone = "America/Mexico_City") {
   };
 }
 
-function readState() {
-  try {
-    if (!fs.existsSync(STATE_FILE)) return {};
-    return JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
-  } catch {
-    return {};
-  }
+async function wasSentToday({ prisma, plantId, dateKey }) {
+  const existing = await prisma.scheduledJobRun.findFirst({
+    where: {
+      jobType: "OVERDUE_SUMMARY",
+      plantId: Number(plantId),
+      period: dateKey,
+      status: "SENT",
+    },
+    select: { id: true },
+  });
+  return existing != null;
 }
 
-function writeState(state) {
-  fs.mkdirSync(STATE_DIR, { recursive: true });
-  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), "utf8");
+async function markSentToday({ prisma, plantId, dateKey }) {
+  await prisma.scheduledJobRun.upsert({
+    where: {
+      jobType_plantId_period: {
+        jobType: "OVERDUE_SUMMARY",
+        plantId: Number(plantId),
+        period: dateKey,
+      },
+    },
+    create: {
+      jobType: "OVERDUE_SUMMARY",
+      plantId: Number(plantId),
+      period: dateKey,
+      status: "SENT",
+      startedAt: new Date(),
+      finishedAt: new Date(),
+    },
+    update: {
+      status: "SENT",
+      finishedAt: new Date(),
+    },
+  });
 }
 
-function canSendToday({ plantId, timezone, hour = DEFAULT_HOUR, state }) {
+async function canSendToday({ prisma, plantId, timezone, hour = DEFAULT_HOUR }) {
   const now = new Date();
   const { dateKey, hour: localHour } = getLocalParts(now, timezone);
   if (localHour < hour) return { ok: false, dateKey, reason: "BEFORE_WINDOW" };
 
-  const sentKey = state?.[String(plantId)]?.lastSentDateKey || null;
-  if (sentKey === dateKey) return { ok: false, dateKey, reason: "ALREADY_SENT_TODAY" };
+  const alreadySent = await wasSentToday({ prisma, plantId, dateKey });
+  if (alreadySent) return { ok: false, dateKey, reason: "ALREADY_SENT_TODAY" };
 
   return { ok: true, dateKey, reason: "OK" };
 }
@@ -231,63 +250,34 @@ export async function runScheduledOverdueSummaryJob({
 
   const plants = await prisma.plant.findMany({
     where: { active: true },
-    select: {
-      id: true,
-      name: true,
-      timezone: true,
-    },
+    select: { id: true, name: true, timezone: true },
     orderBy: { id: "asc" },
   });
 
-  const state = readState();
   const results = [];
-  let changed = false;
 
   for (const plant of plants) {
-    const gate = canSendToday({
+    const gate = await canSendToday({
+      prisma,
       plantId: plant.id,
       timezone: plant.timezone || "America/Mexico_City",
       hour: sendHour,
-      state,
     });
 
     if (!gate.ok) {
-      results.push({
-        plantId: plant.id,
-        plantName: plant.name,
-        sent: false,
-        reason: gate.reason,
-      });
+      results.push({ plantId: plant.id, plantName: plant.name, sent: false, reason: gate.reason });
       continue;
     }
 
-    const result = await runOverdueSummaryJob({
-      prisma,
-      baseUrl,
-      forcePlantId: plant.id,
-    });
+    const result = await runOverdueSummaryJob({ prisma, baseUrl, forcePlantId: plant.id });
+    const plantResult = Array.isArray(result?.results) ? result.results[0] : null;
 
-    const plantResult = Array.isArray(result?.results)
-      ? result.results[0]
-      : null;
-
-    results.push(plantResult || {
-      plantId: plant.id,
-      plantName: plant.name,
-      sent: false,
-      reason: "UNKNOWN",
-    });
+    results.push(plantResult || { plantId: plant.id, plantName: plant.name, sent: false, reason: "UNKNOWN" });
 
     if (plantResult?.sent) {
-      state[String(plant.id)] = {
-        lastSentDateKey: gate.dateKey,
-        lastSentAt: new Date().toISOString(),
-      };
-      changed = true;
+      await markSentToday({ prisma, plantId: plant.id, dateKey: gate.dateKey });
     }
   }
-
-  if (changed) writeState(state);
 
   return {
     ok: true,

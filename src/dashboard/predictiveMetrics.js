@@ -1,4 +1,4 @@
-﻿// src/dashboard/predictiveMetrics.js
+// src/dashboard/predictiveMetrics.js
 
 export async function getPredictiveMetrics({
   prisma,
@@ -180,18 +180,19 @@ export async function getPredictiveMetrics({
 
       const moveCount = Number(s?.moveCount || 0);
       const recentMoveCount = Number(s?.recentMoveCount || 0);
-      const baselineAvgDaily = moveCount > 0 ? (s.totalOut || 0) / moveCount : 0;
-      const lastNAvgDaily =
-        recentMoveCount > 0 ? Number(s?.recentTotal || 0) / recentMoveCount : 0;
+      // Daily rate = total consumed / period length (not per-movement average)
+      const baselineAvgDaily = (s.totalOut || 0) / Number(histDays || 90);
+      const lastNAvgDaily = (s?.recentTotal || 0) / Number(shortWindowDays || 14);
       const ratio = baselineAvgDaily > 0 ? lastNAvgDaily / baselineAvgDaily : null;
-      const minSampleOk = moveCount >= 6 && recentMoveCount >= 2;
+      // Require at least 3 historical movements so one-off spikes don't trigger
+      const minSampleOk = moveCount >= 3 && (s.totalOut || 0) > 0;
 
       let risk = "LOW";
       if (minSampleOk && ratio != null && ratio >= 1.8) risk = "HIGH";
       else if (minSampleOk && ratio != null && ratio >= 1.5) risk = "MED";
 
       const criticality = String(meta?.criticality || "").toUpperCase();
-      const critBoost = ["CRITICA", "CRÃTICA", "ALTA"].includes(criticality);
+      const critBoost = ["CRITICA", "CRÍTICA", "ALTA"].includes(criticality);
 
       return {
         type: "CONSUMPTION_ANOMALY",
@@ -200,7 +201,7 @@ export async function getPredictiveMetrics({
         equipmentName: meta?.name || `Equipment ${id}`,
         name: meta?.name || `Equipment ${id}`,
         code: meta?.code || "",
-        area: meta?.area?.name || "â€”",
+        area: meta?.area?.name || "—",
         location: meta?.location || "",
         criticality: meta?.criticality || null,
         movementCount: moveCount,

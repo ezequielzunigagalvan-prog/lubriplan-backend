@@ -1,11 +1,20 @@
 import express from "express";
+import rateLimit from "express-rate-limit";
 import prisma from "../prisma.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import { requireAuth } from "../middleware/requireAuth.js"; // 👈 ajusta ruta si aplica
-import { requireRole } from "../middleware/requireRole.js"; // 👈 ajusta ruta si aplica
+import { requireAuth } from "../middleware/requireAuth.js";
+import { requireRole } from "../middleware/requireRole.js";
 
 const router = express.Router();
+
+const loginRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Demasiados intentos. Intenta nuevamente en 15 minutos." },
+});
 
 // ===== SET PASSWORD (ADMIN ONLY) =====
 router.post("/set-password", requireAuth, requireRole(["ADMIN"]), async (req, res) => {
@@ -34,7 +43,7 @@ router.post("/set-password", requireAuth, requireRole(["ADMIN"]), async (req, re
 });
 
 // ===== LOGIN (PUBLIC) =====
-router.post("/login", async (req, res) => {
+router.post("/login", loginRateLimiter, async (req, res) => {
   try {
     const { email, password } = req.body || {};
 
@@ -52,8 +61,6 @@ router.post("/login", async (req, res) => {
     if (!user.passwordHash) return res.status(403).json({ error: "Usuario sin contraseña" });
 
     const ok = await bcrypt.compare(password, user.passwordHash);
-    console.log("BCRYPT MATCH:", ok);
-
     if (!ok) return res.status(401).json({ error: "Credenciales inválidas" });
 
     const userPlants = await prisma.userPlant.findMany({

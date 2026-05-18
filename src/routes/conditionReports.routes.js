@@ -252,6 +252,16 @@ export default function conditionReportsRoutes({ prisma, auth }) {
         status: item.status,
       });
 
+      // Fire webhook (non-blocking)
+      import("../services/webhooks.service.js").then(({ fireWebhookEvent }) => {
+        fireWebhookEvent(prisma, plantId, "CONDITION_REPORT_CREATED", {
+          reportId: item.id,
+          equipmentId: item.equipmentId,
+          condition: item.condition,
+          category: item.category,
+        });
+      }).catch(() => {});
+
       return res.json({ item });
     } catch (e) {
       console.error(e);
@@ -514,7 +524,7 @@ export default function conditionReportsRoutes({ prisma, auth }) {
           await notifyTechnicianAssignee(prisma, {
             plantId,
             technicianId: techId,
-            type: "TECH_ACTIVITY_ASSIGNED",
+            type: "EXEC_ASSIGNED",
             title: "Accion correctiva asignada",
             message: `${manualTitle} programada para ${String(scheduledAt).slice(0, 10)}`,
             link: "/activities",

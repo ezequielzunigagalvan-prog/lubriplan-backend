@@ -7,13 +7,13 @@ export function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
-export function fmtDateTimeMx(date) {
+export function fmtDateTimeMx(date, timezone = "America/Mexico_City") {
   if (!date) return "—";
   const d = new Date(date);
   if (Number.isNaN(d.getTime())) return "—";
 
   return d.toLocaleString("es-MX", {
-    timeZone: "America/Mexico_City",
+    timeZone: timezone || "America/Mexico_City",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",

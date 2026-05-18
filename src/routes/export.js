@@ -253,8 +253,15 @@ async function getExecutionsExportData({ currentPlantId, dateFrom, dateTo, req, 
   });
 }
 async function getMovementsExportData({ currentPlantId, dateFrom, dateTo, req, timezone }) {
-  const where = {
-    ...(dateFrom || dateTo
+  const plantFilter = {
+    OR: [
+      { lubricant: { is: { plantId: currentPlantId } } },
+      { execution: { is: { plantId: currentPlantId } } },
+    ],
+  };
+
+  const dateFilter =
+    dateFrom || dateTo
       ? {
           OR: [
             {
@@ -275,24 +282,11 @@ async function getMovementsExportData({ currentPlantId, dateFrom, dateTo, req, t
             },
           ],
         }
-      : {}),
+      : null;
+
+  const where = {
+    AND: [plantFilter, ...(dateFilter ? [dateFilter] : [])],
     ...(req.query.type ? { type: String(req.query.type).toUpperCase() } : {}),
-    OR: [
-      {
-        lubricant: {
-          is: {
-            plantId: currentPlantId,
-          },
-        },
-      },
-      {
-        execution: {
-          is: {
-            plantId: currentPlantId,
-          },
-        },
-      },
-    ],
   };
 
   const items = await prisma.lubricantMovement.findMany({
@@ -414,32 +408,48 @@ async function getFailuresExportData({ currentPlantId, dateFrom, dateTo, req, ti
   }));
 }
 
-async function getEmergentsExportData({ currentPlantId }) {
-  const items = await prisma.route.findMany({
+async function getEmergentsExportData({ currentPlantId, dateFrom, dateTo, timezone }) {
+  const items = await prisma.execution.findMany({
     where: {
       plantId: currentPlantId,
-      isEmergency: true,
+      origin: "MANUAL",
+      ...(dateFrom || dateTo
+        ? {
+            executedAt: {
+              ...(dateFrom ? { gte: dateFrom } : {}),
+              ...(dateTo ? { lte: dateTo } : {}),
+            },
+          }
+        : {}),
     },
-    orderBy: { id: "desc" },
+    orderBy: { executedAt: "desc" },
     include: {
       equipment: true,
       technician: true,
-      lubricant: true,
+      lubricantMovements: {
+        orderBy: { createdAt: "desc" },
+        take: 1,
+        include: { lubricant: true },
+      },
     },
   });
 
-  return items.map((x) => ({
-    id: x.id,
-    nombre: x.name || "",
-    equipo: x.equipment?.name || "",
-    tag: x.equipment?.code || x.equipment?.tag || "",
-    tecnico: x.technician?.name || "",
-    lubricante: x.lubricant?.name || x.lubricantName || x.lubricantType || "",
-    cantidad: x.quantity ?? "",
-    unidad: x.unit || "",
-    metodo: x.method || "",
-    instrucciones: x.instructions || "",
-  }));
+  return items.map((x) => {
+    const move = x.lubricantMovements?.[0] || null;
+    return {
+      id: x.id,
+      fecha: x.executedAt ? formatDateTimeInTimezone(x.executedAt, timezone) : "",
+      actividad: x.manualTitle || "",
+      equipo: x.equipment?.name || "",
+      tag: x.equipment?.code || x.equipment?.tag || "",
+      tecnico: x.technician?.name || "",
+      lubricante: move?.lubricant?.name || "",
+      cantidadCaptura: x.usedInputQuantity ?? x.usedQuantity ?? "",
+      unidadCaptura: x.usedInputUnit || move?.inputUnit || "",
+      condicion: x.condition || "",
+      observaciones: x.observations || "",
+    };
+  });
 }
 
 async function getConditionReportsExportData({
@@ -718,34 +728,41 @@ router.get("/xlsx", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), async (re
     }
 
     if (resources.includes("emergents")) {
-      const items = await getEmergentsExportData({ currentPlantId });
+      const items = await getEmergentsExportData({
+        currentPlantId,
+        dateFrom,
+        dateTo,
+        timezone: plantTimezone,
+      });
       const ws = workbook.addWorksheet("Emergentes");
 
       addHeaderRow(ws, [
         "ID",
-        "Nombre",
+        "Fecha",
+        "Actividad",
         "Equipo",
         "TAG/Código",
         "Técnico",
         "Lubricante",
-        "Cantidad",
-        "Unidad",
-        "Método",
-        "Instrucciones",
+        "Cantidad captura",
+        "Unidad captura",
+        "Condición",
+        "Observaciones",
       ]);
 
       for (const x of items) {
         ws.addRow([
           x.id,
-          x.nombre,
+          x.fecha,
+          x.actividad,
           x.equipo,
           x.tag,
           x.tecnico,
           x.lubricante,
-          x.cantidad,
-          x.unidad,
-          x.metodo,
-          x.instrucciones,
+          x.cantidadCaptura,
+          x.unidadCaptura,
+          x.condicion,
+          x.observaciones,
         ]);
       }
 
@@ -956,18 +973,24 @@ router.get("/pdf", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), async (req
     }
 
     if (resources.includes("emergents")) {
-      const items = await getEmergentsExportData({ currentPlantId });
+      const items = await getEmergentsExportData({
+        currentPlantId,
+        dateFrom,
+        dateTo,
+        timezone: plantTimezone,
+      });
       addPdfSectionTitle(doc, "Actividades emergentes");
       addPdfRows(
         doc,
-        ["ID", "Nombre", "Equipo", "Técnico", "Lubricante", "Método"],
+        ["ID", "Fecha", "Actividad", "Equipo", "Técnico", "Lubricante", "Condición"],
         items.map((x) => [
           x.id,
-          x.nombre,
+          x.fecha,
+          x.actividad,
           x.equipo,
           x.tecnico,
           x.lubricante,
-          x.metodo,
+          x.condicion,
         ])
       );
     }

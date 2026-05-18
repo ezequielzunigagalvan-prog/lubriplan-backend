@@ -1,5 +1,5 @@
 ﻿import express from "express";
-import { notifyManagers, notifyTechnicianAssignee } from "../notifications/notify.js";
+import { notifyManagers, notifyTechnicianAssignee, notifyLowStockIfNew } from "../notifications/notify.js";
 import { sseHub } from "../realtime/sseHub.js";
 import { sendCriticalActivityEmail } from "../services/email/email.service.js";
 import { normalizeImageInput } from "../lib/cloudinary.js";
@@ -57,7 +57,26 @@ export default function emergencyActivitiesRoutes({ prisma, auth }) {
           observations,
           evidenceImage,
           evidenceNote,
+          clientId,
         } = req.body || {};
+
+        // ===== Idempotencia offline =====
+        // Si el cliente envía clientId (UUID v4 generado antes de mandar), buscamos
+        // si ya existe una ejecución con ese key. Si existe, la devolvemos sin crear nada.
+        const safeClientId = typeof clientId === "string" && clientId.trim() ? clientId.trim() : null;
+        if (safeClientId) {
+          const existing = await prisma.execution.findUnique({
+            where: { clientId: safeClientId },
+            select: {
+              id: true, plantId: true, status: true, executedAt: true,
+              manualTitle: true, equipmentId: true, technicianId: true,
+              usedQuantity: true, inventoryDeductedAt: true,
+            },
+          });
+          if (existing) {
+            return res.json({ ok: true, alreadyCreated: true, execution: existing, lubricant: null });
+          }
+        }
 
         // ===== Validaciones =====
         const eqId = Number(equipmentId);
@@ -168,6 +187,7 @@ export default function emergencyActivitiesRoutes({ prisma, auth }) {
                 String(evidenceNote || "").trim() ||
                 `EMERGENCY: ${String(emergencyReason).trim()}`,
               inventoryDeductedAt: executedAtDT,
+              clientId: safeClientId,
             },
           });
 
@@ -274,7 +294,7 @@ export default function emergencyActivitiesRoutes({ prisma, auth }) {
             await notifyTechnicianAssignee(prisma, {
               plantId,
               technicianId: techId,
-              type: "TECH_ACTIVITY_ASSIGNED",
+              type: "EXEC_ASSIGNED",
               title: "Actividad emergente asignada",
               message: `${result.execution?.manualTitle || "Actividad emergente"} programada para ${String(executedAt).slice(0, 10)}`,
               link: "/activities",
@@ -298,8 +318,9 @@ export default function emergencyActivitiesRoutes({ prisma, auth }) {
             Number(result.lubricant.stockAfter) <= Number(minStock.minStock)
           ) {
             try {
-              await notifyManagers(prisma, {
+              await notifyLowStockIfNew(prisma, {
                 plantId,
+                lubricantName: result.lubricant.name,
                 type: "LOW_STOCK",
                 title: "Stock bajo",
                 message: `${result.lubricant.name} quedó en ${result.lubricant.stockAfter} ${result.lubricant.unit || ""}`,

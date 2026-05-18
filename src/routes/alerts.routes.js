@@ -11,11 +11,42 @@ export default function alertsRoutes({ prisma, auth, requireRole, toStartOfDaySa
     requireRole(["ADMIN", "SUPERVISOR"]),
     async (req, res) => {
       try {
-        const windowDays = Number(req.query.windowDays ?? 7);
-        const overdueLookbackDays = Number(req.query.overdueLookbackDays ?? 30);
-        const capacityPerDay = Number(req.query.capacityPerDay ?? 6);
-        const warnRatio = Number(req.query.warnRatio ?? 1.1);
-        const criticalRatio = Number(req.query.criticalRatio ?? 1.4);
+        const plantId = req.currentPlantId;
+        if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
+
+        // Read AppSettings — overload params stored there take precedence over hardcoded defaults
+        const settings = await prisma.appSettings.findUnique({
+          where: { id: 1 },
+          select: {
+            technicianOverloadEnabled: true,
+            overloadWindowDays: true,
+            overloadOverdueLookbackDays: true,
+            overloadCapacityPerDay: true,
+            overloadWarnRatio: true,
+            overloadCriticalRatio: true,
+          },
+        });
+
+        if (settings?.technicianOverloadEnabled === false) {
+          return res.json({ ok: true, items: [], disabled: true });
+        }
+
+        // Query params override AppSettings, AppSettings override hardcoded fallbacks
+        const windowDays = Number(
+          req.query.windowDays ?? settings?.overloadWindowDays ?? 7
+        );
+        const overdueLookbackDays = Number(
+          req.query.overdueLookbackDays ?? settings?.overloadOverdueLookbackDays ?? 30
+        );
+        const capacityPerDay = Number(
+          req.query.capacityPerDay ?? settings?.overloadCapacityPerDay ?? 6
+        );
+        const warnRatio = Number(
+          req.query.warnRatio ?? settings?.overloadWarnRatio ?? 1.1
+        );
+        const criticalRatio = Number(
+          req.query.criticalRatio ?? settings?.overloadCriticalRatio ?? 1.4
+        );
 
         const now = new Date();
         const today = toStartOfDaySafe(now);
@@ -29,27 +60,28 @@ export default function alertsRoutes({ prisma, auth, requireRole, toStartOfDaySa
         const toWindow = new Date(today);
         toWindow.setDate(toWindow.getDate() + windowDaysSafe);
 
-        const pendingExecs = await prisma.execution.findMany({
-          where: {
-            status: { not: "COMPLETED" },
-            scheduledAt: { gte: today, lt: toWindow },
-            technicianId: { not: null },
-          },
-          select: { technicianId: true },
-        });
-
-        const overdueExecs = await prisma.execution.findMany({
-          where: {
-            status: { not: "COMPLETED" },
-            scheduledAt: { gte: fromOverdue, lt: today },
-            technicianId: { not: null },
-          },
-          select: { technicianId: true },
-        });
-
-        const techs = await prisma.technician.findMany({
-          select: { id: true, name: true, code: true, status: true, specialty: true },
-        });
+        const [pendingExecs, overdueExecs, techs] = await Promise.all([
+          prisma.execution.findMany({
+            where: {
+              status: { not: "COMPLETED" },
+              scheduledAt: { gte: today, lt: toWindow },
+              technicianId: { not: null },
+            },
+            select: { technicianId: true },
+          }),
+          prisma.execution.findMany({
+            where: {
+              status: { not: "COMPLETED" },
+              scheduledAt: { gte: fromOverdue, lt: today },
+              technicianId: { not: null },
+            },
+            select: { technicianId: true },
+          }),
+          prisma.technician.findMany({
+            where: { deletedAt: null },
+            select: { id: true, name: true, code: true, status: true, specialty: true },
+          }),
+        ]);
 
         const techMap = new Map(techs.map((t) => [t.id, t]));
         const techIds = techs.map((t) => t.id);

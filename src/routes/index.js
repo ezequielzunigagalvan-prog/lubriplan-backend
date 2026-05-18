@@ -17,6 +17,11 @@ import settingsRoutes from "./settings.routes.js";
 // ✅ NUEVOS ROUTERS
 import dashboardRoutes from "./dashboard.routes.js";
 import alertsRoutes from "./alerts.routes.js";
+import purchaseOrdersRoutes from "./purchaseOrders.routes.js";
+import oilSamplesRoutes from "./oilSamples.routes.js";
+import auditLogRoutes from "./auditLog.routes.js";
+import webhooksRoutes from "./webhooks.routes.js";
+import analyticsRoutes from "../routes/analytics.routes.js";
 
 // ========================
 // IA
@@ -104,6 +109,12 @@ app.use(
       toStartOfDaySafe,
     })
   );
+
+  app.use("/api", analyticsRoutes({ prisma, auth: requireAuth }));
+  app.use("/api", purchaseOrdersRoutes({ prisma, auth: requireAuth, requireRole }));
+  app.use("/api", oilSamplesRoutes({ prisma, auth: requireAuth, requireRole }));
+  app.use("/api", auditLogRoutes({ prisma, auth: requireAuth, requireRole }));
+  app.use("/api", webhooksRoutes({ prisma, auth: requireAuth, requireRole }));
 
   // ========================
   // IA (Resumen inteligente)

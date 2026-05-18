@@ -35,6 +35,14 @@ export default function aiRouter({
         return res.status(400).json({ error: "PLANT_REQUIRED" });
       }
 
+      const settings = await prisma.appSettings.findUnique({
+        where: { id: 1 },
+        select: { aiSummaryEnabled: true },
+      });
+      if (settings?.aiSummaryEnabled === false) {
+        return res.json({ ok: true, disabled: true, summary: null });
+      }
+
       // Soporta month o period
       const month = String(req.query.month || req.query.period || "").trim();
       const monthOk = /^\d{4}-\d{2}$/.test(month);

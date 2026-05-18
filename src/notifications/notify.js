@@ -1,5 +1,6 @@
-﻿// src/notifications/notify.js
+// src/notifications/notify.js
 import { sseHub } from "../realtime/sseHub.js";
+import { fireWebhookEvent } from "../services/webhooks.service.js";
 
 export async function notifyUser(prisma, userId, payload) {
   const created = await prisma.notification.create({
@@ -102,28 +103,69 @@ export async function notifyManagers(prisma, payload) {
   const ids = managers.map((u) => u.id);
   if (!ids.length) return { notified: 0 };
 
-  await prisma.notification.createMany({
-    data: ids.map((id) => ({
-      userId: id,
-      plantId: Number.isFinite(scopedPlantId) ? scopedPlantId : null,
-      type: payload.type,
-      title: payload.title,
-      message: payload.message || null,
-      link: payload.link || null,
-    })),
-  });
+  // Individual creates to obtain IDs for proper SSE payloads
+  const created = await Promise.all(
+    ids.map((userId) =>
+      prisma.notification.create({
+        data: {
+          userId,
+          plantId: Number.isFinite(scopedPlantId) ? scopedPlantId : null,
+          type: payload.type,
+          title: payload.title,
+          message: payload.message || null,
+          link: payload.link || null,
+        },
+      })
+    )
+  );
 
-  for (const id of ids) {
-    sseHub.send(id, "notification.created", {
-      refresh: true,
-      plantId: Number.isFinite(scopedPlantId) ? scopedPlantId : null,
-      type: payload.type,
-      title: payload.title,
-      message: payload.message || null,
-      link: payload.link || null,
-      createdAt: new Date().toISOString(),
+  for (const notif of created) {
+    sseHub.send(notif.userId, "notification.created", {
+      id: notif.id,
+      type: notif.type,
+      title: notif.title,
+      message: notif.message,
+      link: notif.link,
+      plantId: notif.plantId ?? null,
+      createdAt: notif.createdAt,
     });
   }
 
   return { notified: ids.length };
+}
+
+/**
+ * Creates a LOW_STOCK notification only if no unread one exists for the same
+ * lubricant (matched by name prefix in message) in the last 24 hours.
+ * Prevents notification spam when stock drops repeatedly.
+ */
+export async function notifyLowStockIfNew(prisma, payload) {
+  const scopedPlantId = payload.plantId != null ? Number(payload.plantId) : null;
+  const lubricantName = String(payload.lubricantName || "").trim();
+
+  if (Number.isFinite(scopedPlantId) && lubricantName) {
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const recent = await prisma.notification.findFirst({
+      where: {
+        plantId: scopedPlantId,
+        type: "LOW_STOCK",
+        message: { startsWith: lubricantName },
+        createdAt: { gte: since },
+      },
+      select: { id: true },
+    });
+    if (recent) return { notified: 0, deduped: true };
+  }
+
+  const result = await notifyManagers(prisma, payload);
+
+  // Fire webhook for external integrations
+  if (result.notified > 0 && Number.isFinite(scopedPlantId)) {
+    fireWebhookEvent(prisma, scopedPlantId, "LUBRICANT_LOW_STOCK", {
+      lubricantName,
+      plantId: scopedPlantId,
+    });
+  }
+
+  return result;
 }

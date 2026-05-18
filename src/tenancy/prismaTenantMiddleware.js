@@ -11,18 +11,19 @@ const TENANTED_MODELS = new Set([
   "Lubricant",
   "ConditionReport",
   "Notification",
+  "Technician",
+  "Route",
+  "Execution",
 ]);
 
 /**
- * Modelos que nunca deben scoping por planta
+ * Modelos que nunca deben scoping por planta.
+ * LubricantMovement no tiene plantId directo — accede via lubricantId/executionId.
  */
 const EXCLUDED_MODELS = new Set([
   "Plant",
   "User",
   "UserPlant",
-  "Technician",
-  "Route",
-  "Execution",
   "LubricantMovement",
   "AppSettings",
 ]);

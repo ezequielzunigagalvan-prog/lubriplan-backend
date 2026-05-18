@@ -3,6 +3,7 @@
     import dotenv from "dotenv";
     dotenv.config();
     import cors from "cors";
+    import helmet from "helmet";
     import path from "path";
     import fs from "fs";
     import multer from "multer";
@@ -16,7 +17,7 @@
     import conditionReportsRoutes from "./routes/conditionReports.routes.js";
 import notificationsRoutes from "./routes/notifications.routes.js";
 import { sseHub } from "./realtime/sseHub.js";
-import { notifyManagers, notifyTechnicianAssignee } from "./notifications/notify.js"; 
+import { notifyManagers, notifyTechnicianAssignee, notifyLowStockIfNew } from "./notifications/notify.js"; 
 import realtimeRoutes from "./routes/realtime.routes.js";
 import adminLinksRoutes from "./routes/admin.links.routes.js";
 import adminOnboardingRoutes from "./routes/admin.onboarding.routes.js";
@@ -39,6 +40,10 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
   import uploadsRoutes from "./routes/uploads.routes.js";
   import exportRoutes from "./routes/export.js";
   import importRoutes from "./routes/import.js";
+  import purchaseOrdersRoutes from "./routes/purchaseOrders.routes.js";
+  import oilSamplesRoutes from "./routes/oilSamples.routes.js";
+  import auditLogRoutes from "./routes/auditLog.routes.js";
+  import webhooksRoutes from "./routes/webhooks.routes.js";
   import { destroyCloudinaryImage, normalizeImageInput } from "./lib/cloudinary.js";
   import { startMonthlyExecutiveReportScheduler } from "./jobs/monthlyExecutiveReport.job.js";
   import monthlyReportRoutes from "./routes/monthlyReport.routes.js";
@@ -117,6 +122,9 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
   app.set("etag", false);
   app.locals.prisma = prisma;
 
+  // Cabeceras de seguridad HTTP (X-Frame-Options, X-Content-Type-Options, HSTS, etc.)
+  app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
+
   const allowedOrigins = new Set([
     "http://localhost:5173",
     "http://192.168.1.69:5173",
@@ -194,6 +202,16 @@ app.options("*", cors(corsOptions));
     });
   }
 
+  /* ========= HEALTH CHECK ========= */
+  app.get("/health", async (_req, res) => {
+    try {
+      await prisma.$queryRaw`SELECT 1`;
+      return res.json({ status: "ok", db: "connected", ts: new Date().toISOString() });
+    } catch {
+      return res.status(503).json({ status: "error", db: "unreachable", ts: new Date().toISOString() });
+    }
+  });
+
   /* ========= ROUTES PUBLICAS ========= */
   app.use("/api/auth", authRouter);
 
@@ -262,6 +280,11 @@ app.options("*", cors(corsOptions));
 
   app.use("/api", analyticsRoutes({ prisma, auth: requireAuth }));
 
+  app.use("/api", purchaseOrdersRoutes({ prisma, auth: requireAuth, requireRole }));
+  app.use("/api", oilSamplesRoutes({ prisma, auth: requireAuth, requireRole }));
+  app.use("/api", auditLogRoutes({ prisma, auth: requireAuth, requireRole }));
+  app.use("/api", webhooksRoutes({ prisma, auth: requireAuth, requireRole }));
+
   app.use("/api", realtimeRoutes({ auth: requireAuth }));
 
   app.use("/api/ai", aiRouter({
@@ -328,7 +351,18 @@ app.options("*", cors(corsOptions));
     app.use("/uploads", express.static(dirPath));
   }
 
-  console.log("ðŸ”¥ BACKEND CORRECTO CARGADO");
+  // Validación de configuración IA al arrancar
+  const AI_MODE_CHECK = String(process.env.AI_MODE || "mock").toLowerCase();
+  if (AI_MODE_CHECK === "provider") {
+    if (!process.env.OPENAI_API_KEY?.trim()) {
+      console.error("[STARTUP] AI_MODE=provider pero OPENAI_API_KEY no está definida. La IA fallará en producción.");
+    }
+    if ((process.env.OPENAI_MODEL || "").trim() === "gpt-5.4-mini") {
+      console.error("[STARTUP] OPENAI_MODEL está configurado como 'gpt-5.4-mini', que no existe. Usa 'gpt-4o-mini' u otro modelo válido.");
+    }
+  }
+
+  console.log("[STARTUP] BACKEND CORRECTO CARGADO");
 
   startMonthlyExecutiveReportScheduler({
     prisma,
@@ -4066,7 +4100,7 @@ app.get("/api/technicians", requireAuth, async (req, res) => {
       return { ...rest, lastActivityAt };
     });
 
-    console.log("ðŸ”¥ðŸ”¥ðŸ”¥ TECH ROUTE NUEVA", new Date().toISOString());
+    console.log("[DEBUG] TECH ROUTE NUEVA", new Date().toISOString());
 
     console.log(
       "TECHNICIANS RESULT",
@@ -7173,7 +7207,7 @@ app.post(
           await notifyTechnicianAssignee(prisma, {
             plantId,
             technicianId,
-            type: "TECH_ACTIVITY_ASSIGNED",
+            type: "EXEC_ASSIGNED",
             title: "Actividad manual asignada",
             message: `${manualTitle} programada para ${String(req.body?.scheduledAt || "").slice(0, 10)}`,
             link: "/activities",
@@ -7224,7 +7258,9 @@ app.patch(
       }
 
       if (String(execution.status || "").toUpperCase() === "COMPLETED") {
-        return res.status(400).json({ error: "La actividad ya fue completada" });
+        // Respuesta idempotente: la actividad ya fue completada (posible reintento offline).
+        // Devolvemos 200 para que el cliente sepa que el estado final es correcto.
+        return res.json({ ok: true, alreadyCompleted: true, item: execution });
       }
 
       const scheduledAt = execution?.scheduledAt ? new Date(execution.scheduledAt) : null;
@@ -7544,6 +7580,14 @@ app.patch(
       };
 
       const completionResult = await prisma.$transaction(async (tx) => {
+        // Leer estado actual ANTES del update para detectar reintentos que ya
+        // completaron el descuento de inventario. Evita doble deducción de stock.
+        const currentExec = await tx.execution.findUnique({
+          where: { id },
+          select: { inventoryDeductedAt: true },
+        });
+        const alreadyDeducted = currentExec?.inventoryDeductedAt != null;
+
         const saved = await tx.execution.update({
           where: { id },
           data,
@@ -7551,7 +7595,7 @@ app.patch(
 
         let resolvedConditionReport = null;
 
-        if (movementData) {
+        if (movementData && !alreadyDeducted) {
           await tx.lubricantMovement.create({
             data: {
               executionId: saved.id,
@@ -7803,6 +7847,18 @@ app.patch(
           console.error("No se pudo notificar ejecucion critica:", notifyErr);
         }
       }
+
+      // Fire webhook (non-blocking)
+      import("./services/webhooks.service.js").then(({ fireWebhookEvent }) => {
+        fireWebhookEvent(prisma, plantId, "EXECUTION_COMPLETED", {
+          executionId: updated.id,
+          equipmentId: updated.route?.equipment?.id ?? updated.equipment?.id ?? null,
+          equipmentName: updated.route?.equipment?.name ?? updated.equipment?.name ?? null,
+          condition: updated.condition,
+          executedAt: updated.executedAt,
+          technicianId: updated.technicianId,
+        });
+      }).catch(() => {});
 
       return res.json({ ok: true, item: updated });
     } catch (e) {
@@ -8251,7 +8307,7 @@ app.post("/api/emergency-activities", requireAuth, async (req, res) => {
       }
     }
 
-    // ðŸ”” low stock
+    // ðŸ"" low stock
     if (
       result.lubricant?.stockAfter != null &&
       result.lubricant?.stockBefore != null
@@ -8266,8 +8322,9 @@ app.post("/api/emergency-activities", requireAuth, async (req, res) => {
         Number(result.lubricant.stockAfter) <= Number(minStock.minStock)
       ) {
         try {
-          await notifyManagers(prisma, {
+          await notifyLowStockIfNew(prisma, {
             plantId,
+            lubricantName: result.lubricant.name,
             type: "LOW_STOCK",
             title: "Stock bajo",
             message: `${result.lubricant.name} quedo en ${result.lubricant.stockAfter} ${result.lubricant.unit || ""}`,

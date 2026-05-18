@@ -87,6 +87,45 @@ export default function notificationsRoutes({ prisma, auth }) {
     }
   });
 
+  router.get("/notifications/count", auth, async (req, res) => {
+    try {
+      const userId = req.user?.id;
+      const plantId = req.currentPlantId ? Number(req.currentPlantId) : null;
+      if (!userId) return res.status(401).json({ error: "No autenticado" });
+
+      const unreadCount = await prisma.notification.count({
+        where: { userId, readAt: null, ...buildPlantScope(plantId) },
+      });
+
+      return res.json({ unreadCount });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ error: "Error contando notificaciones" });
+    }
+  });
+
+  router.delete("/notifications/:id", auth, async (req, res) => {
+    try {
+      const userId = req.user?.id;
+      const plantId = req.currentPlantId ? Number(req.currentPlantId) : null;
+      if (!userId) return res.status(401).json({ error: "No autenticado" });
+
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id)) return res.status(400).json({ error: "ID invalido" });
+
+      const r = await prisma.notification.deleteMany({
+        where: { id, userId, ...buildPlantScope(plantId) },
+      });
+
+      if (r.count === 0) return res.status(404).json({ error: "No encontrada" });
+
+      return res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ error: "Error eliminando notificacion" });
+    }
+  });
+
   return router;
 }
 

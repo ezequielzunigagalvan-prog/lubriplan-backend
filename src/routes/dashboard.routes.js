@@ -1,4 +1,4 @@
-﻿// src/routes/dashboard.routes.js
+// src/routes/dashboard.routes.js
 import express from "express";
 
 export default function dashboardRoutes({
@@ -263,31 +263,31 @@ export default function dashboardRoutes({
       const labelFromType = (type) => {
         const t = String(type || "").toUpperCase();
         if (t === "EXEC_OVERDUE") return "Actividad vencida";
-        if (t === "EXEC_UNASSIGNED") return "Actividad sin tÃ©cnico";
-        if (t === "COND_REPORT") return "CondiciÃ³n reportada";
+        if (t === "EXEC_UNASSIGNED") return "Actividad sin técnico";
+        if (t === "COND_REPORT") return "Condición reportada";
         if (t === "DAYS_TO_EMPTY") return "Inventario en riesgo";
-        if (t === "CONSUMPTION_ANOMALY") return "Consumo fuera de patrÃ³n";
+        if (t === "CONSUMPTION_ANOMALY") return "Consumo fuera de patrón";
         return "Prioridad";
       };
       const priorityLabelFromSeverity = (severity) => {
         const s = String(severity || "").toUpperCase();
-        if (s === "CRITICAL") return "AtenciÃ³n inmediata";
+        if (s === "CRITICAL") return "Atención inmediata";
         if (s === "HIGH") return "Alta prioridad";
-        if (s === "MED") return "AtenciÃ³n hoy";
+        if (s === "MED") return "Atención hoy";
         return "Seguimiento";
       };
       const ownerLabelFromSuggestedOwner = (owner) => {
         const o = String(owner || "").toUpperCase();
         if (o === "ADMIN") return "Administrador";
         if (o === "SUPERVISOR") return "Supervisor";
-        if (o === "TECHNICIAN") return "TÃ©cnico";
+        if (o === "TECHNICIAN") return "Técnico";
         return "Equipo";
       };
       const actionFromItem = (item) => {
         const t = String(item?.type || "").toUpperCase();
         if (t === "EXEC_OVERDUE") return "Completar o reprogramar la actividad hoy";
-        if (t === "EXEC_UNASSIGNED") return "Asignar responsable antes de que se retrase mÃ¡s";
-        if (t === "COND_REPORT") return "Revisar el reporte y definir acciÃ³n correctiva";
+        if (t === "EXEC_UNASSIGNED") return "Asignar responsable antes de que se retrase más";
+        if (t === "COND_REPORT") return "Revisar el reporte y definir acción correctiva";
         if (t === "DAYS_TO_EMPTY") return "Reponer lubricante o ajustar el plan de consumo";
         if (t === "CONSUMPTION_ANOMALY") return "Inspeccionar el equipo y validar el consumo real";
         return "Revisar y atender";
@@ -297,15 +297,15 @@ export default function dashboardRoutes({
         const raw = String(item?.reason || "").trim();
         if (t === "DAYS_TO_EMPTY") {
           return raw
-            .replace(/Days-to-empty|DTE/gi, "DÃ­as estimados restantes")
+            .replace(/Days-to-empty|DTE/gi, "Días estimados restantes")
             .replace(/Stock:/gi, "Stock actual:")
-            .replace(/Bajo m[Ã­i]nimo/gi, "por debajo del mÃ­nimo");
+            .replace(/Bajo m[íi]nimo/gi, "por debajo del mínimo");
         }
         if (t === "CONSUMPTION_ANOMALY") {
           return raw
-            .replace(/Ratio:/gi, "DesviaciÃ³n:")
+            .replace(/Ratio:/gi, "Desviación:")
             .replace(/Base:/gi, "Promedio base:")
-            .replace(/Ãšlt\.?14:|Ult\.?14:/gi, "Promedio Ãºltimos 14 dÃ­as:");
+            .replace(/Últ\.?14:|Ult\.?14:/gi, "Promedio últimos 14 días:");
         }
         if (t === "EXEC_UNASSIGNED") {
           return raw.replace(/^Vencida/gi, "Ya vencida").replace(/^Pendiente/gi, "Pendiente por asignar");
@@ -325,17 +325,17 @@ export default function dashboardRoutes({
         }
         if (t === "EXEC_UNASSIGNED") {
           return severity === "CRITICAL"
-            ? "Asignar tÃ©cnico a una actividad crÃ­tica"
-            : "Asignar tÃ©cnico a una actividad pendiente";
+            ? "Asignar técnico a una actividad crítica"
+            : "Asignar técnico a una actividad pendiente";
         }
         if (t === "COND_REPORT") {
-          return "Revisar condiciÃ³n anormal reportada";
+          return "Revisar condición anormal reportada";
         }
         if (t === "DAYS_TO_EMPTY") {
           return "Reponer lubricante con riesgo de agotarse";
         }
         if (t === "CONSUMPTION_ANOMALY") {
-          return "Revisar consumo fuera de patrÃ³n";
+          return "Revisar consumo fuera de patrón";
         }
         return String(item?.title || "").trim() || labelFromType(t);
       };
@@ -410,7 +410,7 @@ export default function dashboardRoutes({
       for (const ex of overdueExecs || []) {
         const eq = ex?.equipment || ex?.route?.equipment || null;
         const crit = String(eq?.criticality || "").toUpperCase();
-        const isCritical = ["ALTA", "CRITICA", "CRÃTICA"].includes(crit);
+        const isCritical = ["ALTA", "CRITICA", "CRÍTICA"].includes(crit);
 
         const sched = ex?.scheduledAt ? toStartOfDaySafe(new Date(ex.scheduledAt)) : null;
         const schedKey = ex?.scheduledAt ? dateKeyInTimezone(ex.scheduledAt, plantTimezone) : "";
@@ -429,8 +429,8 @@ export default function dashboardRoutes({
           type: "EXEC_OVERDUE",
           severity: sevFromScore(score),
           score,
-          title: `Actividad vencida${isCritical ? " (crÃ­tica)" : ""}`,
-          reason: `Programada ${daysLate} dÃ­a(s) atrÃ¡s${eq?.name ? ` Â· ${eq.name}` : ""}`,
+          title: `Actividad vencida${isCritical ? " (crítica)" : ""}`,
+          reason: `Programada ${daysLate} día(s) atrás${eq?.name ? ` · ${eq.name}` : ""}`,
           suggestedOwner: ex?.technicianId ? "TECHNICIAN" : "SUPERVISOR",
           entity: { executionId: ex.id, equipmentId: eq?.id ?? null },
           link: `/activities?status=OVERDUE&month=${ym}`,
@@ -440,7 +440,7 @@ export default function dashboardRoutes({
       for (const ex of unassignedExecs || []) {
         const eq = ex?.equipment || ex?.route?.equipment || null;
         const crit = String(eq?.criticality || "").toUpperCase();
-        const isCritical = ["ALTA", "CRITICA", "CRÃTICA"].includes(crit);
+        const isCritical = ["ALTA", "CRITICA", "CRÍTICA"].includes(crit);
 
         let score = 45;
         const isOverdue = isBeforeTodayInTimezone(ex?.scheduledAt, todayKey, plantTimezone);
@@ -454,8 +454,8 @@ export default function dashboardRoutes({
           type: "EXEC_UNASSIGNED",
           severity: sevFromScore(score),
           score,
-          title: `Actividad sin tÃ©cnico${isCritical ? " (crÃ­tica)" : ""}`,
-          reason: `${isOverdue ? "Vencida" : "Pendiente"}${eq?.name ? ` Â· ${eq.name}` : ""}`,
+          title: `Actividad sin técnico${isCritical ? " (crítica)" : ""}`,
+          reason: `${isOverdue ? "Vencida" : "Pendiente"}${eq?.name ? ` · ${eq.name}` : ""}`,
           suggestedOwner: "SUPERVISOR",
           entity: { executionId: ex.id, equipmentId: eq?.id ?? null },
           link: `/activities?filter=unassigned&month=${ym}`,
@@ -478,8 +478,8 @@ export default function dashboardRoutes({
           type: "COND_REPORT",
           severity: sevFromScore(score),
           score,
-          title: `CondiciÃ³n anormal: ${lvl}`,
-          reason: `${r?.category ? String(r.category) : "Sin categorÃ­a"}${eq?.name ? ` Â· ${eq.name}` : ""}`,
+          title: `Condición anormal: ${lvl}`,
+          reason: `${r?.category ? String(r.category) : "Sin categoría"}${eq?.name ? ` · ${eq.name}` : ""}`,
           suggestedOwner: "SUPERVISOR",
           entity: { reportId: r.id, equipmentId: eq?.id ?? null },
           link: `/condition-reports?status=OPEN`,
@@ -496,8 +496,8 @@ export default function dashboardRoutes({
           type: "DAYS_TO_EMPTY",
           severity: sevFromScore(score),
           score,
-          title: `Days-to-empty ${risk === "HIGH" ? "crÃ­tico" : "en riesgo"}`,
-          reason: `${it.name || it.lubricantName || "Lubricante"} Â· DTE: ${it.daysToEmpty ?? it.dte ?? "â€”"} dÃ­a(s) Â· Stock: ${Number(it.stock || 0)} ${it.unit || ""}${it?.underMin ? " Â· Bajo mÃ­nimo" : ""}`,
+          title: `Days-to-empty ${risk === "HIGH" ? "crítico" : "en riesgo"}`,
+          reason: `${it.name || it.lubricantName || "Lubricante"} · DTE: ${it.daysToEmpty ?? it.dte ?? "—"} día(s) · Stock: ${Number(it.stock || 0)} ${it.unit || ""}${it?.underMin ? " · Bajo mínimo" : ""}`,
           suggestedOwner: "ADMIN",
           entity: { lubricantId: it.lubricantId },
           link: `/inventory?filter=predictive-dte&month=${ym}`,
@@ -509,15 +509,15 @@ export default function dashboardRoutes({
         let score = risk === "HIGH" ? 88 : risk === "MED" ? 72 : 58;
 
         const crit = String(it?.criticality || "").toUpperCase();
-        if (["ALTA", "CRITICA", "CRÃTICA"].includes(crit)) score = Math.min(100, score + 7);
+        if (["ALTA", "CRITICA", "CRÍTICA"].includes(crit)) score = Math.min(100, score + 7);
 
         add(queue, {
           key: `ANOMALY:${it.equipmentId}`,
           type: "CONSUMPTION_ANOMALY",
           severity: sevFromScore(score),
           score,
-          title: `AnomalÃ­a de consumo (${risk})`,
-          reason: `${it.name || it.equipmentName || "Equipo"}${it.code ? ` (${it.code})` : ""} Â· Ratio: ${it.ratio ?? "â€”"} Â· Base: ${it.baselineAvgDaily ?? "â€”"} Â· Ãšlt.14: ${it.last14AvgDaily ?? it.lastNAvgDaily ?? "â€”"}`,
+          title: `Anomalía de consumo (${risk})`,
+          reason: `${it.name || it.equipmentName || "Equipo"}${it.code ? ` (${it.code})` : ""} · Ratio: ${it.ratio ?? "—"} · Base: ${it.baselineAvgDaily ?? "—"} · Últ.14: ${it.last14AvgDaily ?? it.lastNAvgDaily ?? "—"}`,
           suggestedOwner: "SUPERVISOR",
           entity: { equipmentId: it.equipmentId },
           link: `/analysis?tab=consumption&filter=anomalies&month=${ym}`,
@@ -575,31 +575,100 @@ export default function dashboardRoutes({
           return res.status(400).json({ error: "PLANT_REQUIRED" });
         }
 
+        const appSettings = await prisma.appSettings.findUnique({
+          where: { id: 1 },
+          select: { predictiveAlertsEnabled: true },
+        });
+        if (appSettings?.predictiveAlertsEnabled === false) {
+          return res.json({ ok: true, disabled: true, alerts: [], total: 0 });
+        }
+
         const { year, monthNum, from, to, ym } = parseMonthRange(req.query.month);
         const now = new Date();
-        const plant = await prisma.plant.findUnique({
-          where: { id: plantId },
-          select: { timezone: true },
-        });
-        const plantTimezone = String(plant?.timezone || DEFAULT_TIMEZONE);
-        const todayKey = dateKeyInTimezone(new Date(), plantTimezone);
 
         const histDays = 90;
         const histFrom = new Date(now);
         histFrom.setDate(histFrom.getDate() - histDays);
 
-        const completed = await prisma.execution.findMany({
-          where: {
-            plantId,
-            status: "COMPLETED",
-            executedAt: { gte: histFrom, lte: now },
-          },
-          select: {
-            scheduledAt: true,
-            executedAt: true,
-            route: { select: { equipmentId: true } },
-          },
-        });
+        // 90-day rolling window for repeated failures (independent of selected month)
+        const badFrom = new Date(now);
+        badFrom.setDate(badFrom.getDate() - histDays);
+
+        // Parallelize all independent queries
+        const [plant, completed, badEvents, criticalUnassignedInMonth, metrics] =
+          await Promise.all([
+            prisma.plant.findUnique({
+              where: { id: plantId },
+              select: { timezone: true },
+            }),
+            prisma.execution.findMany({
+              where: {
+                plantId,
+                status: "COMPLETED",
+                executedAt: { gte: histFrom, lte: now },
+              },
+              select: {
+                scheduledAt: true,
+                executedAt: true,
+                route: { select: { equipmentId: true } },
+              },
+            }),
+            prisma.execution.findMany({
+              where: {
+                plantId,
+                status: "COMPLETED",
+                executedAt: { gte: badFrom, lte: now },
+                condition: { in: ["MALO", "CRITICO"] },
+              },
+              select: {
+                executedAt: true,
+                condition: true,
+                route: { select: { equipmentId: true } },
+              },
+            }),
+            prisma.execution.findMany({
+              where: {
+                plantId,
+                scheduledAt: { gte: from, lte: to },
+                status: { not: "COMPLETED" },
+                technicianId: null,
+                route: {
+                  is: {
+                    equipment: {
+                      is: {
+                        plantId,
+                        criticality: { in: ["ALTA", "CRITICA", "CRÍTICA"] },
+                      },
+                    },
+                  },
+                },
+              },
+              select: {
+                id: true,
+                scheduledAt: true,
+                status: true,
+                route: {
+                  select: {
+                    name: true,
+                    equipment: { select: { id: true, name: true, code: true, location: true, criticality: true } },
+                  },
+                },
+              },
+              orderBy: { scheduledAt: "asc" },
+            }),
+            getPredictiveMetrics({
+              prisma,
+              toStartOfDaySafe,
+              plantId,
+              month: ym,
+              histDays,
+              shortWindowDays: 14,
+              now,
+            }),
+          ]);
+
+        const plantTimezone = String(plant?.timezone || DEFAULT_TIMEZONE);
+        const todayKey = dateKeyInTimezone(new Date(), plantTimezone);
 
         const completedSafe = (completed || []).filter(
           (ex) => ex?.scheduledAt && ex?.executedAt && ex?.route?.equipmentId != null
@@ -645,6 +714,37 @@ export default function dashboardRoutes({
           });
         }
 
+        // Enrich riskEquipments with equipment name/code/criticality
+        // in one combined query to avoid N+1. Also used to apply criticality boost.
+        const allEqIds = [...new Set([...byEquipment.keys()])];
+
+        const eqMetaList = allEqIds.length
+          ? await prisma.equipment.findMany({
+              where: { plantId, id: { in: allEqIds } },
+              select: { id: true, name: true, code: true, criticality: true, location: true },
+            })
+          : [];
+        const eqMetaMap = new Map(eqMetaList.map((e) => [e.id, e]));
+
+        for (const item of riskEquipments) {
+          const meta = eqMetaMap.get(item.equipmentId);
+          const crit = String(meta?.criticality || "").toUpperCase();
+          const isCritEq = ["ALTA", "CRITICA", "CRÍTICA"].includes(crit);
+          item.equipmentName = meta?.name || "—";
+          item.equipmentCode = meta?.code || "";
+          item.location = meta?.location || "";
+          item.criticality = meta?.criticality || null;
+          // Boost: critical equipment with any detectable late pattern → at least MED
+          if (isCritEq && item.risk === "LOW" && item.totalCompleted >= 2 && item.lateRate >= 0.15) {
+            item.risk = "MED";
+          }
+          // Boost: critical equipment already MED with notable late rate → HIGH
+          if (isCritEq && item.risk === "MED" && item.lateRate >= 0.25) {
+            item.risk = "HIGH";
+          }
+        }
+
+        // Re-sort after boost changes
         riskEquipments.sort((a, b) => {
           const score = (x) => (x.risk === "HIGH" ? 3 : x.risk === "MED" ? 2 : 1);
           const ds = score(b) - score(a);
@@ -652,6 +752,9 @@ export default function dashboardRoutes({
           if (b.lateRate !== a.lateRate) return b.lateRate - a.lateRate;
           return (b.maxDelayDays || 0) - (a.maxDelayDays || 0);
         });
+
+        // riskMap built after boost so topRiskPending uses the boosted risk values
+        const riskMap = new Map(riskEquipments.map((x) => [x.equipmentId, x.risk]));
 
         const pendingInMonth = await prisma.execution.findMany({
           where: {
@@ -672,8 +775,6 @@ export default function dashboardRoutes({
           (ex) => ex?.route?.equipmentId != null && ex?.scheduledAt
         );
 
-        const riskMap = new Map(riskEquipments.map((x) => [x.equipmentId, x.risk]));
-
         let riskPendingCount = 0;
         let riskOverdueCount = 0;
         const topRiskPending = [];
@@ -692,7 +793,7 @@ export default function dashboardRoutes({
             topRiskPending.push({
               executionId: ex.id,
               equipmentId,
-              routeName: ex?.route?.name || "â€”",
+              routeName: ex?.route?.name || "—",
               scheduledAt: ex.scheduledAt,
               risk,
               overdue,
@@ -708,20 +809,7 @@ export default function dashboardRoutes({
           topRiskPending,
         };
 
-        const badEvents = await prisma.execution.findMany({
-          where: {
-            plantId,
-            status: "COMPLETED",
-            executedAt: { gte: from, lte: to },
-            condition: { in: ["MALO", "CRITICO"] },
-          },
-          select: {
-            executedAt: true,
-            condition: true,
-            route: { select: { equipmentId: true } },
-          },
-        });
-
+        // badEvents already fetched in parallel above
         const badByEq = new Map();
         for (const ex of badEvents || []) {
           const eqId = ex?.route?.equipmentId;
@@ -762,6 +850,24 @@ export default function dashboardRoutes({
           });
         }
 
+        // Enrich repeatedFailures with equipment meta (reuse eqMetaMap, extend for new IDs)
+        const newBadEqIds = [...badByEq.keys()].filter((id) => !eqMetaMap.has(id));
+        if (newBadEqIds.length) {
+          const extra = await prisma.equipment.findMany({
+            where: { plantId, id: { in: newBadEqIds } },
+            select: { id: true, name: true, code: true, criticality: true, location: true },
+          });
+          for (const e of extra) eqMetaMap.set(e.id, e);
+        }
+
+        for (const item of repeatedFailures) {
+          const meta = eqMetaMap.get(item.equipmentId);
+          item.equipmentName = meta?.name || "—";
+          item.equipmentCode = meta?.code || "";
+          item.location = meta?.location || "";
+          item.criticality = meta?.criticality || null;
+        }
+
         repeatedFailures.sort((a, b) => (b.score - a.score) || (b.badTotal - a.badTotal));
         const repeatedFailuresCount = repeatedFailures.filter((x) => x.risk !== "LOW").length;
 
@@ -769,37 +875,7 @@ export default function dashboardRoutes({
         alerts.repeatedFailuresTop = repeatedFailures.slice(0, 10);
         alerts.repeatedFailures = repeatedFailuresCount;
 
-        const criticalUnassignedInMonth = await prisma.execution.findMany({
-          where: {
-            plantId,
-            scheduledAt: { gte: from, lte: to },
-            status: { not: "COMPLETED" },
-            technicianId: null,
-            route: {
-              is: {
-                equipment: {
-                  is: {
-                    plantId,
-                    criticality: { in: ["ALTA", "CRITICA", "CRÃTICA"] },
-                  },
-                },
-              },
-            },
-          },
-          select: {
-            id: true,
-            scheduledAt: true,
-            status: true,
-            route: {
-              select: {
-                name: true,
-                equipment: { select: { id: true, name: true, code: true, location: true, criticality: true } },
-              },
-            },
-          },
-          orderBy: { scheduledAt: "asc" },
-        });
-
+        // criticalUnassignedInMonth already fetched in parallel above
         const criticalUnassigned = (criticalUnassignedInMonth || []).filter((ex) =>
           isBeforeTodayInTimezone(ex?.scheduledAt, todayKey, plantTimezone)
         );
@@ -811,26 +887,17 @@ export default function dashboardRoutes({
           executionId: ex.id,
           scheduledAt: ex.scheduledAt,
           status: ex.status,
-          routeName: ex?.route?.name || "â€”",
+          routeName: ex?.route?.name || "—",
           equipment: {
             id: ex?.route?.equipment?.id ?? null,
-            name: ex?.route?.equipment?.name || "â€”",
+            name: ex?.route?.equipment?.name || "—",
             code: ex?.route?.equipment?.code || "",
             location: ex?.route?.equipment?.location || "",
-            criticality: ex?.route?.equipment?.criticality || "â€”",
+            criticality: ex?.route?.equipment?.criticality || "—",
           },
         }));
 
-        const metrics = await getPredictiveMetrics({
-          prisma,
-          toStartOfDaySafe,
-          plantId,
-          month: ym,
-          histDays: 90,
-          shortWindowDays: 14,
-          now,
-        });
-
+        // metrics already fetched in parallel above
         alerts.lubricantDaysToEmptyTop = metrics?.lubricantDaysToEmptyTop || [];
         alerts.equipmentConsumptionAnomaliesTop = metrics?.equipmentConsumptionAnomaliesTop || [];
         alerts.lubricantDaysToEmptyCount = Number(metrics?.lubricantDaysToEmptyCount || 0);
@@ -1052,9 +1119,9 @@ export default function dashboardRoutes({
       const items = techIds.map((id) => {
         const t = techMap.get(id) || {
           id,
-          name: "â€”",
+          name: "—",
           code: "",
-          status: "â€”",
+          status: "—",
           specialty: "",
         };
 
