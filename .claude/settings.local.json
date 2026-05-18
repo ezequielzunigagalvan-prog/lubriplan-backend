@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install *)",
+      "Bash(npx prisma *)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\ferga\\\\Documents\\\\lubriplan-backend\" -Recurse)",
+      "Bash(Select-Object FullName)",
+      "PowerShell(cmd /c \"dir C:\\\\Users\\\\ferga\\\\Documents\\\\lubriplan-frontend\\\\src\")",
+      "PowerShell(cmd /c \"dir C:\\\\Users\\\\ferga\\\\Documents\\\\lubriplan-frontend\\\\src\\\\layouts\")",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)"
+    ]
+  }
+}
