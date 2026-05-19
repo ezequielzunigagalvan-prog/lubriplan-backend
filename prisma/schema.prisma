@@ -133,6 +133,7 @@ model Equipment {
 
   conditionReports ConditionReport[]
   oilSamples       OilSample[]
+  assetMappings    AssetMapping[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
@@ -492,8 +493,9 @@ model Plant {
   scheduledJobRuns ScheduledJobRun[]
   purchaseOrders   PurchaseOrder[]
   oilSamples       OilSample[]
-  webhookEndpoints WebhookEndpoint[]
-  auditLogs        AuditLog[]
+  webhookEndpoints    WebhookEndpoint[]
+  auditLogs           AuditLog[]
+  integrationConfigs  IntegrationConfig[]
 }
 
 model UserPlant {
@@ -697,4 +699,81 @@ model ScheduledJobRun {
   @@unique([jobType, plantId, period])
   @@index([plantId, period])
   @@index([jobType, status])
+}
+
+// =========================
+// CMMS INTEGRATIONS
+// =========================
+enum IntegrationType {
+  MAXIMO
+  SAP_ODATA
+  SAP_RFC
+  CSV
+}
+
+model IntegrationConfig {
+  id      Int             @id @default(autoincrement())
+  plantId Int
+  plant   Plant           @relation(fields: [plantId], references: [id], onDelete: Cascade)
+
+  type        IntegrationType
+  name        String
+  baseUrl     String?
+  apiKey      String?
+  username    String?
+  passwordEnc String?
+  extra       Json?
+  active      Boolean @default(true)
+
+  lastSyncAt  DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  assetMappings   AssetMapping[]
+  syncLogs        IntegrationSyncLog[]
+
+  @@index([plantId])
+  @@index([type])
+}
+
+model AssetMapping {
+  id              Int               @id @default(autoincrement())
+  integrationId   Int
+  integration     IntegrationConfig @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  equipmentId     Int?
+  equipment       Equipment?        @relation(fields: [equipmentId], references: [id], onDelete: SetNull)
+
+  externalId      String
+  externalName    String?
+  externalData    Json?
+  confirmed       Boolean @default(false)
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([integrationId, externalId])
+  @@index([integrationId])
+  @@index([equipmentId])
+}
+
+model IntegrationSyncLog {
+  id            Int               @id @default(autoincrement())
+  integrationId Int
+  integration   IntegrationConfig @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  direction     String   // PULL | PUSH
+  entity        String   // assets | workorders
+  status        String   // OK | PARTIAL | ERROR
+  recordsTotal  Int      @default(0)
+  recordsOk     Int      @default(0)
+  recordsError  Int      @default(0)
+  errors        Json?
+
+  startedAt     DateTime @default(now())
+  finishedAt    DateTime?
+
+  @@index([integrationId])
+  @@index([status])
+  @@index([startedAt])
 }
