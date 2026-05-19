@@ -429,6 +429,7 @@ model ConditionReport {
   @@index([equipmentId])
   @@index([detectedAt])
   @@index([status])
+  @@index([plantId, status])
   @@map("condition_reports")
 }
 

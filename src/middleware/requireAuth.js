@@ -2,9 +2,6 @@ import jwt from "jsonwebtoken";
 import prisma from "../prisma.js";
 
 export async function requireAuth(req, res, next) {
-  const t0 = Date.now();
-  const stamp = () => `(+${Date.now() - t0}ms)`;
-
   try {
     if (req.method === "OPTIONS") return res.sendStatus(204);
 
@@ -21,11 +18,6 @@ export async function requireAuth(req, res, next) {
     }
 
     if (!token) {
-      console.log("[requireAuth] NO TOKEN", {
-        method: req.method,
-        url: req.originalUrl,
-        origin: req.headers.origin,
-      }, stamp());
       return res.status(401).json({ error: "Token requerido" });
     }
 
@@ -33,44 +25,15 @@ export async function requireAuth(req, res, next) {
     try {
       payload = jwt.verify(token, process.env.JWT_SECRET);
     } catch (e) {
-      console.log("[requireAuth] JWT VERIFY FAIL", {
-        method: req.method,
-        url: req.originalUrl,
-        msg: e.message,
-      }, stamp());
+      console.log("[requireAuth] JWT VERIFY FAIL", { method: req.method, url: req.originalUrl, msg: e.message });
       return res.status(401).json({ error: "Token inválido" });
     }
 
     const userId = Number(payload.sub);
     if (!Number.isFinite(userId)) {
-      console.log("[requireAuth] INVALID SUB", { sub: payload.sub }, stamp());
       return res.status(401).json({ error: "Token inválido" });
     }
 
-    const dbUser = await prisma.user.findUnique({
-      where: { id: userId },
-      select: {
-        id: true,
-        role: true,
-        active: true,
-        technicianId: true,
-      },
-    });
-
-    if (!dbUser || dbUser.active === false) {
-      console.log("[requireAuth] USER INACTIVE/NOT FOUND", { userId }, stamp());
-      return res.status(401).json({ error: "Usuario inválido/inactivo" });
-    }
-
-    req.user = {
-      id: dbUser.id,
-      role: dbUser.role,
-      technicianId: dbUser.technicianId ?? null,
-    };
-
-    // =========================
-    // MULTIPLANTA
-    // =========================
     const rawPlantId = req.headers["x-plant-id"];
     const parsedPlantId =
       rawPlantId == null || String(rawPlantId).trim() === ""
@@ -81,44 +44,49 @@ export async function requireAuth(req, res, next) {
       return res.status(400).json({ error: "PLANT_INVALID" });
     }
 
-    let currentPlantId = parsedPlantId;
+    // Single round-trip: user + plant membership in parallel
+    const plantQuery =
+      parsedPlantId != null
+        ? prisma.userPlant.findUnique({
+            where: { userId_plantId: { userId, plantId: parsedPlantId } },
+            select: { active: true },
+          })
+        : prisma.userPlant.findFirst({
+            where: { userId, active: true },
+            orderBy: [{ isDefault: "desc" }, { plantId: "asc" }],
+            select: { plantId: true },
+          });
 
-    if (currentPlantId) {
-      const membership = await prisma.userPlant.findUnique({
-        where: {
-          userId_plantId: {
-            userId: dbUser.id,
-            plantId: currentPlantId,
-          },
-        },
-        select: {
-          active: true,
-        },
-      });
+    const [dbUser, plantResult] = await Promise.all([
+      prisma.user.findUnique({
+        where: { id: userId },
+        select: { id: true, role: true, active: true, technicianId: true },
+      }),
+      plantQuery,
+    ]);
 
-      if (!membership || membership.active === false) {
-        return res.status(403).json({ error: "PLANT_FORBIDDEN" });
-      }
+    if (!dbUser || dbUser.active === false) {
+      console.log("[requireAuth] USER INACTIVE/NOT FOUND", { userId });
+      return res.status(401).json({ error: "Usuario inválido/inactivo" });
     }
 
-    // si no viene header, intentar obtener planta default activa del usuario
-    if (!currentPlantId) {
-      const defaultMembership = await prisma.userPlant.findFirst({
-        where: {
-          userId: dbUser.id,
-          active: true,
-        },
-        orderBy: [{ isDefault: "desc" }, { plantId: "asc" }],
-        select: {
-          plantId: true,
-        },
-      });
+    req.user = {
+      id: dbUser.id,
+      role: dbUser.role,
+      technicianId: dbUser.technicianId ?? null,
+    };
 
-      currentPlantId = defaultMembership?.plantId ?? null;
+    let currentPlantId = parsedPlantId;
+
+    if (parsedPlantId != null) {
+      if (!plantResult || plantResult.active === false) {
+        return res.status(403).json({ error: "PLANT_FORBIDDEN" });
+      }
+    } else {
+      currentPlantId = plantResult?.plantId ?? null;
     }
 
     req.currentPlantId = currentPlantId ?? null;
-
     return next();
   } catch (err) {
     console.error("[requireAuth] ERROR", err);
