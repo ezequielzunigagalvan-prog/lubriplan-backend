@@ -120,6 +120,7 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
     }
   const app = express();
   app.set("etag", false);
+  app.set("trust proxy", 1);
   app.locals.prisma = prisma;
 
   // Cabeceras de seguridad HTTP (X-Frame-Options, X-Content-Type-Options, HSTS, etc.)
