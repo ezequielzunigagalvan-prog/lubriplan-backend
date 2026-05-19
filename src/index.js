@@ -345,7 +345,8 @@ app.options("*", cors(corsOptions));
     } catch (uploadServeError) {
       console.error("uploads serve error:", uploadServeError);
     }
-    return next();
+    // File not found in any local dir — Railway has ephemeral FS; images live in Cloudinary
+    return res.status(404).json({ error: "Imagen no encontrada. Las imágenes se almacenan en Cloudinary." });
   });
 
   for (const dirPath of uploadRoots) {
