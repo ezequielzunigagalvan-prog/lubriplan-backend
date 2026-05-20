@@ -23,6 +23,7 @@ import auditLogRoutes from "./auditLog.routes.js";
 import webhooksRoutes from "./webhooks.routes.js";
 import analyticsRoutes from "../routes/analytics.routes.js";
 import integrationsRoutes from "./integrations.routes.js";
+import lubricationCardsRoutes from "./lubricationCards.routes.js";
 
 // ========================
 // IA
@@ -117,6 +118,7 @@ app.use(
   app.use("/api", auditLogRoutes({ prisma, auth: requireAuth, requireRole }));
   app.use("/api", webhooksRoutes({ prisma, auth: requireAuth, requireRole }));
   app.use("/api", integrationsRoutes({ prisma, auth: requireAuth, requireRole }));
+  app.use("/api", lubricationCardsRoutes({ prisma, auth: requireAuth, requireRole }));
 
   // ========================
   // IA (Resumen inteligente)

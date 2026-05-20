@@ -134,6 +134,7 @@ model Equipment {
   conditionReports ConditionReport[]
   oilSamples       OilSample[]
   assetMappings    AssetMapping[]
+  lubricationCard  LubricationCard?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
@@ -700,6 +701,62 @@ model ScheduledJobRun {
   @@unique([jobType, plantId, period])
   @@index([plantId, period])
   @@index([jobType, status])
+}
+
+// =========================
+// CARTA DE LUBRICACIÓN
+// =========================
+enum LubricationFrequency {
+  DAILY
+  WEEKLY
+  MONTHLY
+  QUARTERLY
+  ANNUAL
+}
+
+enum LubricationMethod {
+  MANUAL
+  AUTO
+  GREASE_GUN
+  OIL_CAN
+}
+
+model LubricationCard {
+  id          Int       @id @default(autoincrement())
+  equipmentId Int       @unique
+  equipment   Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+
+  imageUrl      String?
+  imagePublicId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  points LubricationPoint[]
+
+  @@index([equipmentId])
+}
+
+model LubricationPoint {
+  id     Int             @id @default(autoincrement())
+  cardId Int
+  card   LubricationCard @relation(fields: [cardId], references: [id], onDelete: Cascade)
+
+  label     String
+  x         Float
+  y         Float
+
+  lubricant String?
+  quantity  Float?
+  unit      String?              @default("ml")
+  frequency LubricationFrequency @default(MONTHLY)
+  method    LubricationMethod    @default(MANUAL)
+  notes     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([cardId])
 }
 
 // =========================
