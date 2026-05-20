@@ -9,7 +9,15 @@
       "PowerShell(cmd /c \"dir C:\\\\Users\\\\ferga\\\\Documents\\\\lubriplan-frontend\\\\src\\\\layouts\")",
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(node --check src/routes/integrations.routes.js)",
+      "Bash(node --check src/services/integration/integrationService.js)",
+      "Bash(node --check src/services/integration/csvConnector.js)",
+      "Bash(node --check src/services/integration/maximoConnector.js)",
+      "Bash(node --check src/services/integration/sapConnector.js)",
+      "Bash(git commit -m 'fix: set trust proxy for Railway reverse proxy \\(ERR_ERL_UNEXPECTED_X_FORWARDED_FOR\\) *)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\ferga\\\\Documents\\\\lubriplan-backend\" -Recurse -Directory)",
+      "Bash(Select-Object -First 20)"
     ]
   }
 }
