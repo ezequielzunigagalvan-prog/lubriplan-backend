@@ -47,6 +47,7 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
   import { destroyCloudinaryImage, normalizeImageInput } from "./lib/cloudinary.js";
   import { startMonthlyExecutiveReportScheduler } from "./jobs/monthlyExecutiveReport.job.js";
   import monthlyReportRoutes from "./routes/monthlyReport.routes.js";
+  import lubricationCardsRoutes from "./routes/lubricationCards.routes.js";
 
 
 
@@ -285,6 +286,7 @@ app.options("*", cors(corsOptions));
   app.use("/api", oilSamplesRoutes({ prisma, auth: requireAuth, requireRole }));
   app.use("/api", auditLogRoutes({ prisma, auth: requireAuth, requireRole }));
   app.use("/api", webhooksRoutes({ prisma, auth: requireAuth, requireRole }));
+  app.use("/api", lubricationCardsRoutes({ prisma, auth: requireAuth, requireRole }));
 
   app.use("/api", realtimeRoutes({ auth: requireAuth }));
 
