@@ -1,8 +1,32 @@
 // src/ia/chatContextBuilder.js
 // Compila un snapshot de la planta activa para usar como contexto en el chat.
-// Las queries a modelos en TENANTED_MODELS (Execution, ConditionReport, Technician, Lubricant)
-// son auto-scoped por el Prisma middleware al plantId activo via AsyncLocalStorage.
-// PurchaseOrder y Plant NO están en TENANTED_MODELS → se filtra manualmente por plantId.
+// Usa la misma lógica de queries que buildDashboardSummary para garantizar datos correctos.
+// Para modelos en TENANTED_MODELS (Execution, ConditionReport, Technician, Lubricant)
+// el middleware de Prisma auto-agrega plantId; además lo pasamos explícitamente como red de seguridad.
+// PurchaseOrder y Plant NO están en TENANTED_MODELS → filtro manual por plantId siempre.
+
+// Copia local de helpers de timezone (igual que buildDashboardSummary.js)
+const DEFAULT_TIMEZONE = "America/Mexico_City";
+
+function dateKeyInTimezone(value, timezone = DEFAULT_TIMEZONE) {
+  const dt = new Date(value);
+  if (!Number.isFinite(dt.getTime())) return "";
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(dt);
+  const year = parts.find((p) => p.type === "year")?.value;
+  const month = parts.find((p) => p.type === "month")?.value;
+  const day = parts.find((p) => p.type === "day")?.value;
+  return year && month && day ? `${year}-${month}-${day}` : "";
+}
+
+function isBeforeTodayInTimezone(value, todayKey, timezone = DEFAULT_TIMEZONE) {
+  const valueKey = dateKeyInTimezone(value, timezone);
+  return Boolean(valueKey) && Boolean(todayKey) && valueKey < todayKey;
+}
 
 export async function buildChatContext(prisma, { plantId }) {
   const pid = Number(plantId);
@@ -10,40 +34,60 @@ export async function buildChatContext(prisma, { plantId }) {
 
   const now = new Date();
 
+  // Paso 1: obtener planta y timezone primero (igual que buildDashboardSummary)
+  const plant = await prisma.plant.findUnique({
+    where: { id: pid },
+    select: { name: true, timezone: true },
+  });
+  const plantTimezone = String(plant?.timezone || DEFAULT_TIMEZONE);
+  const todayKey = dateKeyInTimezone(now, plantTimezone);
+
+  // Rango mes actual (para completadas y contexto)
+  const monthFrom = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+  const monthTo = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+
+  // Ventana para ejecuciones abiertas: 90 días atrás → 30 días adelante
+  // Así capturamos vencidas de meses anteriores y próximas actividades
+  const openFrom = new Date(now);
+  openFrom.setDate(openFrom.getDate() - 90);
+  const openTo = new Date(now);
+  openTo.setDate(openTo.getDate() + 30);
+
   const [
-    plant,
-    overdueCount,
-    pendingCount,
+    openExecs,
     completedCount,
     openConditionReports,
     technicians,
     lubricants,
     purchaseOrders,
   ] = await Promise.all([
-    // Plant: NOT tenant-scoped, query directo por id
-    prisma.plant.findUnique({
-      where: { id: pid },
-      select: { name: true, timezone: true },
+    // Ejecuciones NO completadas en ventana — mismo patrón que buildDashboardSummary
+    // plantId explícito como red de seguridad + status: { not: "COMPLETED" }
+    prisma.execution.findMany({
+      where: {
+        plantId: pid,
+        scheduledAt: { gte: openFrom, lte: openTo },
+        status: { not: "COMPLETED" },
+      },
+      select: { scheduledAt: true, status: true },
+      take: 500,
     }),
 
-    // Actividades vencidas: PENDING con scheduledAt pasado (tenant-scoped)
+    // Completadas en el mes actual (igual que dashboard)
     prisma.execution.count({
-      where: { status: "PENDING", scheduledAt: { lt: now } },
+      where: {
+        plantId: pid,
+        status: "COMPLETED",
+        executedAt: { gte: monthFrom, lte: monthTo },
+      },
     }),
 
-    // Actividades pendientes a tiempo: PENDING con scheduledAt futuro (tenant-scoped)
-    prisma.execution.count({
-      where: { status: "PENDING", scheduledAt: { gte: now } },
-    }),
-
-    // Actividades completadas: cualquier estado que no sea PENDING (tenant-scoped)
-    prisma.execution.count({
-      where: { status: { not: "PENDING" } },
-    }),
-
-    // Reportes de condición abiertos con info del equipo (tenant-scoped)
+    // Reportes de condición abiertos con info del equipo (tenant-scoped + plantId explícito)
     prisma.conditionReport.findMany({
-      where: { status: { in: ["OPEN", "IN_PROGRESS"] } },
+      where: {
+        plantId: pid,
+        status: { in: ["OPEN", "IN_PROGRESS"] },
+      },
       include: {
         equipment: {
           select: { name: true, code: true, criticality: true },
@@ -53,24 +97,24 @@ export async function buildChatContext(prisma, { plantId }) {
       take: 8,
     }),
 
-    // Técnicos activos con su carga de ejecuciones pendientes (tenant-scoped)
+    // Técnicos activos con sus ejecuciones abiertas (tenant-scoped + plantId explícito)
     prisma.technician.findMany({
-      where: { status: "Activo", deletedAt: null },
+      where: { plantId: pid, status: "Activo", deletedAt: null },
       select: {
         name: true,
         code: true,
         specialty: true,
         executions: {
-          where: { status: "PENDING" },
+          where: { status: { not: "COMPLETED" } },
           select: { id: true, scheduledAt: true },
         },
       },
       take: 10,
     }),
 
-    // Lubricantes con minStock definido (tenant-scoped) — filtramos bajo stock en JS
+    // Lubricantes con minStock definido (tenant-scoped + plantId explícito)
     prisma.lubricant.findMany({
-      where: { minStock: { not: null } },
+      where: { plantId: pid, minStock: { not: null } },
       select: {
         name: true,
         code: true,
@@ -82,7 +126,7 @@ export async function buildChatContext(prisma, { plantId }) {
       take: 30,
     }),
 
-    // Órdenes de compra activas: NOT tenant-scoped → filtro manual por plantId
+    // Órdenes de compra activas: NOT tenant-scoped → filtro manual por plantId siempre
     prisma.purchaseOrder.findMany({
       where: {
         plantId: pid,
@@ -100,15 +144,27 @@ export async function buildChatContext(prisma, { plantId }) {
     }),
   ]);
 
-  // Derivar stock bajo en JS (minStock != null ya filtrado por query)
+  // Clasificar vencidas vs pendientes en JS con comparación de fechas en timezone de la planta
+  // (igual que buildDashboardSummary — evita errores UTC vs hora local)
+  let overdueCount = 0;
+  let pendingCount = 0;
+  for (const e of openExecs) {
+    if (isBeforeTodayInTimezone(e.scheduledAt, todayKey, plantTimezone)) {
+      overdueCount++;
+    } else {
+      pendingCount++;
+    }
+  }
+
+  // Stock bajo: usa <= igual que el dashboard (stock <= minStock)
   const lowStockLubricants = lubricants.filter(
-    (l) => l.minStock != null && l.stock < l.minStock
+    (l) => l.minStock != null && l.stock <= l.minStock
   );
 
-  // Calcular carga real por técnico (pendientes + vencidos)
+  // Carga real por técnico con comparación timezone-aware
   const techniciansSummary = technicians.map((t) => {
     const overdueAssigned = t.executions.filter(
-      (e) => new Date(e.scheduledAt) < now
+      (e) => isBeforeTodayInTimezone(e.scheduledAt, todayKey, plantTimezone)
     ).length;
     return {
       name: t.name,
@@ -121,7 +177,7 @@ export async function buildChatContext(prisma, { plantId }) {
 
   return {
     plantName: plant?.name || "Planta activa",
-    plantTimezone: plant?.timezone || "America/Mexico_City",
+    plantTimezone,
     activities: {
       completed: completedCount,
       pending: pendingCount,
