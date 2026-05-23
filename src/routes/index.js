@@ -29,6 +29,7 @@ import lubricationCardsRoutes from "./lubricationCards.routes.js";
 // IA
 // ========================
 import aiRouter from "../ia/aiRouter.js";
+import chatRouter from "../ia/chatRouter.js";
 
 // ========================
 // MIDDLEWARES
@@ -132,6 +133,14 @@ app.use(
       buildDashboardSummary,
       toStartOfDaySafe,
     })
+  );
+
+  // ========================
+  // IA (Chat conversacional)
+  // ========================
+  app.use(
+    "/api/ai",
+    chatRouter({ prisma, requireAuth, requireRole })
   );
 }
 
