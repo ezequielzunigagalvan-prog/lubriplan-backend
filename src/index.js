@@ -23,6 +23,7 @@ import adminLinksRoutes from "./routes/admin.links.routes.js";
 import adminOnboardingRoutes from "./routes/admin.onboarding.routes.js";
 import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
     import aiRouter from "./ia/aiRouter.js";
+    import chatRouter from "./ia/chatRouter.js";
     import prisma from "./prisma.js";
     import { getPredictiveMetrics } from "./dashboard/predictiveMetrics.js";
     import analyticsRoutes from "./routes/analytics.routes.js";
@@ -297,6 +298,8 @@ app.options("*", cors(corsOptions));
     buildDashboardSummary,
     toStartOfDaySafe,
   }));
+
+  app.use("/api/ai", chatRouter({ prisma, requireAuth, requireRole }));
 
   app.use(
     "/api",
