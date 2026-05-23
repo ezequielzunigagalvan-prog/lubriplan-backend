@@ -16,7 +16,7 @@ export default function chatRouter({ prisma, requireAuth, requireRole }) {
   router.post(
     "/chat",
     requireAuth,
-    requireRole(["ADMIN", "SUPERVISOR", "TECHNICIAN"]),
+    requireRole(["ADMIN", "SUPERVISOR"]),
     async (req, res) => {
       try {
         const userId = req.user?.id ?? null;
