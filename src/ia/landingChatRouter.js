@@ -8,6 +8,7 @@ const LANDING_MODEL = String(process.env.AI_LANDING_CHAT_MODEL || OPENAI_MODEL |
 const LANDING_MAX_TOKENS = Number(process.env.AI_LANDING_CHAT_MAX_TOKENS || 400);
 const LANDING_IP_LIMIT_PER_HOUR = Number(process.env.AI_LANDING_IP_LIMIT_PER_HOUR || 30);
 const MAX_MESSAGES = 20;
+const isProvider = String(AI_MODE).toLowerCase() === "provider";
 
 // Rate limit por IP: Map<ip, { count, windowStart }>
 const ipWindows = new Map();
@@ -16,76 +17,60 @@ function ipRateLimit(ip) {
   const now = Date.now();
   const HOUR = 3_600_000;
   const entry = ipWindows.get(ip);
-
   if (!entry || now - entry.windowStart > HOUR) {
     ipWindows.set(ip, { count: 1, windowStart: now });
     return true;
   }
-
   if (entry.count >= LANDING_IP_LIMIT_PER_HOUR) return false;
   entry.count++;
   return true;
 }
 
-let clientPromise = null;
-async function getClient() {
-  if (clientPromise) return clientPromise;
-  clientPromise = (async () => {
-    const apiKey = String(process.env.OPENAI_API_KEY || "").trim();
-    if (!apiKey) throw new Error("OPENAI_API_KEY missing");
-    const mod = await import("openai");
-    const OpenAI = mod?.default || mod?.OpenAI || mod;
-    return new OpenAI({ apiKey });
-  })();
-  return clientPromise;
+// Lazy OpenAI client — no cacheamos el promise rechazado para que reintente
+async function getOpenAIClient() {
+  const apiKey = String(process.env.OPENAI_API_KEY || "").trim();
+  if (!apiKey) throw new Error("OPENAI_API_KEY no configurada");
+  const mod = await import("openai");
+  const OpenAI = mod?.default || mod?.OpenAI || mod;
+  return new OpenAI({ apiKey });
 }
 
-const SYSTEM_PROMPT = `Eres el asistente virtual de LubriPlan, una plataforma SaaS para gestión de lubricación industrial. Tu objetivo es responder preguntas sobre el producto, orientar a prospectos y dirigirlos hacia una demo o contacto cuando corresponda.
-
-SOBRE LUBRIPLAN:
-LubriPlan es un sistema que conecta planificación, ejecución, inventario, condición y alertas de lubricación industrial en una sola plataforma. Reemplaza hojas de Excel, papel y mensajes de WhatsApp con control operativo real.
-
-MÓDULOS:
-- Rutas de lubricación: frecuencias, puntos, métodos y responsables
-- Ejecución trazable: técnico, condición, evidencia y consumo real
-- Inventario de lubricantes con alertas de existencia mínima
-- Reportes de condición anormal con seguimiento
-- Alertas operativas y resumen ejecutivo con IA
-- Actividades automáticas, manuales y emergentes
-- Multiplanta sin mezcla de datos entre operaciones
-- Modo offline para campo sin red
-- Exportación e importación de datos
-- LubriPlan Card: carta de lubricación por código QR sin login
-
-ROLES: Administrador, Supervisor, Técnico — cada uno con vistas y permisos diferenciados.
-
-INDUSTRIAS: Manufactura, automotriz, metalmecánica, alimentos y bebidas, servicios auxiliares, plantas industriales en general.
-
-DEMO Y CONTACTO:
-- Demo: hidrolub.com/lubriplan (menciona la URL si preguntan cómo acceder)
-- Email: lubriplan@hidrolub.com
-- Empresa desarrolladora: Hidrolub
-
-PRECIOS: Dependen del tamaño de la operación y configuración. Para cotización puntual, dirigir a la demo o al email de contacto. No inventes cifras.
-
-REGLAS:
-- Responde SIEMPRE en español
-- Sé breve: máximo 3-4 oraciones por respuesta
-- Tono profesional, técnico e industrial
-- Si la pregunta es muy específica de implementación, precio o integración con ERP, dirige al email o a la demo
-- No inventes funcionalidades que no están listadas arriba
-- Si no sabes algo, dilo con honestidad y deriva al contacto`;
+const SYSTEM_PROMPT = [
+  "Eres el asistente virtual de LubriPlan, una plataforma SaaS para gestion de lubricacion industrial.",
+  "Tu objetivo es responder preguntas sobre el producto, orientar a prospectos y dirigirlos hacia una demo o contacto.",
+  "",
+  "SOBRE LUBRIPLAN:",
+  "Sistema que conecta planificacion, ejecucion, inventario, condicion y alertas de lubricacion industrial en una sola plataforma.",
+  "Reemplaza hojas de Excel, papel y mensajes de WhatsApp con control operativo real.",
+  "",
+  "MODULOS: Rutas de lubricacion, ejecucion trazable, inventario con alertas, reportes de condicion anormal,",
+  "alertas operativas y resumen ejecutivo con IA, actividades automaticas/manuales/emergentes,",
+  "multiplanta sin mezcla de datos, modo offline, exportacion/importacion, LubriPlan Card (carta de lubricacion por QR sin login).",
+  "",
+  "ROLES: Administrador, Supervisor, Tecnico — vistas y permisos diferenciados.",
+  "INDUSTRIAS: Manufactura, automotriz, metalmecanica, alimentos y bebidas, servicios auxiliares, plantas industriales.",
+  "",
+  "DEMO Y CONTACTO: hidrolub.com/lubriplan | lubriplan@hidrolub.com | Empresa: Hidrolub",
+  "",
+  "REGLAS:",
+  "- Responde SIEMPRE en espanol",
+  "- Maximo 3-4 oraciones por respuesta",
+  "- Tono profesional, tecnico e industrial",
+  "- Para precios: dependen de la operacion, derivar a demo o email",
+  "- No inventes funcionalidades no listadas",
+].join("\n");
 
 function mockReply(userText) {
   const t = String(userText || "").toLowerCase();
-  if (t.includes("demo")) return "Puedes solicitar una demo en hidrolub.com/lubriplan o escribiendo a lubriplan@hidrolub.com. El equipo te contactará para mostrarla en tu contexto operativo.";
-  if (t.includes("precio") || t.includes("costo") || t.includes("cuesta")) return "El costo depende del tamaño de la operación y la configuración. Para una cotización puntual, escribe a lubriplan@hidrolub.com o solicita la demo en hidrolub.com/lubriplan.";
-  if (t.includes("módulo") || t.includes("funcionalidad") || t.includes("incluye")) return "LubriPlan incluye rutas, ejecución trazable, inventario, condición anormal, alertas con IA, multiplanta, modo offline y LubriPlan Card. Todo en una sola plataforma, sin módulos separados.";
-  if (t.includes("card") || t.includes("qr")) return "LubriPlan Card es la carta de lubricación digital. El técnico escanea el QR del equipo y accede a puntos, lubricantes, cantidades y métodos — sin login ni instalación.";
-  if (t.includes("offline") || t.includes("sin red") || t.includes("campo")) return "LubriPlan tiene modo offline. El técnico puede registrar ejecuciones en campo aunque no tenga red, y los datos se sincronizan al reconectarse.";
-  if (t.includes("multiplanta") || t.includes("varias plantas")) return "Sí, LubriPlan soporta multiplanta con datos completamente separados por operación. Cada planta tiene su propio contexto sin mezcla de información.";
-  if (t.includes("ia") || t.includes("inteligencia") || t.includes("ai")) return "LubriPlan incluye resumen ejecutivo generado con IA que analiza la operación del mes, detecta patrones y entrega recomendaciones accionables con contexto real de planta.";
-  return "LubriPlan es la plataforma de gestión de lubricación industrial que conecta planificación, ejecución, inventario y alertas en un solo sistema. ¿Tienes alguna pregunta específica sobre el producto o deseas solicitar una demo?";
+  if (t.includes("demo")) return "Puedes solicitar una demo en hidrolub.com/lubriplan o escribiendo a lubriplan@hidrolub.com. El equipo te contactara para mostrarla en tu operacion.";
+  if (t.includes("precio") || t.includes("costo") || t.includes("cuesta")) return "El costo depende del tamano de la operacion y la configuracion. Para cotizacion, escribe a lubriplan@hidrolub.com o solicita la demo en hidrolub.com/lubriplan.";
+  if (t.includes("modulo") || t.includes("funcionalidad") || t.includes("incluye") || t.includes("que hace")) return "LubriPlan incluye rutas, ejecucion trazable, inventario, condicion anormal, alertas con IA, multiplanta, modo offline y LubriPlan Card. Todo en una sola plataforma, sin modulos separados.";
+  if (t.includes("card") || t.includes("qr") || t.includes("carta")) return "LubriPlan Card es la carta de lubricacion digital. El tecnico escanea el QR del equipo y accede a puntos, lubricantes, cantidades y metodos sin login ni instalacion.";
+  if (t.includes("offline") || t.includes("sin red") || t.includes("campo")) return "LubriPlan tiene modo offline. El tecnico registra ejecuciones en campo sin red y los datos se sincronizan al reconectarse.";
+  if (t.includes("multiplanta") || t.includes("varias plantas")) return "LubriPlan soporta multiplanta con datos separados por operacion. Cada planta tiene su propio contexto sin mezcla de informacion.";
+  if (t.includes("ia") || t.includes("inteligencia") || t.includes("ai") || t.includes("resumen")) return "LubriPlan incluye resumen ejecutivo con IA que analiza la operacion, detecta patrones y entrega recomendaciones con contexto real de planta.";
+  if (t.includes("quien") || t.includes("para que") || t.includes("para quien")) return "LubriPlan es para jefes de mantenimiento, supervisores y tecnicos de lubricacion industrial en manufactura, automotriz, metalmecanica y otras industrias.";
+  return "LubriPlan conecta planificacion, ejecucion, inventario y alertas de lubricacion industrial en un solo sistema. Puedo ayudarte con preguntas sobre funcionalidades, como funciona o como solicitar una demo.";
 }
 
 export default function landingChatRouter() {
@@ -93,52 +78,76 @@ export default function landingChatRouter() {
 
   router.post("/landing/chat", async (req, res) => {
     try {
-      const ip = String(
-        req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
+      // IP para rate limit
+      const rawIp =
+        req.headers["x-forwarded-for"] ||
         req.socket?.remoteAddress ||
-        "unknown"
-      );
+        "unknown";
+      const ip = String(Array.isArray(rawIp) ? rawIp[0] : rawIp)
+        .split(",")[0]
+        .trim();
 
-      if (String(AI_MODE).toLowerCase() === "provider" && !ipRateLimit(ip)) {
+      // Rate limit solo en modo provider
+      if (isProvider && !ipRateLimit(ip)) {
         return res.status(429).json({ error: "Demasiadas consultas. Intenta en unos minutos." });
       }
 
-      const { messages } = req.body || {};
+      // Validar body
+      const body = req.body;
+      if (!body || typeof body !== "object") {
+        return res.status(400).json({ error: "Body JSON requerido" });
+      }
+
+      const { messages } = body;
 
       if (!Array.isArray(messages) || messages.length === 0) {
         return res.status(400).json({ error: "messages array requerido" });
       }
 
       if (messages.length > MAX_MESSAGES) {
-        return res.status(400).json({ error: `Historial demasiado largo (máx ${MAX_MESSAGES})` });
+        return res.status(400).json({ error: `Historial demasiado largo (max ${MAX_MESSAGES})` });
       }
 
       for (const m of messages) {
-        if (!m?.role || !m?.content || !["user", "assistant"].includes(String(m.role))) {
-          return res.status(400).json({ error: "Mensaje con role o content inválido" });
+        if (
+          !m ||
+          typeof m !== "object" ||
+          !m.role ||
+          !m.content ||
+          !["user", "assistant"].includes(String(m.role))
+        ) {
+          return res.status(400).json({ error: "Cada mensaje requiere role (user|assistant) y content" });
         }
         if (String(m.content).length > 2000) {
-          return res.status(400).json({ error: "Mensaje demasiado largo (máx 2000 caracteres)" });
+          return res.status(400).json({ error: "Mensaje demasiado largo (max 2000 caracteres)" });
         }
       }
 
-      if (String(AI_MODE).toLowerCase() !== "provider") {
+      // Modo mock
+      if (!isProvider) {
         const lastUser = [...messages].reverse().find((m) => m.role === "user");
         return res.json({ ok: true, reply: mockReply(lastUser?.content), model: "mock" });
       }
 
-      const client = await getClient();
-      const response = await client.chat.completions.create({
-        model: LANDING_MODEL,
-        messages: [{ role: "system", content: SYSTEM_PROMPT }, ...messages],
-        max_tokens: LANDING_MAX_TOKENS,
-        temperature: 0.3,
-      });
-
-      const reply = response.choices?.[0]?.message?.content?.trim() || "";
-      return res.json({ ok: true, reply, model: response.model });
+      // Modo provider — con fallback a mock si OpenAI falla
+      try {
+        const client = await getOpenAIClient();
+        const response = await client.chat.completions.create({
+          model: LANDING_MODEL,
+          messages: [{ role: "system", content: SYSTEM_PROMPT }, ...messages],
+          max_tokens: LANDING_MAX_TOKENS,
+          temperature: 0.3,
+        });
+        const reply = response.choices?.[0]?.message?.content?.trim() || "";
+        return res.json({ ok: true, reply, model: response.model });
+      } catch (aiErr) {
+        // Si OpenAI falla en landing, respondemos con mock en lugar de 500
+        console.error("[landingChat] OpenAI error, fallback a mock:", aiErr?.message ?? aiErr);
+        const lastUser = [...messages].reverse().find((m) => m.role === "user");
+        return res.json({ ok: true, reply: mockReply(lastUser?.content), model: "mock-fallback" });
+      }
     } catch (e) {
-      console.error("[landingChatRouter] Error:", e);
+      console.error("[landingChat] Error inesperado:", e?.message ?? e, e?.stack);
       return res.status(500).json({ error: "Error en el asistente. Intenta de nuevo." });
     }
   });
