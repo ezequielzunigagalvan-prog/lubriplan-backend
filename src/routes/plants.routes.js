@@ -1,6 +1,15 @@
 // routes/plants.routes.js
 import express from "express";
 
+function isValidTimeZone(value) {
+  try {
+    new Intl.DateTimeFormat("es-MX", { timeZone: value }).format(new Date());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * plantsRoutes
  * Endpoints:
@@ -103,6 +112,10 @@ export default function plantsRoutes({ prisma, auth, requireRole }) {
 
       const tz = String(timezone || "America/Mexico_City").trim();
 
+      if (!isValidTimeZone(tz)) {
+        return res.status(400).json({ ok: false, error: "Timezone inválida" });
+      }
+
       const userId = req.user.id;
 
       // Crear planta y membresía en transacción
@@ -170,6 +183,15 @@ export default function plantsRoutes({ prisma, auth, requireRole }) {
       const { name, timezone, active } = req.body || {};
 
       if (!plantId) return res.status(400).json({ ok: false, error: "plantId inválido" });
+
+      const membership = await prisma.userPlant.findUnique({
+        where: { userId_plantId: { userId: req.user.id, plantId } },
+        select: { active: true },
+      });
+
+      if (!membership?.active) {
+        return res.status(403).json({ ok: false, error: "PLANT_FORBIDDEN" });
+      }
 
       const data = {};
       if (name != null) {

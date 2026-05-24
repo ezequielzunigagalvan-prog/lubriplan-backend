@@ -2,23 +2,6 @@ import express from "express";
 import { hashPassword } from "../utils/password.js";
 
 const DEFAULT_TIMEZONE = "America/Mexico_City";
-const GLOBAL_SETTINGS_SCHEMA = {
-  executionEvidenceRequired: "boolean",
-  preventNegativeStock: "boolean",
-  lowStockWarningEnabled: "boolean",
-  technicianOverloadEnabled: "boolean",
-  predictiveAlertsEnabled: "boolean",
-  aiSummaryEnabled: "boolean",
-  criticalActivityEmailEnabled: "boolean",
-  conditionReportEmailEnabled: "boolean",
-  overdueSummaryEmailEnabled: "boolean",
-  monthlyReportEmailEnabled: "boolean",
-  overloadWindowDays: "int",
-  overloadOverdueLookbackDays: "int",
-  overloadCapacityPerDay: "int",
-  overloadWarnRatio: "float",
-  overloadCriticalRatio: "float",
-};
 
 function normalizeText(value) {
   return String(value || "").trim();
@@ -51,39 +34,10 @@ function toIntInRange(value, min, max, fallback) {
   return rounded;
 }
 
-function pickGlobalSettings(settings) {
-  const source = settings && typeof settings === "object" ? settings : {};
-  const data = {};
-
-  for (const [key, type] of Object.entries(GLOBAL_SETTINGS_SCHEMA)) {
-    if (source[key] === undefined) continue;
-    const value = source[key];
-
-    if (type === "boolean") {
-      if (typeof value !== "boolean") {
-        throw new Error(`${key} debe ser boolean`);
-      }
-      data[key] = value;
-      continue;
-    }
-
-    const num = Number(value);
-    if (!Number.isFinite(num)) {
-      throw new Error(`${key} debe ser number`);
-    }
-
-    data[key] = type === "int" ? Math.trunc(num) : num;
-  }
-
-  if (
-    data.overloadWarnRatio !== undefined &&
-    data.overloadCriticalRatio !== undefined &&
-    Number(data.overloadWarnRatio) >= Number(data.overloadCriticalRatio)
-  ) {
-    throw new Error("overloadWarnRatio debe ser menor que overloadCriticalRatio");
-  }
-
-  return data;
+function isValidEmailList(value) {
+  if (!value) return true;
+  const emails = value.split(",").map((e) => e.trim()).filter(Boolean);
+  return emails.length > 0 && emails.every((e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
 }
 
 export default function adminOnboardingRoutes({ prisma, auth, requireRole }) {
@@ -95,46 +49,22 @@ export default function adminOnboardingRoutes({ prisma, auth, requireRole }) {
     requireRole(["ADMIN"]),
     async (req, res) => {
       try {
-        const companyName = normalizeText(req.body?.companyName);
-        const plantNameRaw = normalizeText(req.body?.plantName);
-        const plantName = plantNameRaw || companyName;
+        const plantName = normalizeText(req.body?.plantName);
         const timezoneRaw = normalizeText(req.body?.timezone) || DEFAULT_TIMEZONE;
         const adminName = normalizeText(req.body?.adminName);
         const adminEmail = normalizeEmail(req.body?.adminEmail);
         const adminPassword = String(req.body?.adminPassword || "");
-        const monthlyReportEnabled = toOptionalBool(
-          req.body?.monthlyReportEnabled,
-          true
-        );
-        const monthlyReportDay = toIntInRange(
-          req.body?.monthlyReportDay,
-          1,
-          28,
-          1
-        );
-        const monthlyReportHour = toIntInRange(
-          req.body?.monthlyReportHour,
-          0,
-          23,
-          8
-        );
+        const monthlyReportEnabled = toOptionalBool(req.body?.monthlyReportEnabled, true);
+        const monthlyReportDay = toIntInRange(req.body?.monthlyReportDay, 1, 28, 1);
+        const monthlyReportHour = toIntInRange(req.body?.monthlyReportHour, 0, 23, 8);
         const monthlyReportRecipientsExtra =
           normalizeText(req.body?.monthlyReportRecipientsExtra) || null;
-        const applyGlobalSettings = toOptionalBool(
-          req.body?.applyGlobalSettings,
-          false
-        );
-        const linkRequesterToPlant = toOptionalBool(
-          req.body?.linkRequesterToPlant,
-          true
-        );
+        const linkRequesterToPlant = toOptionalBool(req.body?.linkRequesterToPlant, true);
         const createBaseArea = toOptionalBool(req.body?.createBaseArea, false);
         const baseAreaName = normalizeText(req.body?.baseAreaName) || "General";
 
         if (!plantName) {
-          return res.status(400).json({
-            error: "plantName o companyName es obligatorio",
-          });
+          return res.status(400).json({ error: "plantName es obligatorio" });
         }
 
         if (!adminName || !adminEmail || !adminPassword) {
@@ -150,19 +80,21 @@ export default function adminOnboardingRoutes({ prisma, auth, requireRole }) {
         }
 
         if (!isValidTimeZone(timezoneRaw)) {
-          return res.status(400).json({ error: "Timezone invalida" });
+          return res.status(400).json({ error: "Timezone inválida" });
         }
 
         if (monthlyReportDay == null) {
-          return res
-            .status(400)
-            .json({ error: "monthlyReportDay debe estar entre 1 y 28" });
+          return res.status(400).json({ error: "monthlyReportDay debe estar entre 1 y 28" });
         }
 
         if (monthlyReportHour == null) {
-          return res
-            .status(400)
-            .json({ error: "monthlyReportHour debe estar entre 0 y 23" });
+          return res.status(400).json({ error: "monthlyReportHour debe estar entre 0 y 23" });
+        }
+
+        if (monthlyReportRecipientsExtra && !isValidEmailList(monthlyReportRecipientsExtra)) {
+          return res.status(400).json({
+            error: "monthlyReportRecipientsExtra contiene emails inválidos",
+          });
         }
 
         const existingUser = await prisma.user.findUnique({
@@ -171,14 +103,7 @@ export default function adminOnboardingRoutes({ prisma, auth, requireRole }) {
         });
 
         if (existingUser) {
-          return res.status(409).json({
-            error: "Ya existe un usuario con ese correo",
-          });
-        }
-
-        let globalSettingsData = {};
-        if (applyGlobalSettings) {
-          globalSettingsData = pickGlobalSettings(req.body?.settings);
+          return res.status(409).json({ error: "Ya existe un usuario con ese correo" });
         }
 
         const requesterId = Number(req.user?.id || 0) || null;
@@ -249,11 +174,7 @@ export default function adminOnboardingRoutes({ prisma, auth, requireRole }) {
           let requesterLinked = false;
           if (linkRequesterToPlant && requesterId && requesterId !== user.id) {
             const requesterHasDefault = await tx.userPlant.findFirst({
-              where: {
-                userId: requesterId,
-                active: true,
-                isDefault: true,
-              },
+              where: { userId: requesterId, active: true, isDefault: true },
               select: { id: true },
             });
 
@@ -268,43 +189,20 @@ export default function adminOnboardingRoutes({ prisma, auth, requireRole }) {
             requesterLinked = true;
           }
 
-          let settings = null;
-          if (applyGlobalSettings && Object.keys(globalSettingsData).length > 0) {
-            settings = await tx.appSettings.upsert({
-              where: { id: 1 },
-              create: { id: 1, ...globalSettingsData },
-              update: globalSettingsData,
-            });
-          }
-
-          return {
-            plant,
-            user,
-            baseArea,
-            settingsApplied: Boolean(settings),
-            requesterLinked,
-          };
+          return { plant, user, baseArea, requesterLinked };
         });
 
         return res.status(201).json({
           ok: true,
-          companyName: companyName || null,
           plant: result.plant,
           user: result.user,
           baseArea: result.baseArea,
-          settingsApplied: result.settingsApplied,
-          settingsSkipped:
-            !applyGlobalSettings ||
-            Object.keys(globalSettingsData).length === 0,
           requesterLinked: result.requesterLinked,
-          note:
-            "Los ajustes avanzados siguen siendo globales en la version actual.",
         });
       } catch (error) {
         console.error("POST /api/admin/onboarding-client error:", error);
         return res.status(500).json({
-          error:
-            error?.message || "Error creando el onboarding del cliente",
+          error: error?.message || "Error creando el onboarding del cliente",
         });
       }
     }
