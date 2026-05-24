@@ -53,10 +53,14 @@ export async function buildChatContext(prisma, { plantId }) {
   const openTo = new Date(now);
   openTo.setDate(openTo.getDate() + 30);
 
+  const last30 = new Date(now);
+  last30.setDate(last30.getDate() - 30);
+
   const [
     openExecs,
     completedCount,
     openConditionReports,
+    badConditionExecCount,
     technicians,
     lubricants,
     purchaseOrders,
@@ -82,7 +86,7 @@ export async function buildChatContext(prisma, { plantId }) {
       },
     }),
 
-    // Reportes de condición abiertos con info del equipo (tenant-scoped + plantId explícito)
+    // Reportes de condición FORMALES abiertos (creados explícitamente por técnico/usuario)
     prisma.conditionReport.findMany({
       where: {
         plantId: pid,
@@ -95,6 +99,17 @@ export async function buildChatContext(prisma, { plantId }) {
       },
       orderBy: [{ condition: "desc" }, { createdAt: "asc" }],
       take: 8,
+    }),
+
+    // Ejecuciones completadas con condición MALO o CRITICO en los últimos 30 días
+    // IMPORTANTE: estas NO son reportes de condición formales; son evaluaciones de ejecución
+    prisma.execution.count({
+      where: {
+        plantId: pid,
+        status: "COMPLETED",
+        condition: { in: ["MALO", "CRITICO"] },
+        executedAt: { gte: last30 },
+      },
     }),
 
     // Técnicos activos con sus ejecuciones abiertas (tenant-scoped + plantId explícito)
@@ -184,6 +199,7 @@ export async function buildChatContext(prisma, { plantId }) {
       overdue: overdueCount,
       total: completedCount + pendingCount + overdueCount,
     },
+    badConditionExecCount,
     openConditionReports: openConditionReports.map((r) => ({
       status: r.status,
       condition: String(r.condition || ""),

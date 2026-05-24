@@ -33,7 +33,10 @@ Reglas estrictas:
 - Cuando menciones un equipo específico, incluye su código entre paréntesis si está disponible. Ejemplo: COMPRESOR (CPR-01).
 - Si el usuario pregunta algo fuera del ámbito de mantenimiento/lubricación, responde brevemente y redirige al tema.
 - Prioriza en este orden: actividades vencidas → reportes de condición críticos → stock bajo → carga desbalanceada de técnicos.
-- No compares esta planta con otras plantas o benchmarks externos.`;
+- No compares esta planta con otras plantas o benchmarks externos.
+- DISTINCIÓN CRÍTICA — debes entender y comunicar correctamente la diferencia entre:
+  * "Reporte de condición formal": entidad creada EXPLÍCITAMENTE por un técnico o usuario en la app para reportar una anomalía (fuga, ruido, vibración, temperatura, contaminación). Aparece en la sección "Reportes de condición formales" del contexto. Solo estos cuentan como reportes de condición.
+  * "Actividad con condición deficiente": cuando al COMPLETAR una actividad del programa el técnico marca la condición del equipo como MALO o CRITICO. Esto NO crea un reporte de condición formal; solo genera una alerta interna a supervisión y admin. Aparece en el contexto como "Actividades recientes con condición MALO/CRITICO". Si preguntan si hay reportes de condición y solo existen actividades con condición deficiente, responde claramente: "No hay reportes de condición formales, pero hay X actividades completadas recientemente con condición MALO/CRITICO."`;
 
   if (!context) {
     return identity + "\n\nContexto de planta: No disponible en este momento.";
@@ -43,6 +46,7 @@ Reglas estrictas:
     plantName,
     activities,
     openConditionReports,
+    badConditionExecCount,
     activeTechnicians,
     lowStockLubricants,
     activePurchaseOrders,
@@ -56,12 +60,19 @@ Reglas estrictas:
 - Vencidas (atrasadas): ${activities.overdue}`;
 
   if (openConditionReports?.length > 0) {
-    ctx += `\n\nReportes de condición abiertos (${openConditionReports.length}):`;
+    ctx += `\n\nReportes de condición formales abiertos (${openConditionReports.length}) — creados explícitamente por técnico/usuario:`;
     openConditionReports.slice(0, 6).forEach((r) => {
       ctx += `\n  • [${r.status}] ${r.equipment}${r.equipmentCode ? ` (${r.equipmentCode})` : ""}: condición ${r.condition}${r.criticality ? `, criticidad ${r.criticality}` : ""} — hace ${r.ageHours}h`;
     });
   } else {
-    ctx += "\n\nReportes de condición: Sin reportes abiertos actualmente.";
+    ctx += "\n\nReportes de condición formales: Sin reportes formales abiertos actualmente.";
+  }
+
+  const badExecs = Number(badConditionExecCount ?? 0);
+  if (badExecs > 0) {
+    ctx += `\n\nActividades recientes con condición MALO/CRITICO (últimos 30 días): ${badExecs}. NOTA: estas NO son reportes de condición formales; son evaluaciones registradas al completar una actividad del programa.`;
+  } else {
+    ctx += "\n\nActividades recientes con condición MALO/CRITICO: ninguna en los últimos 30 días.";
   }
 
   if (isAdmin) {
@@ -107,11 +118,12 @@ function mockReply(context) {
   const overdue = context?.activities?.overdue ?? 0;
   const plant = context?.plantName || "la planta";
   const reports = context?.openConditionReports?.length ?? 0;
+  const badExecs = context?.badConditionExecCount ?? 0;
 
   if (overdue > 0) {
-    return `[Demo] Hola, soy LubriBot. En ${plant} hay ${overdue} actividad(es) vencida(s) que requieren atención prioritaria. También hay ${reports} reporte(s) de condición abierto(s). Para activar respuestas reales, configura AI_MODE=provider en el backend.`;
+    return `[Demo] Hola, soy LubriBot. En ${plant} hay ${overdue} actividad(es) vencida(s) que requieren atención prioritaria. Reportes de condición formales abiertos: ${reports}. Actividades completadas con condición MALO/CRITICO (últimos 30 días): ${badExecs}. Para activar respuestas reales, configura AI_MODE=provider en el backend.`;
   }
-  return `[Demo] Hola, soy LubriBot. La operación en ${plant} está al día: sin actividades vencidas y ${reports} reporte(s) de condición abierto(s). Para activar respuestas reales, configura AI_MODE=provider en el backend.`;
+  return `[Demo] Hola, soy LubriBot. La operación en ${plant} está al día: sin actividades vencidas. Reportes de condición formales abiertos: ${reports}. Actividades completadas con condición MALO/CRITICO (últimos 30 días): ${badExecs}. Para activar respuestas reales, configura AI_MODE=provider en el backend.`;
 }
 
 export async function generateChatReply({ messages, context, role }) {
