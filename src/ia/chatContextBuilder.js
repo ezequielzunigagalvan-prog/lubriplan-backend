@@ -53,9 +53,6 @@ export async function buildChatContext(prisma, { plantId }) {
   const openTo = new Date(now);
   openTo.setDate(openTo.getDate() + 30);
 
-  const last30 = new Date(now);
-  last30.setDate(last30.getDate() - 30);
-
   const [
     openExecs,
     completedCount,
@@ -101,14 +98,14 @@ export async function buildChatContext(prisma, { plantId }) {
       take: 8,
     }),
 
-    // Ejecuciones completadas con condición MALO o CRITICO en los últimos 30 días
+    // Ejecuciones completadas con condición MALO o CRITICO en el mes actual
     // IMPORTANTE: estas NO son reportes de condición formales; son evaluaciones de ejecución
     prisma.execution.count({
       where: {
         plantId: pid,
         status: "COMPLETED",
         condition: { in: ["MALO", "CRITICO"] },
-        executedAt: { gte: last30 },
+        executedAt: { gte: monthFrom, lte: monthTo },
       },
     }),
 

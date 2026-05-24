@@ -70,9 +70,9 @@ Reglas estrictas:
 
   const badExecs = Number(badConditionExecCount ?? 0);
   if (badExecs > 0) {
-    ctx += `\n\nActividades recientes con condición MALO/CRITICO (últimos 30 días): ${badExecs}. NOTA: estas NO son reportes de condición formales; son evaluaciones registradas al completar una actividad del programa.`;
+    ctx += `\n\nActividades del mes actual con condición MALO/CRITICO: ${badExecs}. NOTA: estas NO son reportes de condición formales; son evaluaciones registradas al completar una actividad del programa.`;
   } else {
-    ctx += "\n\nActividades recientes con condición MALO/CRITICO: ninguna en los últimos 30 días.";
+    ctx += "\n\nActividades del mes actual con condición MALO/CRITICO: ninguna este mes.";
   }
 
   if (isAdmin) {
