@@ -835,3 +835,18 @@ model IntegrationSyncLog {
   @@index([status])
   @@index([startedAt])
 }
+
+model LandingChatLog {
+  id          Int      @id @default(autoincrement())
+  sessionId   String   @unique
+  messages    Json
+  ip          String?
+  isHotLead   Boolean  @default(false)
+  hotKeywords String[]
+  emailSent   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([isHotLead])
+  @@index([createdAt])
+}

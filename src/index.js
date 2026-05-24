@@ -25,6 +25,7 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
     import aiRouter from "./ia/aiRouter.js";
     import chatRouter from "./ia/chatRouter.js";
     import landingChatRouter from "./ia/landingChatRouter.js";
+    import landingChatLogsRoutes from "./routes/landingChatLogs.routes.js";
     import prisma from "./prisma.js";
     import { getPredictiveMetrics } from "./dashboard/predictiveMetrics.js";
     import analyticsRoutes from "./routes/analytics.routes.js";
@@ -218,7 +219,7 @@ app.options("*", cors(corsOptions));
 
   /* ========= ROUTES PUBLICAS ========= */
   app.use("/api/auth", authRouter);
-  app.use("/api", landingChatRouter());
+  app.use("/api", landingChatRouter(prisma));
 
   // 6) resolver planta actual DESPUES de tener usuario
   app.use(attachCurrentPlant);
@@ -302,6 +303,7 @@ app.options("*", cors(corsOptions));
   }));
 
   app.use("/api/ai", chatRouter({ prisma, requireAuth, requireRole }));
+  app.use("/api", landingChatLogsRoutes({ prisma, auth: requireAuth, requireRole }));
 
   app.use(
     "/api",
