@@ -11,11 +11,13 @@ export default function landingChatLogsRoutes({ prisma, auth, requireRole }) {
     requireRole(["ADMIN"]),
     async (req, res) => {
       try {
-        const { hotOnly, page = "1", limit = "50" } = req.query;
+        const { hotOnly, source, page = "1", limit = "50" } = req.query;
         const take = Math.min(Number(limit) || 50, 200);
         const skip = (Math.max(Number(page) || 1, 1) - 1) * take;
 
-        const where = hotOnly === "true" ? { isHotLead: true } : {};
+        const where = {};
+        if (hotOnly === "true") where.isHotLead = true;
+        if (source === "landing" || source === "card") where.source = source;
 
         const [logs, total] = await Promise.all([
           prisma.landingChatLog.findMany({

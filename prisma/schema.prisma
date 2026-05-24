@@ -841,6 +841,7 @@ model LandingChatLog {
   sessionId   String   @unique
   messages    Json
   ip          String?
+  source      String   @default("landing")
   isHotLead   Boolean  @default(false)
   hotKeywords String[]
   emailSent   Boolean  @default(false)
@@ -848,5 +849,25 @@ model LandingChatLog {
   updatedAt   DateTime @updatedAt
 
   @@index([isHotLead])
+  @@index([source])
+  @@index([createdAt])
+}
+
+model LandingLead {
+  id        Int      @id @default(autoincrement())
+  nombre    String
+  email     String
+  telefono  String
+  empresa   String?
+  source    String   @default("landing")
+  sessionId String?
+  status    String   @default("NUEVO")
+  emailSent Boolean  @default(false)
+  ip        String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([source])
+  @@index([status])
   @@index([createdAt])
 }
