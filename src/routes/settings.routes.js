@@ -47,6 +47,7 @@ export default function settingsRoutes({ prisma, auth, requireRole }) {
         conditionReportEmailEnabled: "boolean",
         overdueSummaryEmailEnabled: "boolean",
         monthlyReportEmailEnabled: "boolean",
+        monthlyTechSummaryEnabled: "boolean",
 
         // avanzados
         overloadWindowDays: "int",

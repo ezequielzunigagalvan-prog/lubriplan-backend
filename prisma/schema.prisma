@@ -33,10 +33,11 @@ model AppSettings {
   technicianOverloadEnabled Boolean @default(true)
   predictiveAlertsEnabled   Boolean @default(true)
   aiSummaryEnabled          Boolean @default(true)
-  criticalActivityEmailEnabled Boolean @default(true)
-  conditionReportEmailEnabled  Boolean @default(true)
-  overdueSummaryEmailEnabled   Boolean @default(true)
-  monthlyReportEmailEnabled    Boolean @default(true)
+  criticalActivityEmailEnabled   Boolean @default(true)
+  conditionReportEmailEnabled    Boolean @default(true)
+  overdueSummaryEmailEnabled     Boolean @default(true)
+  monthlyReportEmailEnabled      Boolean @default(true)
+  monthlyTechSummaryEnabled      Boolean @default(false)
 
   // =========================  
   // Sobrecarga técnicos
@@ -367,6 +368,7 @@ enum ConditionReportCategory {
 
 enum ScheduledJobType {
   MONTHLY_EXEC_REPORT
+  MONTHLY_TECH_SUMMARY
   OVERDUE_SUMMARY
 }
 

@@ -50,6 +50,7 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
   import webhooksRoutes from "./routes/webhooks.routes.js";
   import { destroyCloudinaryImage, normalizeImageInput } from "./lib/cloudinary.js";
   import { startMonthlyExecutiveReportScheduler } from "./jobs/monthlyExecutiveReport.job.js";
+  import { startMonthlyTechSummaryScheduler } from "./jobs/monthlyTechSummary.job.js";
   import monthlyReportRoutes from "./routes/monthlyReport.routes.js";
   import lubricationCardsRoutes from "./routes/lubricationCards.routes.js";
 
@@ -388,6 +389,8 @@ app.options("*", cors(corsOptions));
     prisma,
     baseUrl: process.env.APP_BASE_URL || "http://localhost:5173",
   });
+
+  startMonthlyTechSummaryScheduler({ prisma });
 
     /* ========= PROTECCION GLOBAL ========= */
     process.on("unhandledRejection", (reason) => {
