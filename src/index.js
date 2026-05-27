@@ -7754,18 +7754,17 @@ app.patch(
           });
         }
 
-        const refreshedExecution = await tx.execution.findFirst({
-          where: { id: saved.id, plantId },
-          select: executionBaseSelect,
-        });
-
         return {
-          execution: refreshedExecution,
+          executionId: saved.id,
           resolvedConditionReport,
         };
       });
 
-      const updated = completionResult?.execution || null;
+      // Query pesada fuera del transaction para no bloquear el lock de BD
+      const updated = await prisma.execution.findFirst({
+        where: { id: completionResult.executionId, plantId },
+        select: executionBaseSelect,
+      });
 
       if (!updated) {
         return res.status(500).json({ error: "No se pudo refrescar la actividad completada" });
@@ -7774,21 +7773,17 @@ app.patch(
       if (completionResult?.resolvedConditionReport) {
         const resolvedReport = completionResult.resolvedConditionReport;
 
-        try {
-          await notifyManagers(prisma, {
-            plantId,
-            type: "CONDITION_RESOLVED",
-            title: "Reporte resuelto",
-            message: `${resolvedReport.equipment?.name || "Equipo"}${
-              resolvedReport.equipment?.code
-                ? ` (${resolvedReport.equipment.code})`
-                : ""
-            } · Reporte #${resolvedReport.id}`,
-            link: "/condition-reports?status=RESOLVED",
-          });
-        } catch (notifyErr) {
-          console.error("No se pudo notificar resolucion de reporte:", notifyErr);
-        }
+        notifyManagers(prisma, {
+          plantId,
+          type: "CONDITION_RESOLVED",
+          title: "Reporte resuelto",
+          message: `${resolvedReport.equipment?.name || "Equipo"}${
+            resolvedReport.equipment?.code
+              ? ` (${resolvedReport.equipment.code})`
+              : ""
+          } · Reporte #${resolvedReport.id}`,
+          link: "/condition-reports?status=RESOLVED",
+        }).catch((notifyErr) => console.error("No se pudo notificar resolucion de reporte:", notifyErr));
 
         sseHub.broadcast("condition-report.resolved", {
           plantId,
@@ -7807,58 +7802,43 @@ app.patch(
       }
 
       if (condition === "CRITICO") {
-        try {
-          await notifyManagers(prisma, {
-            plantId,
-            type: "EXEC_CONDITION_CRITICAL",
-            title: "Actividad crítica completada",
-            message: `${updated.route?.equipment?.name || updated.equipment?.name || "Equipo"}${
-              updated.route?.equipment?.code || updated.equipment?.code
-                ? ` (${updated.route?.equipment?.code || updated.equipment?.code})`
-                : ""
-            } · Ejecución #${updated.id}`,
-            link: `/activities?filter=critical-risk&executionId=${updated.id}&focus=critical`,
-          });
+        const criticalEquipName = updated.route?.equipment?.name || updated.equipment?.name || "Equipo";
+        const criticalEquipCode = updated.route?.equipment?.code || updated.equipment?.code || "";
 
-          await sendCriticalActivityEmail({
-            prisma,
-            payload: {
-              plantId,
-              plantName: null,
-              equipmentName:
-                updated.route?.equipment?.name ||
-                updated.equipment?.name ||
-                updated.manualTitle ||
-                "Equipo",
-              equipmentCode:
-                updated.route?.equipment?.code ||
-                updated.equipment?.code ||
-                "",
-              riskLevel: "CRÍTICO",
-              reason: "Actividad completada con condición crítica",
-              observation:
-                updated.observations ||
-                updated.evidenceNote ||
-                "",
-              evidenceImage: updated.evidenceImage || null,
-              occurredAt: updated.executedAt || new Date(),
-              suggestedAction: "Revisar la actividad y definir seguimiento inmediato.",
-              link: `${process.env.APP_BASE_URL || "http://localhost:5173"}/activities?filter=critical-risk&executionId=${updated.id}&focus=critical`,
-            },
-          });
+        notifyManagers(prisma, {
+          plantId,
+          type: "EXEC_CONDITION_CRITICAL",
+          title: "Actividad crítica completada",
+          message: `${criticalEquipName}${criticalEquipCode ? ` (${criticalEquipCode})` : ""} · Ejecución #${updated.id}`,
+          link: `/activities?filter=critical-risk&executionId=${updated.id}&focus=critical`,
+        }).catch((e) => console.error("No se pudo notificar ejecucion critica:", e));
 
-          sseHub.broadcast("execution.critical", {
+        sendCriticalActivityEmail({
+          prisma,
+          payload: {
             plantId,
-            executionId: updated.id,
-            equipmentId: updated.route?.equipment?.id ?? updated.equipment?.id ?? null,
-            equipmentName: updated.route?.equipment?.name ?? updated.equipment?.name ?? null,
-            equipmentCode: updated.route?.equipment?.code ?? updated.equipment?.code ?? null,
-            routeName: updated.route?.name ?? null,
-            executedAt: updated.executedAt,
-          });
-        } catch (notifyErr) {
-          console.error("No se pudo notificar ejecucion critica:", notifyErr);
-        }
+            plantName: null,
+            equipmentName: criticalEquipName,
+            equipmentCode: criticalEquipCode,
+            riskLevel: "CRÍTICO",
+            reason: "Actividad completada con condición crítica",
+            observation: updated.observations || updated.evidenceNote || "",
+            evidenceImage: updated.evidenceImage || null,
+            occurredAt: updated.executedAt || new Date(),
+            suggestedAction: "Revisar la actividad y definir seguimiento inmediato.",
+            link: `${process.env.APP_BASE_URL || "http://localhost:5173"}/activities?filter=critical-risk&executionId=${updated.id}&focus=critical`,
+          },
+        }).catch((e) => console.error("No se pudo enviar email critico:", e));
+
+        sseHub.broadcast("execution.critical", {
+          plantId,
+          executionId: updated.id,
+          equipmentId: updated.route?.equipment?.id ?? updated.equipment?.id ?? null,
+          equipmentName: updated.route?.equipment?.name ?? updated.equipment?.name ?? null,
+          equipmentCode: updated.route?.equipment?.code ?? updated.equipment?.code ?? null,
+          routeName: updated.route?.name ?? null,
+          executedAt: updated.executedAt,
+        });
       }
 
       // Fire webhook (non-blocking)
