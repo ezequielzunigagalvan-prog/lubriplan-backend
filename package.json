@@ -7,7 +7,7 @@
     "dev": "nodemon src/index.js",
     "start": "node src/index.js",
     "seed": "node prisma/seed.js",
-    "db:deploy": "npx prisma migrate deploy",
+    "db:deploy": "node prisma/baseline-and-deploy.js",
     "db:seed-once": "node prisma/seed.js"
   },
   "dependencies": {
