@@ -1,3 +1,4 @@
+﻿import { logger } from "../config/logger.js";
 export async function attachCurrentPlant(req, res, next) {
   try {
     const prisma = req.app.locals.prisma;
@@ -40,7 +41,7 @@ export async function attachCurrentPlant(req, res, next) {
     req.currentPlantId = membership?.plantId ?? null;
     return next();
   } catch (e) {
-    console.error("attachCurrentPlant error:", e);
+    logger.error("attachCurrentPlant error:", e);
     return res.status(500).json({ error: "Error leyendo plantId" });
   }
 }

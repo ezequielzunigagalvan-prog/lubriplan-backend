@@ -1,4 +1,4 @@
-import { Resend } from "resend";
+﻿import { Resend } from "resend";
 import {
   conditionAlertTemplate,
   criticalAlertTemplate,
@@ -6,6 +6,7 @@ import {
   monthlyExecutiveReportTemplate,
 } from "./email.templates.js";
 import { getPlantAlertRecipients } from "./email.recipients.js";
+import { logger } from "../../config/logger.js";
 
 const resend = process.env.RESEND_API_KEY
   ? new Resend(process.env.RESEND_API_KEY)
@@ -46,7 +47,7 @@ function absolutizeUrl(url) {
 
 async function sendEmail({ to, subject, html }) {
   if (!resend) {
-    console.warn("[email] RESEND_API_KEY no configurado. Correo omitido:", subject);
+    logger.warn("[email] RESEND_API_KEY no configurado. Correo omitido:", subject);
     return { ok: false, skipped: true, reason: "RESEND_NOT_CONFIGURED" };
   }
 

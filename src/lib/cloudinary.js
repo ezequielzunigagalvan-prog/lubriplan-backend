@@ -1,5 +1,6 @@
-import { v2 as cloudinary } from "cloudinary";
+﻿import { v2 as cloudinary } from "cloudinary";
 import streamifier from "streamifier";
+import { logger } from "../config/logger.js";
 
 const requiredVars = [
   "CLOUDINARY_CLOUD_NAME",
@@ -131,6 +132,6 @@ export async function destroyCloudinaryImage(publicId) {
   try {
     await getCloudinary().uploader.destroy(id, { invalidate: true, resource_type: "image" });
   } catch (error) {
-    console.error("No se pudo borrar la imagen previa en Cloudinary:", error);
+    logger.error("No se pudo borrar la imagen previa en Cloudinary:", error);
   }
 }

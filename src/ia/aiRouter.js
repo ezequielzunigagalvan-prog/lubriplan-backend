@@ -1,5 +1,6 @@
-// src/ia/aiRouter.js
+﻿// src/ia/aiRouter.js
 import express from "express";
+import { logger } from "../config/logger.js";
 import { getAISummary } from "./aiService.js";
 import { cacheInvalidatePrefix } from "./aiCache.js";
 import {
@@ -111,7 +112,7 @@ export default function aiRouter({
         summary: ai.summary,
       });
     } catch (e) {
-      console.error("AI summary error:", e);
+      logger.error("AI summary error:", e);
       return res.status(500).json({ error: "Error AI summary" });
     }
   }
@@ -128,7 +129,7 @@ export default function aiRouter({
         cacheInvalidatePrefix("ai:summary:");
         return res.json({ ok: true, message: "Cache IA invalidada" });
       } catch (e) {
-        console.error("AI refresh error:", e);
+        logger.error("AI refresh error:", e);
         return res.status(500).json({ error: "Error AI refresh" });
       }
     }

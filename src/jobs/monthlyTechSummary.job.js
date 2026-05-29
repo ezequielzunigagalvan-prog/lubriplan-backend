@@ -1,4 +1,5 @@
-import { notifyTechnicianAssignee } from "../notifications/notify.js";
+﻿import { notifyTechnicianAssignee } from "../notifications/notify.js";
+import { logger } from "../config/logger.js";
 
 const TZ = "America/Mexico_City";
 const SEND_HOUR = 20; // 8 PM
@@ -145,7 +146,7 @@ export async function runMonthlyTechSummaryJob({ prisma, forcePlantId = null, fo
 
       results.push({ plantId: plant.id, sent: true, notified, period });
     } catch (e) {
-      console.error(`[monthlyTechSummary] plantId=${plant.id}:`, e);
+      logger.error(`[monthlyTechSummary] plantId=${plant.id}:`, e);
       results.push({ plantId: plant.id, sent: false, reason: "ERROR", error: e?.message });
     }
   }
@@ -158,16 +159,16 @@ export function startMonthlyTechSummaryScheduler({ prisma }) {
     try {
       const result = await runMonthlyTechSummaryJob({ prisma });
       if (result.some((r) => r.sent)) {
-        console.log("📬 monthlyTechSummaryJob:", result);
+        logger.info("📬 monthlyTechSummaryJob:", result);
       }
     } catch (e) {
-      console.error("❌ monthlyTechSummaryScheduler:", e);
+      logger.error("❌ monthlyTechSummaryScheduler:", e);
     }
   };
 
   setTimeout(run, 20_000);
   const interval = setInterval(run, 60 * 60 * 1000); // cada hora
 
-  console.log("✅ Monthly Tech Summary scheduler iniciado");
+  logger.info("✅ Monthly Tech Summary scheduler iniciado");
   return interval;
 }

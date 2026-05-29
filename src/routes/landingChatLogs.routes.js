@@ -1,5 +1,6 @@
-// src/routes/landingChatLogs.routes.js
+﻿// src/routes/landingChatLogs.routes.js
 import express from "express";
+import { logger } from "../config/logger.js";
 
 export default function landingChatLogsRoutes({ prisma, auth, requireRole }) {
   const router = express.Router();
@@ -31,7 +32,7 @@ export default function landingChatLogsRoutes({ prisma, auth, requireRole }) {
 
         return res.json({ ok: true, logs, total, page: Number(page), limit: take });
       } catch (e) {
-        console.error("[landingChatLogs] Error:", e?.message);
+        logger.error("[landingChatLogs] Error:", e?.message);
         return res.status(500).json({ error: "Error obteniendo logs" });
       }
     }

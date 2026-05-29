@@ -1,5 +1,6 @@
-import express from "express";
+﻿import express from "express";
 import { hashPassword } from "../utils/password.js";
+import { logger } from "../config/logger.js";
 
 const DEFAULT_TIMEZONE = "America/Mexico_City";
 
@@ -200,7 +201,7 @@ export default function adminOnboardingRoutes({ prisma, auth, requireRole }) {
           requesterLinked: result.requesterLinked,
         });
       } catch (error) {
-        console.error("POST /api/admin/onboarding-client error:", error);
+        logger.error("POST /api/admin/onboarding-client error:", error);
         return res.status(500).json({
           error: error?.message || "Error creando el onboarding del cliente",
         });

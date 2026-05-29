@@ -1,5 +1,6 @@
-import jwt from "jsonwebtoken";
+﻿import jwt from "jsonwebtoken";
 import prisma from "../prisma.js";
+import { logger } from "../config/logger.js";
 
 export async function requireAuth(req, res, next) {
   try {
@@ -25,7 +26,7 @@ export async function requireAuth(req, res, next) {
     try {
       payload = jwt.verify(token, process.env.JWT_SECRET);
     } catch (e) {
-      console.log("[requireAuth] JWT VERIFY FAIL", { method: req.method, url: req.originalUrl, msg: e.message });
+      logger.info("[requireAuth] JWT VERIFY FAIL", { method: req.method, url: req.originalUrl, msg: e.message });
       return res.status(401).json({ error: "Token inválido" });
     }
 
@@ -66,7 +67,7 @@ export async function requireAuth(req, res, next) {
     ]);
 
     if (!dbUser || dbUser.active === false) {
-      console.log("[requireAuth] USER INACTIVE/NOT FOUND", { userId });
+      logger.info("[requireAuth] USER INACTIVE/NOT FOUND", { userId });
       return res.status(401).json({ error: "Usuario inválido/inactivo" });
     }
 
@@ -89,7 +90,7 @@ export async function requireAuth(req, res, next) {
     req.currentPlantId = currentPlantId ?? null;
     return next();
   } catch (err) {
-    console.error("[requireAuth] ERROR", err);
+    logger.error("[requireAuth] ERROR", err);
     return res.status(401).json({ error: "Token inválido" });
   }
 }

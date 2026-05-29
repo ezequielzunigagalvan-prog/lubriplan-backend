@@ -3,6 +3,7 @@ import { notifyManagers, notifyTechnicianAssignee, notifyLowStockIfNew } from ".
 import { sseHub } from "../realtime/sseHub.js";
 import { sendCriticalActivityEmail } from "../services/email/email.service.js";
 import { normalizeImageInput } from "../lib/cloudinary.js";
+import { logger } from "../config/logger.js";
 
 export default function emergencyActivitiesRoutes({ prisma, auth }) {
   const router = express.Router();
@@ -285,7 +286,7 @@ export default function emergencyActivitiesRoutes({ prisma, auth }) {
               executedAt: result.execution.executedAt,
             });
           } catch (notifyErr) {
-            console.error("No se pudo notificar actividad emergente crítica:", notifyErr);
+            logger.error("No se pudo notificar actividad emergente crítica:", notifyErr);
           }
         }
 
@@ -300,7 +301,7 @@ export default function emergencyActivitiesRoutes({ prisma, auth }) {
               link: "/activities",
             });
           } catch (notifyErr) {
-            console.error("No se pudo notificar actividad emergente al tecnico:", notifyErr);
+            logger.error("No se pudo notificar actividad emergente al tecnico:", notifyErr);
           }
         }
 
@@ -335,14 +336,14 @@ export default function emergencyActivitiesRoutes({ prisma, auth }) {
                 unit: result.lubricant.unit || null,
               });
             } catch (notifyErr) {
-              console.error("No se pudo notificar low stock en emergente:", notifyErr);
+              logger.error("No se pudo notificar low stock en emergente:", notifyErr);
             }
           }
         }
 
         return res.json(result);
       } catch (err) {
-        console.error("POST /api/emergency-activities", err);
+        logger.error("POST /api/emergency-activities", err);
         return res
           .status(400)
           .json({ error: err?.message || "Error creando actividad emergente" });

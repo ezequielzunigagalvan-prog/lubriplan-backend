@@ -1,5 +1,6 @@
-  // src/routes/admin.links.routes.js
+﻿  // src/routes/admin.links.routes.js
   import express from "express";
+  import { logger } from "../config/logger.js";
 
   export default function adminLinksRoutes({ prisma, auth }) {
     const router = express.Router();
@@ -45,7 +46,7 @@
 
         res.json({ techUsers, technicians });
       } catch (e) {
-        console.error(e);
+        logger.error(e);
         res.status(500).json({ error: "Error cargando vínculos" });
       }
     });
@@ -117,7 +118,7 @@
 
         res.json({ item: updated });
       } catch (e) {
-        console.error(e);
+        logger.error(e);
         res.status(500).json({ error: "Error actualizando vínculo" });
       }
     });

@@ -1,10 +1,11 @@
-import express from "express";
+﻿import express from "express";
 import rateLimit from "express-rate-limit";
 import prisma from "../prisma.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { requireRole } from "../middleware/requireRole.js";
+import { logger } from "../config/logger.js";
 
 const router = express.Router();
 
@@ -23,6 +24,9 @@ router.post("/set-password", requireAuth, requireRole(["ADMIN"]), async (req, re
     if (!email || !password) {
       return res.status(400).json({ error: "Email y password requeridos" });
     }
+    if (typeof password !== "string" || password.length < 8) {
+      return res.status(400).json({ error: "La contraseña debe tener al menos 8 caracteres" });
+    }
 
     const user = await prisma.user.findUnique({ where: { email: email.trim().toLowerCase() } });
     if (!user) return res.status(404).json({ error: "Usuario no existe" });
@@ -37,7 +41,7 @@ router.post("/set-password", requireAuth, requireRole(["ADMIN"]), async (req, re
 
     return res.json({ ok: true, user: updated });
   } catch (e) {
-    console.error(e);
+    logger.error(e);
     return res.status(500).json({ error: "Error set-password" });
   }
 });
@@ -107,7 +111,7 @@ router.post("/login", loginRateLimiter, async (req, res) => {
       defaultPlantId,
     });
   } catch (e) {
-    console.error("login error:", e);
+    logger.error("login error:", e);
     return res.status(500).json({ error: "Error en login" });
   }
 });

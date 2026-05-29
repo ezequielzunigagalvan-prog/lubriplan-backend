@@ -1,4 +1,5 @@
-import { sendOverdueSummaryEmail } from "../services/email/email.service.js";
+﻿import { sendOverdueSummaryEmail } from "../services/email/email.service.js";
+import { logger } from "../config/logger.js";
 
 const DEFAULT_HOUR = Number(process.env.OVERDUE_SUMMARY_HOUR || 8);
 
@@ -221,7 +222,7 @@ export async function runOverdueSummaryJob({
           : 0,
       });
     } catch (error) {
-      console.error(`❌ overdueSummaryJob plant ${plant?.id}:`, error);
+      logger.error(`❌ overdueSummaryJob plant ${plant?.id}:`, error);
 
       results.push({
         plantId: plant?.id ?? null,
@@ -299,15 +300,15 @@ export function startOverdueSummaryScheduler({
         baseUrl,
         sendHour,
       });
-      console.log("📧 overdueSummaryScheduler:", result);
+      logger.info("📧 overdueSummaryScheduler:", result);
     } catch (e) {
-      console.error("❌ overdueSummaryScheduler:", e);
+      logger.error("❌ overdueSummaryScheduler:", e);
     }
   };
 
   setTimeout(run, 20_000);
   const interval = setInterval(run, 15 * 60 * 1000);
 
-  console.log(`✅ Overdue Summary scheduler iniciado (hora local objetivo: ${sendHour}:00)`);
+  logger.info(`✅ Overdue Summary scheduler iniciado (hora local objetivo: ${sendHour}:00)`);
   return interval;
 }

@@ -1,4 +1,5 @@
 ﻿import { getPredictiveMetrics } from "./predictiveMetrics.js";
+import { logger } from "../config/logger.js";
 
 const isAdmin = (role) => role === "ADMIN";
 const isTechnician = (role) => role === "TECHNICIAN";
@@ -396,7 +397,7 @@ export async function buildDashboardSummary({
         : [],
     };
   } catch (error) {
-    console.error("buildDashboardSummary predictive metrics error:", error);
+    logger.error("buildDashboardSummary predictive metrics error:", error);
   }
 
   alerts.daysToEmptyCount = predictive.lubricantDaysToEmptyCount;

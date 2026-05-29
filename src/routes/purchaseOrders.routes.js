@@ -1,7 +1,8 @@
-// src/routes/purchaseOrders.routes.js
+﻿// src/routes/purchaseOrders.routes.js
 import express from "express";
 import { createAuditLog } from "../services/auditLog.service.js";
 import { fireWebhookEvent } from "../services/webhooks.service.js";
+import { logger } from "../config/logger.js";
 
 export default function purchaseOrdersRoutes({ prisma, auth, requireRole }) {
   const router = express.Router();
@@ -37,7 +38,7 @@ export default function purchaseOrdersRoutes({ prisma, auth, requireRole }) {
 
       return res.json({ ok: true, items, total });
     } catch (e) {
-      console.error("GET /purchase-orders error:", e);
+      logger.error("GET /purchase-orders error:", e);
       return res.status(500).json({ error: "Error cargando órdenes de compra" });
     }
   });
@@ -63,7 +64,7 @@ export default function purchaseOrdersRoutes({ prisma, auth, requireRole }) {
       if (!order) return res.status(404).json({ error: "Orden no encontrada" });
       return res.json({ ok: true, order });
     } catch (e) {
-      console.error("GET /purchase-orders/:id error:", e);
+      logger.error("GET /purchase-orders/:id error:", e);
       return res.status(500).json({ error: "Error cargando orden" });
     }
   });
@@ -116,7 +117,7 @@ export default function purchaseOrdersRoutes({ prisma, auth, requireRole }) {
 
       return res.status(201).json({ ok: true, order });
     } catch (e) {
-      console.error("POST /purchase-orders error:", e);
+      logger.error("POST /purchase-orders error:", e);
       return res.status(500).json({ error: "Error creando orden de compra" });
     }
   });
@@ -145,7 +146,7 @@ export default function purchaseOrdersRoutes({ prisma, auth, requireRole }) {
 
       return res.json({ ok: true, order });
     } catch (e) {
-      console.error("PATCH /purchase-orders/:id/request error:", e);
+      logger.error("PATCH /purchase-orders/:id/request error:", e);
       return res.status(500).json({ error: "Error solicitando orden" });
     }
   });
@@ -181,7 +182,7 @@ export default function purchaseOrdersRoutes({ prisma, auth, requireRole }) {
 
       return res.json({ ok: true, order });
     } catch (e) {
-      console.error("PATCH /purchase-orders/:id/approve error:", e);
+      logger.error("PATCH /purchase-orders/:id/approve error:", e);
       return res.status(500).json({ error: "Error aprobando orden" });
     }
   });
@@ -253,7 +254,7 @@ export default function purchaseOrdersRoutes({ prisma, auth, requireRole }) {
 
       return res.json({ ok: true });
     } catch (e) {
-      console.error("PATCH /purchase-orders/:id/receive error:", e);
+      logger.error("PATCH /purchase-orders/:id/receive error:", e);
       return res.status(500).json({ error: "Error recibiendo orden" });
     }
   });
@@ -281,7 +282,7 @@ export default function purchaseOrdersRoutes({ prisma, auth, requireRole }) {
 
       return res.json({ ok: true });
     } catch (e) {
-      console.error("PATCH /purchase-orders/:id/cancel error:", e);
+      logger.error("PATCH /purchase-orders/:id/cancel error:", e);
       return res.status(500).json({ error: "Error cancelando orden" });
     }
   });
@@ -300,7 +301,7 @@ export default function purchaseOrdersRoutes({ prisma, auth, requireRole }) {
       await prisma.purchaseOrder.delete({ where: { id } });
       return res.json({ ok: true });
     } catch (e) {
-      console.error("DELETE /purchase-orders/:id error:", e);
+      logger.error("DELETE /purchase-orders/:id error:", e);
       return res.status(500).json({ error: "Error eliminando orden" });
     }
   });

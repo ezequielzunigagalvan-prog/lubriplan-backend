@@ -1,7 +1,10 @@
-﻿    // index.js (o src/index.js segun tu backend)
+﻿// src/index.js
     import express from "express";
     import dotenv from "dotenv";
     dotenv.config();
+    import { logger } from "./config/logger.js";
+    import rateLimit from "express-rate-limit";
+    import { requestId } from "./middleware/requestId.js";
     import cors from "cors";
     import helmet from "helmet";
     import path from "path";
@@ -60,6 +63,19 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
 
 
 
+    // Validación de variables de entorno críticas al arrancar
+    {
+      const missing = ["JWT_SECRET"].filter((k) => !process.env[k]?.trim());
+      if (missing.length) {
+        logger.error(`[STARTUP] Variables de entorno requeridas no configuradas: ${missing.join(", ")}`);
+        process.exit(1);
+      }
+      if ((process.env.JWT_SECRET || "").length < 32) {
+        logger.error("[STARTUP] JWT_SECRET debe tener al menos 32 caracteres para ser seguro");
+        process.exit(1);
+      }
+    }
+
     // OK En DEV: lee rol de header y trae technicianId del User real
     export const ROLES = {
       ADMIN: "ADMIN",
@@ -69,46 +85,27 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
 
     export async function devAttachUser(req, res, next) {
       try {
-        // OK Si ya hay user (porque algun middleware anterior lo puso), no hagas nada
         if (req.user) return next();
-
-        // OK Si viene JWT, NO simules usuario
-        // (dejamos que requireAuth se encargue en las rutas protegidas)
         const auth = req.headers.authorization || "";
-        if (auth.startsWith("Bearer ")) {
-          return next();
-        }
+        if (auth.startsWith("Bearer ")) return next();
 
-        // OK DEV: usa un user real de BD via header x-user-id (o fallback a 1)
         const userIdRaw = req.header("x-user-id") || req.header("X-User-Id");
-        const userId =
-          userIdRaw != null && String(userIdRaw).trim() !== "" ? Number(userIdRaw) : null;
-
+        const userId = userIdRaw != null && String(userIdRaw).trim() !== "" ? Number(userIdRaw) : null;
         const finalUserId = Number.isFinite(userId) ? userId : 1;
 
         const dbUser = await prisma.user.findUnique({
           where: { id: finalUserId },
-          select: {
-            id: true,
-            role: true,
-            active: true,
-            technicianId: true,
-          },
+          select: { id: true, role: true, active: true, technicianId: true },
         });
 
         if (!dbUser || dbUser.active === false) {
           return res.status(401).json({ error: "Usuario invalido/inactivo (DEV)" });
         }
 
-        req.user = {
-          id: dbUser.id,
-          role: dbUser.role,
-          technicianId: dbUser.technicianId ?? null,
-        };
-
+        req.user = { id: dbUser.id, role: dbUser.role, technicianId: dbUser.technicianId ?? null };
         return next();
       } catch (e) {
-        console.error("devAttachUser error:", e);
+        logger.error("devAttachUser error", e);
         return res.status(500).json({ error: "Error attach user (DEV)" });
       }
     }
@@ -186,16 +183,16 @@ app.options("*", cors(corsOptions));
   app.use(express.json({ limit: "20mb" }));
   app.use(express.urlencoded({ extended: true, limit: "20mb" }));
 
+  // 3b) Request ID — adjunta x-request-id a cada request para trazabilidad en logs
+  app.use(requestId);
+
   // 4) Logger DEV
   if (process.env.NODE_ENV !== "production") {
     app.use((req, res, next) => {
       const t0 = Date.now();
       res.on("finish", () => {
         if (!req.originalUrl.startsWith("/api")) return;
-        console.log("ðŸŸ¦ IN", req.method, req.originalUrl, {
-          status: res.statusCode,
-          ms: Date.now() - t0,
-        });
+        logger.debug(`${req.method} ${req.originalUrl}`, { status: res.statusCode, ms: Date.now() - t0 });
       });
       next();
     });
@@ -208,6 +205,18 @@ app.options("*", cors(corsOptions));
       return devAttachUser(req, res, next);
     });
   }
+
+  /* ========= RATE LIMITING GLOBAL ========= */
+  const apiLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 300,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => req.ip || "unknown",
+    skip: (req) => req.method === "OPTIONS",
+    message: { error: "Demasiadas solicitudes. Intenta en un momento." },
+  });
+  app.use("/api", apiLimiter);
 
   /* ========= HEALTH CHECK ========= */
   app.get("/health", async (_req, res) => {
@@ -248,7 +257,6 @@ app.options("*", cors(corsOptions));
 
   app.use("/api/export", exportRoutes);
   app.use("/api/import", importRoutes);
-  console.log(">>> exportRoutes montado");
 
   app.use(
     "/api",
@@ -355,7 +363,7 @@ app.options("*", cors(corsOptions));
         }
       }
     } catch (uploadServeError) {
-      console.error("uploads serve error:", uploadServeError);
+      logger.error("uploads serve error", uploadServeError);
     }
     // File not found in any local dir — Railway has ephemeral FS; images live in Cloudinary
     return res.status(404).json({ error: "Imagen no encontrada. Las imágenes se almacenan en Cloudinary." });
@@ -369,14 +377,14 @@ app.options("*", cors(corsOptions));
   const AI_MODE_CHECK = String(process.env.AI_MODE || "mock").toLowerCase();
   if (AI_MODE_CHECK === "provider") {
     if (!process.env.OPENAI_API_KEY?.trim()) {
-      console.error("[STARTUP] AI_MODE=provider pero OPENAI_API_KEY no está definida. La IA fallará en producción.");
+      logger.error("[STARTUP] AI_MODE=provider pero OPENAI_API_KEY no está definida. La IA fallará en producción.");
     }
     if ((process.env.OPENAI_MODEL || "").trim() === "gpt-5.4-mini") {
-      console.error("[STARTUP] OPENAI_MODEL está configurado como 'gpt-5.4-mini', que no existe. Usa 'gpt-4o-mini' u otro modelo válido.");
+      logger.error("[STARTUP] OPENAI_MODEL configurado como 'gpt-5.4-mini' (inválido). Usa 'gpt-4o-mini' u otro válido.");
     }
   }
 
-  console.log("[STARTUP] BACKEND CORRECTO CARGADO");
+  logger.info("[STARTUP] Backend cargado");
 
   startMonthlyExecutiveReportScheduler({
     prisma,
@@ -394,10 +402,10 @@ app.options("*", cors(corsOptions));
 
     /* ========= PROTECCION GLOBAL ========= */
     process.on("unhandledRejection", (reason) => {
-      console.error("Unhandled Rejection:", reason);
+      logger.error("Unhandled Rejection", reason instanceof Error ? reason : { reason });
     });
     process.on("uncaughtException", (err) => {
-      console.error("Uncaught Exception:", err);
+      logger.error("Uncaught Exception", err);
     });
 
     function getDashboardScope(req) {
@@ -1190,7 +1198,7 @@ app.get("/api/dashboard/summary", requireAuth, async (req, res) => {
 
     return res.json(payload);
   } catch (e) {
-    console.error("dashboard summary error:", e);
+    logger.error("dashboard summary error:", e);
     res.status(500).json({ error: "Error dashboard summary" });
   }
 });
@@ -1371,7 +1379,7 @@ app.get("/api/dashboard/alerts", requireAuth, requireRole(["ADMIN", "SUPERVISOR"
       total,
     });
   } catch (e) {
-    console.error("Error dashboard alerts:", e);
+    logger.error("Error dashboard alerts:", e);
     res.status(500).json({ error: "Error dashboard alerts" });
   }
 });
@@ -1859,7 +1867,7 @@ app.get(
         total: dedup.length,
       });
     } catch (e) {
-      console.error("Error dashboard priority queue:", e);
+      logger.error("Error dashboard priority queue:", e);
       res.status(500).json({ error: "Error dashboard priority queue" });
     }
   }
@@ -1877,7 +1885,7 @@ app.post("/api/dev/run-overdue-summary", async (req, res) => {
 
     res.json(result);
   } catch (e) {
-    console.error(e);
+    logger.error(e);
     res.status(500).json({ error: "Error ejecutando overdue summary job" });
   }
 });
@@ -2188,7 +2196,7 @@ app.get(
         total,
       });
     } catch (e) {
-      console.error("Error dashboard predictive alerts:", e);
+      logger.error("Error dashboard predictive alerts:", e);
       res.status(500).json({ error: "Error dashboard predictive alerts" });
     }
   }
@@ -2392,7 +2400,7 @@ app.get(
         },
       });
     } catch (e) {
-      console.error("Error predictive physical alerts:", e);
+      logger.error("Error predictive physical alerts:", e);
       res.status(500).json({ error: "Error predictive physical alerts" });
     }
   }
@@ -2432,7 +2440,7 @@ app.get(
         equipmentsCount,
       });
     } catch (e) {
-      console.error("dashboard admin counts error:", e);
+      logger.error("dashboard admin counts error:", e);
       return res.status(500).json({ error: "Error dashboard admin counts" });
     }
   }
@@ -2522,7 +2530,7 @@ app.get(
         },
       });
     } catch (e) {
-      console.error("Error monthly activities:", e);
+      logger.error("Error monthly activities:", e);
       res.status(500).json({ error: "Error monthly activities" });
     }
   }
@@ -2631,7 +2639,7 @@ app.get(
         },
       });
     } catch (e) {
-      console.error("Error monthly activities me:", e);
+      logger.error("Error monthly activities me:", e);
       res.status(500).json({ error: "Error monthly activities me" });
     }
   }
@@ -2796,7 +2804,7 @@ app.get(
         items,
       });
     } catch (e) {
-      console.error("Error repeated-failures:", e);
+      logger.error("Error repeated-failures:", e);
       return res.status(500).json({ error: "Error repeated-failures" });
     }
   }
@@ -2973,7 +2981,7 @@ app.get(
         items,
       });
     } catch (e) {
-      console.error("dashboard technicians efficiency-monthly error:", e);
+      logger.error("dashboard technicians efficiency-monthly error:", e);
       res.status(500).json({ error: "Error dashboard technicians efficiency-monthly" });
     }
   }
@@ -3117,7 +3125,7 @@ app.get(
         items,
       });
     } catch (e) {
-      console.error("alerts technician-overload error:", e);
+      logger.error("alerts technician-overload error:", e);
       res.status(500).json({ error: "Error technician-overload" });
     }
   }
@@ -3223,7 +3231,7 @@ app.patch(
 
       res.json({ ok: true, item: updated });
     } catch (e) {
-      console.error("Error assign-technician:", e);
+      logger.error("Error assign-technician:", e);
       res.status(500).json({ error: "Error assign-technician" });
     }
   }
@@ -3319,7 +3327,7 @@ app.patch(
 
       res.json({ ok: true, item: updated });
     } catch (e) {
-      console.error("assign technician error:", e);
+      logger.error("assign technician error:", e);
       res.status(500).json({ error: "Error assigning technician" });
     }
   }
@@ -3394,7 +3402,7 @@ app.post("/api/equipment", requireAuth, requireManager, async (req, res) => {
 
     res.status(201).json(equipment);
   } catch (error) {
-    console.error("Error creando equipo:", error);
+    logger.error("Error creando equipo:", error);
 
     if (error?.code === "P2002") {
       return res.status(409).json({ error: "Codigo/Tag ya existe" });
@@ -3440,7 +3448,7 @@ app.get("/api/equipment/:id", requireAuth, async (req, res) => {
       technician: assignedTechnician || null,
     });
   } catch (error) {
-    console.error("Error obteniendo equipo:", error);
+    logger.error("Error obteniendo equipo:", error);
     res.status(500).json({ error: "Error interno del servidor" });
   }
 });
@@ -3686,7 +3694,7 @@ app.get("/api/equipment", requireAuth, async (req, res) => {
 
     return res.json(out);
   } catch (error) {
-    console.error("Error obteniendo equipos:", error);
+    logger.error("Error obteniendo equipos:", error);
     return res.status(500).json({ error: "Error obteniendo equipos" });
   }
 });
@@ -3823,7 +3831,7 @@ app.get("/api/equipment/:id/detail", requireAuth, async (req, res) => {
 
     return res.json(payload);
   } catch (error) {
-    console.error("Error obteniendo detalle de equipo:", error);
+    logger.error("Error obteniendo detalle de equipo:", error);
     return res.status(500).json({ error: "Error interno del servidor" });
   }
 });
@@ -3894,7 +3902,7 @@ app.put("/api/equipment/:id", requireAuth, requireManager, async (req, res) => {
 
     return res.json(updated);
   } catch (error) {
-    console.error("Error actualizando equipo:", error);
+    logger.error("Error actualizando equipo:", error);
     if (error?.code === "P2002") {
       return res.status(409).json({ error: "Codigo/Tag ya existe" });
     }
@@ -3921,7 +3929,7 @@ app.delete("/api/equipment/:id", requireAuth, requireManager, async (req, res) =
 
     res.json({ ok: true });
   } catch (error) {
-    console.error("Error eliminando equipo:", error);
+    logger.error("Error eliminando equipo:", error);
     res.status(500).json({ error: "Error interno del servidor" });
   }
 });
@@ -3941,7 +3949,7 @@ app.get("/api/equipment-areas", requireAuth, async (req, res) => {
 
     res.json({ ok: true, result: areas });
   } catch (e) {
-    console.error(e);
+    logger.error(e);
     res.status(500).json({ ok: false, error: "Error obteniendo areas" });
   }
 });
@@ -3963,7 +3971,7 @@ app.post("/api/equipment-areas", requireAuth, requireManager, async (req, res) =
 
     res.json({ ok: true, area });
   } catch (e) {
-    console.error(e);
+    logger.error(e);
 
     if (e?.code === "P2002") {
       return res.status(409).json({ ok: false, error: "Ya existe un area con ese nombre en esta planta" });
@@ -4009,7 +4017,7 @@ app.put("/api/equipment-areas/:id", requireAuth, requireManager, async (req, res
 
     return res.json({ ok: true, area });
   } catch (e) {
-    console.error("PUT /api/equipment-areas/:id ERROR", {
+    logger.error("PUT /api/equipment-areas/:id ERROR", {
       message: e?.message,
       code: e?.code,
       meta: e?.meta,
@@ -4053,7 +4061,7 @@ app.delete("/api/equipment-areas/:id", requireAuth, requireManager, async (req, 
 
     res.json({ ok: true });
   } catch (e) {
-    console.error(e);
+    logger.error(e);
     res.status(500).json({ ok: false, error: "Error eliminando area" });
   }
 });
@@ -4116,9 +4124,8 @@ app.get("/api/technicians", requireAuth, async (req, res) => {
       return { ...rest, lastActivityAt };
     });
 
-    console.log("[DEBUG] TECH ROUTE NUEVA", new Date().toISOString());
 
-    console.log(
+    logger.info(
       "TECHNICIANS RESULT",
       result.map((t) => ({
         id: t.id,
@@ -4131,7 +4138,7 @@ app.get("/api/technicians", requireAuth, async (req, res) => {
 
     return res.json(result);
   } catch (error) {
-    console.error("Error obteniendo técnicos:", error);
+    logger.error("Error obteniendo técnicos:", error);
     return res.status(500).json({ error: "Error obteniendo técnicos" });
   }
 });
@@ -4162,7 +4169,7 @@ app.post("/api/technicians", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), 
 
     res.status(201).json({ ...technician, lastActivityAt: null });
   } catch (error) {
-    console.error("Error creando técnico:", error);
+    logger.error("Error creando técnico:", error);
 
     if (error?.code === "P2002") {
       return res.status(409).json({ error: "Ya existe un tecnico con ese codigo en esta planta" });
@@ -4216,7 +4223,7 @@ app.put("/api/technicians/:id", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]
 
     res.json({ ...technician, lastActivityAt: null });
   } catch (error) {
-    console.error("Error actualizando técnico:", error);
+    logger.error("Error actualizando técnico:", error);
 
     if (error?.code === "P2002") {
       return res.status(409).json({ error: "Ya existe un tecnico con ese codigo en esta planta" });
@@ -4254,7 +4261,7 @@ app.delete("/api/technicians/:id", requireAuth, requireRole(["ADMIN", "SUPERVISO
 
     res.json({ ok: true });
   } catch (error) {
-    console.error("Error eliminando tecnico:", error);
+    logger.error("Error eliminando tecnico:", error);
     res.status(500).json({ error: "Error eliminando técnico" });
   }
 });
@@ -4316,7 +4323,7 @@ app.get("/api/routes/:id", requireAuth, async (req, res) => {
       nextExecutionAt: nextExecution?.scheduledAt ?? route.nextDate ?? null,
     });
   } catch (e) {
-    console.error("Error obteniendo ruta:", e);
+    logger.error("Error obteniendo ruta:", e);
     res.status(500).json({ error: "Error obteniendo ruta" });
   }
 });
@@ -4611,14 +4618,12 @@ app.post(
         ...(lubIdNum ? { lubricant: { connect: { id: lubIdNum } } } : {}),
       };
 
-      console.log(">>> routeData real =", JSON.stringify(routeData, null, 2));
 
       const route = await prisma.route.create({
         data: routeData,
         include: { equipment: true, lubricant: true, technician: true },
       });
 
-      console.log(">>> route creada", route.id);
 
       const scheduledAt = parsedNextDate ? toSafeNoon(parsedNextDate) : toSafeNoon(new Date());
 
@@ -4655,7 +4660,7 @@ app.post(
 
       return res.status(201).json(route);
     } catch (error) {
-      console.error("### ERROR POST ROUTES NUEVO ###", error);
+      logger.error("### ERROR POST ROUTES NUEVO ###", error);
       return res.status(500).json({ error: "Error creando ruta NUEVO" });
     }
   }
@@ -4714,7 +4719,7 @@ app.get("/api/routes", requireAuth, async (req, res) => {
 
     res.json(out);
   } catch (error) {
-    console.error("Error obteniendo rutas:", error);
+    logger.error("Error obteniendo rutas:", error);
     res.status(500).json({ error: "Error obteniendo rutas" });
   }
 });
@@ -4734,16 +4739,6 @@ app.put(
 
       const id = Number(req.params.id);
 
-      console.log(
-        "[PUT /api/routes/:id] start",
-        {
-          id,
-          plantId,
-          userId: req.user?.id,
-          role: req.user?.role,
-        },
-        stamp()
-      );
 
       const {
         name,
@@ -4772,28 +4767,6 @@ app.put(
 
       const normalizedMethod = normalizeRouteMethod(method);
 
-      console.log(
-        "[PUT route] body",
-        {
-          id,
-          plantId,
-          name,
-          normalizedMethod,
-          equipmentId,
-          lubricantType,
-          quantity,
-          frequencyDays,
-          frequencyType,
-          weeklyDays,
-          monthlyAnchorDay,
-          lubricantId,
-          nextDate,
-          unit,
-          pumpStrokeValue,
-          pumpStrokeUnit,
-        },
-        stamp()
-      );
 
       if (!Number.isFinite(id)) return res.status(400).json({ error: "id invalido" });
 
@@ -5020,7 +4993,7 @@ app.put(
         monthlyAnchorDay: monthlyAnchorDayNorm,
       });
 
-      console.log(
+      logger.info(
         "[PUT route] parsed dates",
         {
           lastDate,
@@ -5093,10 +5066,8 @@ app.put(
         include: { equipment: true, lubricant: true, technician: true },
       });
 
-      console.log("[PUT route] updateMany -> OK", { id: updated?.id }, stamp());
 
       if (parsedNext) {
-        console.log("[PUT route] align execution -> start", stamp());
 
         const nd = toSafeNoon(parsedNext);
 
@@ -5104,7 +5075,7 @@ app.put(
 
         const end = endOfDay(nd);
 
-        console.log(
+        logger.info(
           "[PUT route] align range",
           {
             nd: nd.toISOString(),
@@ -5164,15 +5135,12 @@ app.put(
           });
         }
 
-        console.log("[PUT route] align execution -> done", stamp());
       } else {
-        console.log("[PUT route] no nextDate provided, skipping align", stamp());
       }
 
-      console.log("[PUT /api/routes/:id] done", stamp());
       return res.json(updated);
     } catch (error) {
-      console.error("Error actualizando ruta:", error);
+      logger.error("Error actualizando ruta:", error);
       return res.status(500).json({ error: "Error interno del servidor" });
     }
   }
@@ -5201,7 +5169,7 @@ app.delete(
 
       res.json({ ok: true });
     } catch (error) {
-      console.error("Error eliminando ruta:", error);
+      logger.error("Error eliminando ruta:", error);
       res.status(500).json({ error: "Error interno del servidor" });
     }
   }
@@ -5243,7 +5211,7 @@ app.get("/api/routes/:id/executions", requireAuth, async (req, res) => {
 
     res.json(executions);
   } catch (error) {
-    console.error("Error obteniendo historial de ruta:", error);
+    logger.error("Error obteniendo historial de ruta:", error);
     res.status(500).json({ error: "Error obteniendo historial de ruta" });
   }
 });
@@ -5294,7 +5262,7 @@ app.patch(
 
       res.json({ ok: true, item });
     } catch (e) {
-      console.error("assign technician error:", e);
+      logger.error("assign technician error:", e);
       res.status(500).json({ error: "Error assigning technician" });
     }
   }
@@ -5362,7 +5330,7 @@ app.patch(
         scope: { from: from.toISOString(), force },
       });
     } catch (e) {
-      console.error("assign-technician-by-equipment:", e);
+      logger.error("assign-technician-by-equipment:", e);
       res.status(500).json({ error: "Error asignando técnico por equipo" });
     }
   }
@@ -5441,7 +5409,7 @@ app.patch(
 
       return res.json({ ok: true, item: updated });
     } catch (e) {
-      console.error("assign route technician error:", e);
+      logger.error("assign route technician error:", e);
       return res.status(500).json({ error: "Error asignando técnico a ruta" });
     }
   }
@@ -5478,7 +5446,7 @@ app.get(
 
       res.json({ items });
     } catch (error) {
-      console.error("Error obteniendo lubricantes para ejecucion:", error);
+      logger.error("Error obteniendo lubricantes para ejecucion:", error);
       res.status(500).json({ error: "Error obteniendo lubricantes para ejecucion" });
     }
   }
@@ -5500,7 +5468,7 @@ app.get("/api/lubricants", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), as
 
     res.json(items);
   } catch (error) {
-    console.error("Error obteniendo lubricantes:", error);
+    logger.error("Error obteniendo lubricantes:", error);
     res.status(500).json({ error: "Error obteniendo lubricantes" });
   }
 });
@@ -5519,7 +5487,7 @@ app.get("/api/lubricants", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), as
 
       res.json(item);
     } catch (error) {
-      console.error("Error obteniendo lubricante:", error);
+      logger.error("Error obteniendo lubricante:", error);
       res.status(500).json({ error: "Error obteniendo lubricante" });
     }
   });
@@ -5570,7 +5538,7 @@ app.post("/api/lubricants", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), a
 
     res.status(201).json(item);
   } catch (error) {
-    console.error("Error creando lubricante:", error);
+    logger.error("Error creando lubricante:", error);
     if (error?.code === "P2002") return res.status(400).json({ error: "Codigo ya existe" });
     res.status(500).json({ error: "Error creando lubricante" });
   }
@@ -5642,7 +5610,7 @@ app.post("/api/lubricants", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), a
       const item = await prisma.lubricant.findFirst({ where: { id, plantId } });
       res.json(item);
     } catch (error) {
-      console.error("Error actualizando lubricante:", error);
+      logger.error("Error actualizando lubricante:", error);
       if (error?.code === "P2002") return res.status(400).json({ error: "Codigo ya existe" });
       res.status(500).json({ error: "Error actualizando lubricante" });
     }
@@ -5678,7 +5646,7 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
 
       res.json({ ok: true, lubricant, movements });
     } catch (error) {
-      console.error("Error obteniendo movimientos:", error);
+      logger.error("Error obteniendo movimientos:", error);
       res.status(500).json({ error: "Error obteniendo historial de movimientos" });
     }
   });
@@ -5751,7 +5719,7 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
 
       res.status(201).json({ ok: true, updated, movement });
     } catch (error) {
-      console.error("Error registrando movimiento:", error);
+      logger.error("Error registrando movimiento:", error);
       res.status(500).json({ error: "Error registrando movimiento" });
     }
   });
@@ -5769,7 +5737,7 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
       if (!deleted.count) return res.status(404).json({ error: "Lubricante no encontrado" });
       res.json({ ok: true });
     } catch (error) {
-      console.error("Error eliminando lubricante:", error);
+      logger.error("Error eliminando lubricante:", error);
       res.status(500).json({ error: "Error eliminando lubricante" });
     }
   });
@@ -5983,7 +5951,7 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
           byMonth.set(mk, Number(byMonth.get(mk) || 0) + comparable);
         }
       } catch (loopError) {
-        console.warn("Skipping malformed execution in analytics summary:", ex?.id, loopError);
+        logger.warn("Skipping malformed execution in analytics summary:", ex?.id, loopError);
       }
     }
 
@@ -6059,7 +6027,7 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
       months: monthsSorted,
     });
   } catch (e) {
-    console.error("Error analytics summary:", e);
+    logger.error("Error analytics summary:", e);
     return res.status(500).json({ error: "Error analytics summary" });
   }
 });
@@ -6211,7 +6179,7 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
           row._hasConverted = true;
         }
       } catch (loopError) {
-        console.warn("Skipping malformed execution in analytics top-equipment:", ex?.id, loopError);
+        logger.warn("Skipping malformed execution in analytics top-equipment:", ex?.id, loopError);
       }
     }
 
@@ -6274,7 +6242,7 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
       result,
     });
   } catch (e) {
-    console.error("Error analytics top-equipment:", e);
+    logger.error("Error analytics top-equipment:", e);
     return res.status(500).json({ error: "Error analytics top-equipment" });
   }
 });
@@ -6380,7 +6348,7 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
       series,
     });
   } catch (e) {
-    console.error("Error analytics monthly-total:", e);
+    logger.error("Error analytics monthly-total:", e);
     return res.status(500).json({ error: "Error analytics monthly-total" });
   }
 });
@@ -6429,7 +6397,7 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
       result: lubs,
     });
   } catch (e) {
-    console.error("Error analytics lubricants:", e);
+    logger.error("Error analytics lubricants:", e);
     return res.status(500).json({ error: "Error analytics lubricants" });
   }
 });
@@ -6560,7 +6528,7 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
         },
       });
     } catch (e) {
-      console.error("Error analytics failures-by-equipment:", e);
+      logger.error("Error analytics failures-by-equipment:", e);
       return res.status(500).json({ error: "Error analytics failures-by-equipment" });
     }
   });
@@ -6637,7 +6605,7 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
         items: Array.from(buckets.values()),
       });
     } catch (e) {
-      console.error("Error analytics executions/monthly:", e);
+      logger.error("Error analytics executions/monthly:", e);
       return res.status(500).json({ error: "Error analytics executions/monthly" });
     }
   });
@@ -6728,7 +6696,7 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
         onTimeRate: round2(completionRate),
       });
     } catch (e) {
-      console.error("Error analytics executions/summary:", e);
+      logger.error("Error analytics executions/summary:", e);
       return res.status(500).json({ error: "Error analytics executions/summary" });
     }
   });
@@ -6797,7 +6765,7 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
 
       return res.json({ ok: true, plantId, days, items });
     } catch (e) {
-      console.error("Error analytics technicians/performance:", e);
+      logger.error("Error analytics technicians/performance:", e);
       return res.status(500).json({ error: "Error analytics technicians/performance" });
     }
   });
@@ -6961,7 +6929,7 @@ app.put(
 
       return res.json({ ok: true, updatedCount: Number(updated?.count || 0) });
     } catch (e) {
-      console.error("Error executions check-overdue:", e);
+      logger.error("Error executions check-overdue:", e);
       return res.status(500).json({ error: "Error revisando actividades vencidas" });
     }
   }
@@ -7089,7 +7057,7 @@ app.get("/api/executions", requireAuth, async (req, res) => {
       },
     });
   } catch (e) {
-    console.error("Error executions list:", e);
+    logger.error("Error executions list:", e);
     return res.status(500).json({ error: "Error cargando actividades" });
   }
 });
@@ -7125,7 +7093,7 @@ app.get("/api/executions/:id", requireAuth, async (req, res) => {
 
     return res.json(serializeExecutionForUi(execution));
   } catch (e) {
-    console.error("Error execution detail:", e);
+    logger.error("Error execution detail:", e);
     return res.status(500).json({ error: "Error cargando actividad" });
   }
 });
@@ -7229,13 +7197,13 @@ app.post(
             link: "/activities",
           });
         } catch (notifyErr) {
-          console.error("No se pudo notificar actividad manual al tecnico:", notifyErr);
+          logger.error("No se pudo notificar actividad manual al tecnico:", notifyErr);
         }
       }
 
       return res.status(201).json(serializeExecutionForUi(created, todayStart));
     } catch (e) {
-      console.error("Error creating manual execution:", e);
+      logger.error("Error creating manual execution:", e);
       return res.status(500).json({ error: "Error programando actividad" });
     }
   }
@@ -7786,7 +7754,7 @@ app.patch(
               : ""
           } · Reporte #${resolvedReport.id}`,
           link: "/condition-reports?status=RESOLVED",
-        }).catch((notifyErr) => console.error("No se pudo notificar resolucion de reporte:", notifyErr));
+        }).catch((notifyErr) => logger.error("No se pudo notificar resolucion de reporte:", notifyErr));
 
         sseHub.broadcast("condition-report.resolved", {
           plantId,
@@ -7814,7 +7782,7 @@ app.patch(
           title: "Actividad crítica completada",
           message: `${criticalEquipName}${criticalEquipCode ? ` (${criticalEquipCode})` : ""} · Ejecución #${updated.id}`,
           link: `/activities?filter=critical-risk&executionId=${updated.id}&focus=critical`,
-        }).catch((e) => console.error("No se pudo notificar ejecucion critica:", e));
+        }).catch((e) => logger.error("No se pudo notificar ejecucion critica:", e));
 
         sendCriticalActivityEmail({
           prisma,
@@ -7831,7 +7799,7 @@ app.patch(
             suggestedAction: "Revisar la actividad y definir seguimiento inmediato.",
             link: `${process.env.APP_BASE_URL || "http://localhost:5173"}/activities?filter=critical-risk&executionId=${updated.id}&focus=critical`,
           },
-        }).catch((e) => console.error("No se pudo enviar email critico:", e));
+        }).catch((e) => logger.error("No se pudo enviar email critico:", e));
 
         sseHub.broadcast("execution.critical", {
           plantId,
@@ -7858,7 +7826,7 @@ app.patch(
 
       return res.json({ ok: true, item: updated });
     } catch (e) {
-      console.error("complete execution error:", e);
+      logger.error("complete execution error:", e);
       return res.status(500).json({ error: "Error completando actividad" });
     }
   }
@@ -8044,7 +8012,7 @@ if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
         },
       });
     } catch (e) {
-      console.error("Error history executions:", e);
+      logger.error("Error history executions:", e);
       return res.status(500).json({ error: "Error obteniendo historial" });
     }
   });
@@ -8299,7 +8267,7 @@ app.post("/api/emergency-activities", requireAuth, async (req, res) => {
           executedAt: result.execution.executedAt,
         });
       } catch (notifyErr) {
-        console.error("No se pudo notificar ejecución crítica emergente:", notifyErr);
+        logger.error("No se pudo notificar ejecución crítica emergente:", notifyErr);
       }
     }
 
@@ -8335,14 +8303,14 @@ app.post("/api/emergency-activities", requireAuth, async (req, res) => {
             unit: result.lubricant.unit || null,
           });
         } catch (notifyErr) {
-          console.error("No se pudo notificar low stock:", notifyErr);
+          logger.error("No se pudo notificar low stock:", notifyErr);
         }
       }
     }
 
     return res.json({ ok: true, execution: result.execution });
   } catch (e) {
-    console.error("Error emergency-activities:", e);
+    logger.error("Error emergency-activities:", e);
     return res.status(500).json({ error: e?.message || "Error creando actividad emergente" });
   }
 });
@@ -8527,7 +8495,7 @@ app.get("/api/history/lubricant-movements", requireAuth, async (req, res) => {
       meta: { page, pageSize, total, pages, totals },
     });
   } catch (e) {
-    console.error("Error history lubricant-movements:", e);
+    logger.error("Error history lubricant-movements:", e);
     return res.status(500).json({
       error: "Error obteniendo movimientos",
       detail: e?.message || null,
@@ -8640,7 +8608,7 @@ app.get("/api/history/lubricant-movements", requireAuth, async (req, res) => {
         items,
       });
     } catch (e) {
-      console.error("Error technician-overload:", e);
+      logger.error("Error technician-overload:", e);
       res.status(500).json({ error: "Error technician-overload" });
     }
   });
@@ -8675,7 +8643,7 @@ app.get("/api/health", async (req, res) => {
 
   const PORT = Number(process.env.PORT || 3001);
   app.listen(process.env.PORT || 3001, "0.0.0.0", () => {
-  console.log(`Server running on port ${process.env.PORT || 3001}`);
+  logger.info(`Server running on port ${process.env.PORT || 3001}`);
 });
 
   /* ========= CLEANUP ========= */

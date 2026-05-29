@@ -1,4 +1,5 @@
-import { OPENAI_MODEL } from "./aiConfig.js";
+﻿import { OPENAI_MODEL } from "./aiConfig.js";
+import { logger } from "../config/logger.js";
 
 const SUMMARY_SCHEMA = {
   type: "object",
@@ -135,9 +136,9 @@ function extractParsedResponse(response) {
 
 export async function generateExecutiveSummary({ prompt }) {
   const client = await getClient();
-  console.log("AI_MODE:", process.env.AI_MODE);
-  console.log("AI_MODEL:", OPENAI_MODEL);
-  console.log("OPENAI_API_KEY exists:", Boolean(process.env.OPENAI_API_KEY));
+  logger.info("AI_MODE:", process.env.AI_MODE);
+  logger.info("AI_MODEL:", OPENAI_MODEL);
+  logger.info("OPENAI_API_KEY exists:", Boolean(process.env.OPENAI_API_KEY));
 
   const response = await client.responses.create({
     model: OPENAI_MODEL,
@@ -157,13 +158,13 @@ export async function generateExecutiveSummary({ prompt }) {
 
   const text = extractResponseText(response);
   if (!text) {
-    console.error("Raw AI response: empty", {
+    logger.error("Raw AI response: empty", {
       hasOutputText: Boolean(response?.output_text),
       outputItems: Array.isArray(response?.output) ? response.output.length : 0,
     });
     throw new Error("OPENAI_EMPTY_RESPONSE");
   }
 
-  console.log("Raw AI response:", text.slice(0, 1200));
+  logger.info("Raw AI response:", text.slice(0, 1200));
   return text;
 }

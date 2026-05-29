@@ -1,9 +1,10 @@
-import { getAISummary } from "../ia/aiService.js";
+﻿import { getAISummary } from "../ia/aiService.js";
 import {
   AI_LANG_DEFAULT,
   AI_SCHEMA_VERSION,
 } from "../ia/aiConfig.js";
 import { sendMonthlyExecutiveReportEmail } from "../services/email/email.service.js";
+import { logger } from "../config/logger.js";
 
 function nowInTimezone(timezone = "America/Mexico_City") {
   return new Date(
@@ -276,7 +277,7 @@ export async function runMonthlyExecutiveReportJob({
           : 0,
       });
     } catch (error) {
-      console.error(`❌ monthlyExecutiveReportJob plant ${plant?.id}:`, error);
+      logger.error(`❌ monthlyExecutiveReportJob plant ${plant?.id}:`, error);
 
       try {
         const reportMonth =
@@ -337,15 +338,15 @@ export function startMonthlyExecutiveReportScheduler({
         baseUrl,
       });
 
-      console.log("📧 monthlyExecutiveReportJob:", result);
+      logger.info("📧 monthlyExecutiveReportJob:", result);
     } catch (e) {
-      console.error("❌ monthlyExecutiveReportScheduler:", e);
+      logger.error("❌ monthlyExecutiveReportScheduler:", e);
     }
   };
 
   setTimeout(run, 15_000);
   const interval = setInterval(run, 15 * 60 * 1000);
 
-  console.log("✅ Monthly Executive Report scheduler iniciado");
+  logger.info("✅ Monthly Executive Report scheduler iniciado");
   return interval;
 }

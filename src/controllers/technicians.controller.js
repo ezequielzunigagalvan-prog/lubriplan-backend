@@ -1,5 +1,6 @@
-// src/controllers/technicians.controller.js
+﻿// src/controllers/technicians.controller.js
 import prisma from "../prisma.js";
+import { logger } from "../config/logger.js";
 
 export const findAll = async (req, res) => {
   try {
@@ -71,7 +72,7 @@ const execDate = lastExec?.executedAt ?? null;
 
     return res.json(result);
   } catch (error) {
-    console.error("Error obteniendo técnicos:", error);
+    logger.error("Error obteniendo técnicos:", error);
     return res.status(500).json({ error: "Error obteniendo técnicos" });
   }
 };
@@ -96,7 +97,7 @@ export async function findActive(req, res) {
 
     return res.json({ ok: true, items });
   } catch (error) {
-    console.error("Error obteniendo técnicos activos:", error);
+    logger.error("Error obteniendo técnicos activos:", error);
     return res.status(500).json({ error: "Error obteniendo técnicos activos" });
   }
 }
@@ -127,7 +128,7 @@ export async function findById(req, res) {
 
     return res.json({ ok: true, item: tech });
   } catch (error) {
-    console.error("Error obteniendo técnico:", error);
+    logger.error("Error obteniendo técnico:", error);
     return res.status(500).json({ error: "Error obteniendo técnico" });
   }
 }
@@ -169,7 +170,7 @@ export async function createTechnician(req, res) {
       },
     });
   } catch (e) {
-    console.error("POST technician", e);
+    logger.error("POST technician", e);
 
     if (e?.code === "P2002") {
       return res.status(409).json({
@@ -225,7 +226,7 @@ export async function updateTechnician(req, res) {
       },
     });
   } catch (e) {
-    console.error("PATCH/PUT technician", e);
+    logger.error("PATCH/PUT technician", e);
 
     if (e?.code === "P2002") {
       return res.status(409).json({
@@ -268,7 +269,7 @@ export async function deleteTechnician(req, res) {
 
     return res.json({ ok: true });
   } catch (e) {
-    console.error("DELETE technician", e);
+    logger.error("DELETE technician", e);
     return res.status(500).json({ error: "Error eliminando técnico" });
   }
 }

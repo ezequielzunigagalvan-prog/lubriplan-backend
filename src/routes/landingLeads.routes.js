@@ -1,5 +1,6 @@
-import express from "express";
+﻿import express from "express";
 import { Resend } from "resend";
+import { logger } from "../config/logger.js";
 
 const LEAD_EMAIL = process.env.LEAD_EMAIL || "lubriplan@hidrolub.com";
 const EMAIL_FROM = process.env.EMAIL_FROM || "LubriPlan <onboarding@resend.dev>";
@@ -68,7 +69,7 @@ async function sendLeadEmail({ nombre, email, telefono, empresa, source, ip }) {
       `,
     });
   } catch (e) {
-    console.error("[landingLeads] Error enviando email:", e?.message);
+    logger.error("[landingLeads] Error enviando email:", e?.message);
   }
 }
 
@@ -100,7 +101,7 @@ export default function landingLeadsRoutes({ prisma, auth, requireRole }) {
 
       return res.status(201).json({ ok: true, lead });
     } catch (e) {
-      console.error("[landingLeads] POST error:", e?.message);
+      logger.error("[landingLeads] POST error:", e?.message);
       return res.status(500).json({ error: "Error registrando solicitud" });
     }
   });
@@ -123,7 +124,7 @@ export default function landingLeadsRoutes({ prisma, auth, requireRole }) {
 
       return res.json({ ok: true, leads, total, page: Number(page), limit: take });
     } catch (e) {
-      console.error("[landingLeads] GET error:", e?.message);
+      logger.error("[landingLeads] GET error:", e?.message);
       return res.status(500).json({ error: "Error obteniendo leads" });
     }
   });
@@ -150,7 +151,7 @@ export default function landingLeadsRoutes({ prisma, auth, requireRole }) {
 
       return res.json({ ok: true, lead });
     } catch (e) {
-      console.error("[landingLeads] PATCH error:", e?.message);
+      logger.error("[landingLeads] PATCH error:", e?.message);
       return res.status(500).json({ error: "Error actualizando lead" });
     }
   });

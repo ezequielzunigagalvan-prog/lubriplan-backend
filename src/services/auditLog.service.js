@@ -1,3 +1,4 @@
+﻿import { logger } from "../config/logger.js";
 // src/services/auditLog.service.js
 
 /**
@@ -20,6 +21,6 @@ export async function createAuditLog(prisma, { plantId, userId, userEmail, actio
     });
   } catch (e) {
     // Audit log failures should never crash the main flow
-    console.error("auditLog.service createAuditLog error:", e?.message);
+    logger.error("auditLog.service createAuditLog error:", e?.message);
   }
 }

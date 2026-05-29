@@ -4,6 +4,7 @@ import PDFDocument from "pdfkit";
 import prisma from "../prisma.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { requireRole } from "../middleware/requireRole.js";
+import { logger } from "../config/logger.js";
 
 const router = express.Router();
 
@@ -838,7 +839,7 @@ router.get("/xlsx", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), async (re
     await workbook.xlsx.write(res);
     return res.end();
   } catch (e) {
-    console.error("GET /export/xlsx error:", e);
+    logger.error("GET /export/xlsx error:", e);
     return res.status(500).json({ error: e?.message || "Error generando exportación XLSX" });
   }
 });
@@ -1022,7 +1023,7 @@ router.get("/pdf", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), async (req
 
     doc.end();
   } catch (e) {
-    console.error("GET /export/pdf error:", e);
+    logger.error("GET /export/pdf error:", e);
     if (!res.headersSent) {
       return res.status(500).json({ error: e?.message || "Error generando PDF" });
     }

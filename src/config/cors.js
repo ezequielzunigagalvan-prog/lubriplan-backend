@@ -1,4 +1,5 @@
 ﻿import cors from "cors";
+import { logger } from "../config/logger.js";
 
 export const allowedOrigins = [
   "http://localhost:5173",
@@ -10,7 +11,7 @@ export const allowedOrigins = [
 
 const corsOptions = {
   origin(origin, callback) {
-    console.log("[CORS] Origin recibido:", origin);
+    logger.info("[CORS] Origin recibido:", origin);
 
     if (!origin) return callback(null, true);
 

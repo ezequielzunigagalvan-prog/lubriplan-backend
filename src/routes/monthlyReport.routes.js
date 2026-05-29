@@ -1,6 +1,7 @@
-import express from "express";
+﻿import express from "express";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { runMonthlyExecutiveReportJob } from "../jobs/monthlyExecutiveReport.job.js";
+import { logger } from "../config/logger.js";
 
 export default function monthlyReportRoutes({
   prisma,
@@ -29,7 +30,7 @@ export default function monthlyReportRoutes({
 
         return res.json({ ok: true, result });
       } catch (e) {
-        console.error("POST /monthly-report/send-now error:", e);
+        logger.error("POST /monthly-report/send-now error:", e);
         return res.status(500).json({ error: "Error enviando reporte mensual" });
       }
     }
@@ -61,7 +62,7 @@ export default function monthlyReportRoutes({
 
         return res.json({ ok: true, items });
       } catch (e) {
-        console.error("GET /monthly-report/runs error:", e);
+        logger.error("GET /monthly-report/runs error:", e);
         return res.status(500).json({ error: "Error obteniendo historial de envíos" });
       }
     }

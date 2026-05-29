@@ -1,5 +1,6 @@
-// src/routes/auditLog.routes.js
+﻿// src/routes/auditLog.routes.js
 import express from "express";
+import { logger } from "../config/logger.js";
 
 export default function auditLogRoutes({ prisma, auth, requireRole }) {
   const router = express.Router();
@@ -54,7 +55,7 @@ export default function auditLogRoutes({ prisma, auth, requireRole }) {
       const pages = Math.max(1, Math.ceil(total / limit));
       return res.json({ ok: true, logs, total, page, pages });
     } catch (e) {
-      console.error("GET /audit-log error:", e);
+      logger.error("GET /audit-log error:", e);
       return res.status(500).json({ error: "Error cargando audit log" });
     }
   });
@@ -128,7 +129,7 @@ export default function auditLogRoutes({ prisma, auth, requireRole }) {
         lastOilSample,
       });
     } catch (e) {
-      console.error("GET /equipment/by-code/:code error:", e);
+      logger.error("GET /equipment/by-code/:code error:", e);
       return res.status(500).json({ error: "Error buscando equipo por código" });
     }
   });

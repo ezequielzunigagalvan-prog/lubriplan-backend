@@ -1,4 +1,5 @@
 ﻿import express from "express";
+import { logger } from "../config/logger.js";
 
 export default function notificationsRoutes({ prisma, auth }) {
   if (!prisma) throw new Error("notificationsRoutes: prisma is required");
@@ -41,7 +42,7 @@ export default function notificationsRoutes({ prisma, auth }) {
 
       return res.json({ items, unreadCount, nextCursor });
     } catch (e) {
-      console.error(e);
+      logger.error(e);
       return res.status(500).json({ error: "Error cargando notificaciones" });
     }
   });
@@ -64,7 +65,7 @@ export default function notificationsRoutes({ prisma, auth }) {
 
       return res.json({ ok: true });
     } catch (e) {
-      console.error(e);
+      logger.error(e);
       return res.status(500).json({ error: "Error marcando como leida" });
     }
   });
@@ -82,7 +83,7 @@ export default function notificationsRoutes({ prisma, auth }) {
 
       return res.json({ ok: true, count: r.count, unreadCount: 0 });
     } catch (e) {
-      console.error(e);
+      logger.error(e);
       return res.status(500).json({ error: "Error marcando todas como leidas" });
     }
   });
@@ -99,7 +100,7 @@ export default function notificationsRoutes({ prisma, auth }) {
 
       return res.json({ unreadCount });
     } catch (e) {
-      console.error(e);
+      logger.error(e);
       return res.status(500).json({ error: "Error contando notificaciones" });
     }
   });
@@ -121,7 +122,7 @@ export default function notificationsRoutes({ prisma, auth }) {
 
       return res.json({ ok: true });
     } catch (e) {
-      console.error(e);
+      logger.error(e);
       return res.status(500).json({ error: "Error eliminando notificacion" });
     }
   });

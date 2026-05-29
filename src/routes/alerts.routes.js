@@ -1,5 +1,6 @@
-// src/routes/alerts.routes.js
+﻿// src/routes/alerts.routes.js
 import express from "express";
+import { logger } from "../config/logger.js";
 
 export default function alertsRoutes({ prisma, auth, requireRole, toStartOfDaySafe }) {
   const router = express.Router();
@@ -63,6 +64,7 @@ export default function alertsRoutes({ prisma, auth, requireRole, toStartOfDaySa
         const [pendingExecs, overdueExecs, techs] = await Promise.all([
           prisma.execution.findMany({
             where: {
+              plantId,
               status: { not: "COMPLETED" },
               scheduledAt: { gte: today, lt: toWindow },
               technicianId: { not: null },
@@ -71,6 +73,7 @@ export default function alertsRoutes({ prisma, auth, requireRole, toStartOfDaySa
           }),
           prisma.execution.findMany({
             where: {
+              plantId,
               status: { not: "COMPLETED" },
               scheduledAt: { gte: fromOverdue, lt: today },
               technicianId: { not: null },
@@ -78,7 +81,7 @@ export default function alertsRoutes({ prisma, auth, requireRole, toStartOfDaySa
             select: { technicianId: true },
           }),
           prisma.technician.findMany({
-            where: { deletedAt: null },
+            where: { plantId, deletedAt: null },
             select: { id: true, name: true, code: true, status: true, specialty: true },
           }),
         ]);
@@ -136,7 +139,7 @@ export default function alertsRoutes({ prisma, auth, requireRole, toStartOfDaySa
 
         return res.json({ ok: true, items });
       } catch (e) {
-        console.error("alerts technician-overload error:", e);
+        logger.error("alerts technician-overload error:", e);
         return res.status(500).json({ error: "Error technician-overload" });
       }
     }

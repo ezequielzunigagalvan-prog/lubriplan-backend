@@ -1,7 +1,8 @@
-// src/routes/oilSamples.routes.js
+﻿// src/routes/oilSamples.routes.js
 import express from "express";
 import { createAuditLog } from "../services/auditLog.service.js";
 import { fireWebhookEvent } from "../services/webhooks.service.js";
+import { logger } from "../config/logger.js";
 
 const OIL_SAMPLE_FIELDS = [
   "sampledAt", "labReference", "labReportUrl",
@@ -64,7 +65,7 @@ export default function oilSamplesRoutes({ prisma, auth, requireRole }) {
 
       return res.json({ ok: true, items, total });
     } catch (e) {
-      console.error("GET /oil-samples error:", e);
+      logger.error("GET /oil-samples error:", e);
       return res.status(500).json({ error: "Error cargando muestras" });
     }
   });
@@ -87,7 +88,7 @@ export default function oilSamplesRoutes({ prisma, auth, requireRole }) {
       if (!sample) return res.status(404).json({ error: "Muestra no encontrada" });
       return res.json({ ok: true, sample });
     } catch (e) {
-      console.error("GET /oil-samples/:id error:", e);
+      logger.error("GET /oil-samples/:id error:", e);
       return res.status(500).json({ error: "Error cargando muestra" });
     }
   });
@@ -132,7 +133,7 @@ export default function oilSamplesRoutes({ prisma, auth, requireRole }) {
         samples,
       });
     } catch (e) {
-      console.error("GET /oil-samples/equipment/:id/trend error:", e);
+      logger.error("GET /oil-samples/equipment/:id/trend error:", e);
       return res.status(500).json({ error: "Error calculando tendencia" });
     }
   });
@@ -183,7 +184,7 @@ export default function oilSamplesRoutes({ prisma, auth, requireRole }) {
 
       return res.status(201).json({ ok: true, sample });
     } catch (e) {
-      console.error("POST /oil-samples error:", e);
+      logger.error("POST /oil-samples error:", e);
       return res.status(500).json({ error: "Error registrando muestra" });
     }
   });
@@ -228,7 +229,7 @@ export default function oilSamplesRoutes({ prisma, auth, requireRole }) {
 
       return res.json({ ok: true, sample });
     } catch (e) {
-      console.error("PATCH /oil-samples/:id error:", e);
+      logger.error("PATCH /oil-samples/:id error:", e);
       return res.status(500).json({ error: "Error actualizando muestra" });
     }
   });
@@ -246,7 +247,7 @@ export default function oilSamplesRoutes({ prisma, auth, requireRole }) {
       await prisma.oilSample.delete({ where: { id } });
       return res.json({ ok: true });
     } catch (e) {
-      console.error("DELETE /oil-samples/:id error:", e);
+      logger.error("DELETE /oil-samples/:id error:", e);
       return res.status(500).json({ error: "Error eliminando muestra" });
     }
   });

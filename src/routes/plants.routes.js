@@ -1,5 +1,6 @@
-// routes/plants.routes.js
+﻿// routes/plants.routes.js
 import express from "express";
+import { logger } from "../config/logger.js";
 
 function isValidTimeZone(value) {
   try {
@@ -67,7 +68,7 @@ export default function plantsRoutes({ prisma, auth, requireRole }) {
 
       return res.json({ ok: true, plants, defaultPlantId });
     } catch (e) {
-      console.error("GET /plants error:", e);
+      logger.error("GET /plants error:", e);
       return res.status(500).json({ ok: false, error: "Error cargando plantas" });
     }
   });
@@ -97,7 +98,7 @@ export default function plantsRoutes({ prisma, auth, requireRole }) {
 
       return res.json({ ok: true, plant });
     } catch (e) {
-      console.error("GET /plants/current error:", e);
+      logger.error("GET /plants/current error:", e);
       return res.status(500).json({ ok: false, error: "Error obteniendo planta actual" });
     }
   });
@@ -144,7 +145,7 @@ export default function plantsRoutes({ prisma, auth, requireRole }) {
 
       return res.status(201).json({ ok: true, plant: result });
     } catch (e) {
-      console.error("POST /plants error:", e);
+      logger.error("POST /plants error:", e);
       return res.status(500).json({ ok: false, error: "Error creando planta" });
     }
   });
@@ -171,7 +172,7 @@ export default function plantsRoutes({ prisma, auth, requireRole }) {
 
       return res.json({ ok: true });
     } catch (e) {
-      console.error("POST /plants/:id/default error:", e);
+      logger.error("POST /plants/:id/default error:", e);
       return res.status(500).json({ ok: false, error: "Error cambiando planta default" });
     }
   });
@@ -210,7 +211,7 @@ export default function plantsRoutes({ prisma, auth, requireRole }) {
 
       return res.json({ ok: true, plant });
     } catch (e) {
-      console.error("PATCH /plants/:id error:", e);
+      logger.error("PATCH /plants/:id error:", e);
       return res.status(500).json({ ok: false, error: "Error actualizando planta" });
     }
   });

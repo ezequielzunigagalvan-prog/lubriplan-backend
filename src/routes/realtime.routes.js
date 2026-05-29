@@ -1,6 +1,7 @@
-// src/routes/realtime.routes.js
+﻿// src/routes/realtime.routes.js
 import express from "express";
 import sseHub from "../realtime/sseHub.js";
+import { logger } from "../config/logger.js";
 
 function realtimeRoutes({ auth }) {
   const router = express.Router();
@@ -18,7 +19,7 @@ function realtimeRoutes({ auth }) {
 
       return auth(req, res, next);
     } catch (e) {
-      console.error("authSSE error:", e);
+      logger.error("authSSE error:", e);
       return res.status(401).json({ error: "Token inválido" });
     }
   }

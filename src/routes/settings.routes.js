@@ -1,5 +1,6 @@
 ﻿// src/routes/settings.routes.js
 import express from "express";
+import { logger } from "../config/logger.js";
 
 export default function settingsRoutes({ prisma, auth, requireRole }) {
   const router = express.Router();
@@ -21,7 +22,7 @@ export default function settingsRoutes({ prisma, auth, requireRole }) {
       const settings = await ensureRow();
       return res.json({ ok: true, settings });
     } catch (e) {
-      console.error("GET /settings error:", e);
+      logger.error("GET /settings error:", e);
       return res.status(500).json({ error: "Error cargando settings" });
     }
   });
@@ -108,7 +109,7 @@ export default function settingsRoutes({ prisma, auth, requireRole }) {
 
       return res.json({ ok: true, settings });
     } catch (e) {
-      console.error("PATCH /settings error:", e);
+      logger.error("PATCH /settings error:", e);
       return res.status(500).json({ error: "Error guardando settings" });
     }
   });

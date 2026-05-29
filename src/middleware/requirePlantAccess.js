@@ -1,3 +1,4 @@
+﻿import { logger } from "../config/logger.js";
 export const requirePlantAccess = (prisma) => {
   return async (req, res, next) => {
     try {
@@ -27,7 +28,7 @@ export const requirePlantAccess = (prisma) => {
 
       next();
     } catch (err) {
-      console.error("requirePlantAccess error:", err);
+      logger.error("requirePlantAccess error:", err);
       return res.status(500).json({ error: "Error validando acceso a planta" });
     }
   };

@@ -1,5 +1,6 @@
-// src/ia/chatRouter.js
+﻿// src/ia/chatRouter.js
 import express from "express";
+import { logger } from "../config/logger.js";
 import { buildChatContext } from "./chatContextBuilder.js";
 import { generateChatReply } from "./chatService.js";
 import { dualRateLimit } from "./aiRateLimit.js";
@@ -89,7 +90,7 @@ export default function chatRouter({ prisma, requireAuth, requireRole }) {
 
         return res.json({ ok: true, reply, model });
       } catch (e) {
-        console.error("[chatRouter] Error:", e);
+        logger.error("[chatRouter] Error:", e);
         return res.status(500).json({ error: "Error en el asistente. Intenta de nuevo." });
       }
     }

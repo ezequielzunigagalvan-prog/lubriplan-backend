@@ -1,9 +1,10 @@
-// src/routes/users.js
+﻿// src/routes/users.js
 import express from "express";
 import prisma from "../prisma.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { requireRole } from "../middleware/requireRole.js";
 import { hashPassword } from "../utils/password.js";
+import { logger } from "../config/logger.js";
 
 const router = express.Router();
 
@@ -32,7 +33,7 @@ router.get("/technicians/available", requireAuth, requireRole(["ADMIN"]), async 
 
     return res.json({ ok: true, items });
   } catch (e) {
-    console.error(e);
+    logger.error(e);
     return res.status(500).json({ error: "Error obteniendo técnicos disponibles" });
   }
 });
@@ -67,7 +68,7 @@ router.get("/plants/available", requireAuth, requireRole(["ADMIN"]), async (req,
       })),
     });
   } catch (e) {
-    console.error("GET /users/plants/available error:", e);
+    logger.error("GET /users/plants/available error:", e);
     return res.status(500).json({ error: "Error obteniendo plantas disponibles" });
   }
 });
@@ -186,7 +187,7 @@ router.get("/", requireAuth, requireRole(["ADMIN"]), async (req, res) => {
 
     return res.json({ ok: true, items });
   } catch (e) {
-    console.error("GET /users error:", e);
+    logger.error("GET /users error:", e);
     return res.status(500).json({ error: "Error obteniendo usuarios" });
   }
 });
@@ -307,7 +308,7 @@ router.post("/", requireAuth, requireRole(["ADMIN"]), async (req, res) => {
 
     return res.json({ ok: true, user: result });
   } catch (e) {
-    console.error("POST /users error:", e);
+    logger.error("POST /users error:", e);
 
     if (e?.code === "P2002") {
       return res.status(409).json({ error: "Conflicto: valor duplicado" });
@@ -378,7 +379,7 @@ router.get("/:id/plants", requireAuth, requireRole(["ADMIN"]), async (req, res) 
 
     return res.json({ ok: true, items });
   } catch (e) {
-    console.error("GET /users/:id/plants error:", e);
+    logger.error("GET /users/:id/plants error:", e);
     return res.status(500).json({ error: "Error obteniendo plantas del usuario" });
   }
 });
@@ -478,7 +479,7 @@ router.put("/:id/plants", requireAuth, requireRole(["ADMIN"]), async (req, res) 
       items: updated,
     });
   } catch (e) {
-    console.error("PUT /users/:id/plants error:", e);
+    logger.error("PUT /users/:id/plants error:", e);
     return res.status(500).json({ error: "Error actualizando plantas del usuario" });
   }
 });
@@ -608,7 +609,7 @@ router.patch("/:id", requireAuth, requireRole(["ADMIN"]), async (req, res) => {
 
     return res.json({ ok: true, user: updated });
   } catch (e) {
-    console.error("PATCH /users/:id error:", e);
+    logger.error("PATCH /users/:id error:", e);
 
     if (e?.code === "P2002") {
       return res.status(409).json({ error: "Conflicto: valor duplicado" });
@@ -658,7 +659,7 @@ router.patch("/:id/status", requireAuth, requireRole(["ADMIN"]), async (req, res
 
     return res.json({ ok: true, user: updated });
   } catch (e) {
-    console.error("PATCH /users/:id/status error:", e);
+    logger.error("PATCH /users/:id/status error:", e);
     return res.status(500).json({ error: "Error actualizando estado" });
   }
 });

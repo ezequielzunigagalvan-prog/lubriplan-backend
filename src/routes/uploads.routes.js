@@ -1,6 +1,7 @@
-import express from "express";
+﻿import express from "express";
 import multer from "multer";
 import { uploadBufferToCloudinary } from "../lib/cloudinary.js";
+import { logger } from "../config/logger.js";
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -41,7 +42,7 @@ export default function uploadsRoutes({ auth }) {
         filename: uploaded.public_id,
       });
     } catch (error) {
-      console.error("upload routes-image error:", error);
+      logger.error("upload routes-image error:", error);
       const message = String(error?.message || "").trim();
       const status = /Cloudinary no esta configurado/i.test(message) ? 503 : 500;
       return res.status(status).json({

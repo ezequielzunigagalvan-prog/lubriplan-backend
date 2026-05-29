@@ -1,5 +1,6 @@
-// src/services/webhooks.service.js
+﻿// src/services/webhooks.service.js
 import crypto from "crypto";
+import { logger } from "../config/logger.js";
 
 /**
  * Firma el payload con HMAC-SHA256 usando el secret del endpoint.
@@ -80,7 +81,7 @@ export function fireWebhookEvent(prisma, plantId, event, data = {}) {
             },
           });
         } catch (innerErr) {
-          console.error("webhooks.service delivery error:", innerErr?.message);
+          logger.error("webhooks.service delivery error:", innerErr?.message);
           if (delivery?.id) {
             await prisma.webhookDelivery.update({
               where: { id: delivery.id },
@@ -90,7 +91,7 @@ export function fireWebhookEvent(prisma, plantId, event, data = {}) {
         }
       }
     } catch (e) {
-      console.error("webhooks.service fireWebhookEvent error:", e?.message);
+      logger.error("webhooks.service fireWebhookEvent error:", e?.message);
     }
   });
 }

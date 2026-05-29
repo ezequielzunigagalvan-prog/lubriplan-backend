@@ -1,6 +1,7 @@
-// src/ia/landingChatRouter.js
+﻿// src/ia/landingChatRouter.js
 // Endpoints públicos de chatbot para landing principal y landing de LubriPlan Card.
 import express from "express";
+import { logger } from "../config/logger.js";
 import { Resend } from "resend";
 import { AI_MODE, OPENAI_MODEL } from "./aiConfig.js";
 
@@ -97,7 +98,7 @@ async function sendHotLeadEmail(messages, ip, keywords, source) {
       `,
     });
   } catch (e) {
-    console.error("[landingChat] Error enviando email lead:", e?.message);
+    logger.error("[landingChat] Error enviando email lead:", e?.message);
   }
 }
 
@@ -276,7 +277,7 @@ async function handleChat({ req, res, prisma, source, systemPrompt, mockFn }) {
         reply = response.choices?.[0]?.message?.content?.trim() || "";
         model = response.model;
       } catch (aiErr) {
-        console.error("[landingChat] OpenAI error, fallback a mock:", aiErr?.message);
+        logger.error("[landingChat] OpenAI error, fallback a mock:", aiErr?.message);
         const lastUser = [...messages].reverse().find((m) => m.role === "user");
         reply = mockFn(lastUser?.content);
         model = "mock-fallback";
@@ -303,13 +304,13 @@ async function handleChat({ req, res, prisma, source, systemPrompt, mockFn }) {
           await prisma.landingChatLog.update({ where: { sessionId: sid }, data: { emailSent: true } });
         }
       } catch (dbErr) {
-        console.error("[landingChat] Error guardando en BD:", dbErr?.message);
+        logger.error("[landingChat] Error guardando en BD:", dbErr?.message);
       }
     }
 
     return res.json({ ok: true, reply, model });
   } catch (e) {
-    console.error("[landingChat] Error inesperado:", e?.message, e?.stack);
+    logger.error("[landingChat] Error inesperado:", e?.message, e?.stack);
     return res.status(500).json({ error: "Error en el asistente. Intenta de nuevo." });
   }
 }

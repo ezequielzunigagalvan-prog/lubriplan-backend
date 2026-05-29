@@ -1,5 +1,6 @@
 // src/middleware/devAttachUser.js
 import prisma from "../prisma.js";
+import { logger } from "../config/logger.js";
 
 export async function devAttachUser(req, res, next) {
   try {
@@ -32,7 +33,7 @@ export async function devAttachUser(req, res, next) {
 
     return next();
   } catch (e) {
-    console.error("devAttachUser error:", e);
+    logger.error("devAttachUser error:", e);
     return res.status(500).json({ error: "Error attach user (DEV)" });
   }
 }

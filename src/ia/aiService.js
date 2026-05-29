@@ -1,4 +1,5 @@
 ﻿import { AISummarySchemaVersioned } from "./aiSchema.zod.js";
+import { logger } from "../config/logger.js";
 import {
   AI_MODE,
   AI_CACHE_TTL_MS,
@@ -477,7 +478,7 @@ async function generateWithRepair({ month, plantId, role, lang, dashboard }) {
   try {
     raw1 = await generateOnce({ month, plantId, role, lang, dashboard });
   } catch (error) {
-    console.error("AI summary failed:", error);
+    logger.error("AI summary failed:", error);
     return schema.parse(fallbackSummary({ month, plantId, dashboard }));
   }
 
@@ -485,7 +486,7 @@ async function generateWithRepair({ month, plantId, role, lang, dashboard }) {
     try {
       return schema.parse(raw1);
     } catch (error) {
-      console.error("AI first pass schema failed:", error);
+      logger.error("AI first pass schema failed:", error);
     }
   }
 
@@ -494,8 +495,8 @@ async function generateWithRepair({ month, plantId, role, lang, dashboard }) {
     try {
       return schema.parse(JSON.parse(json1));
     } catch (error) {
-      console.error("AI first pass parse failed:", error);
-      console.log("Raw AI response:", String(raw1).slice(0, 1200));
+      logger.error("AI first pass parse failed:", error);
+      logger.info("Raw AI response:", String(raw1).slice(0, 1200));
     }
   }
 
@@ -562,7 +563,7 @@ ${typeof raw1 === "string" ? raw1 : JSON.stringify(raw1)}
     try {
       raw2 = normalizeProviderOutput(await callProvider(repairPrompt));
     } catch (error) {
-      console.error("AI repair pass failed:", error);
+      logger.error("AI repair pass failed:", error);
       return schema.parse(fallbackSummary({ month, plantId, dashboard }));
     }
   }
@@ -571,7 +572,7 @@ ${typeof raw1 === "string" ? raw1 : JSON.stringify(raw1)}
     try {
       return schema.parse(raw2);
     } catch (error) {
-      console.error("AI repair pass schema failed:", error);
+      logger.error("AI repair pass schema failed:", error);
     }
   }
 
@@ -580,8 +581,8 @@ ${typeof raw1 === "string" ? raw1 : JSON.stringify(raw1)}
     try {
       return schema.parse(JSON.parse(json2));
     } catch (error) {
-      console.error("AI repair pass parse failed:", error);
-      console.log("Raw AI response:", String(raw2).slice(0, 1200));
+      logger.error("AI repair pass parse failed:", error);
+      logger.info("Raw AI response:", String(raw2).slice(0, 1200));
     }
   }
 
@@ -619,7 +620,7 @@ export async function getAISummary({
     };
   }
 
-  console.log("AI summary request:", {
+  logger.info("AI summary request:", {
     month,
     plantId,
     role,

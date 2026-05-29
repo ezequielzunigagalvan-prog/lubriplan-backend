@@ -1,5 +1,6 @@
-// src/routes/dashboard.routes.js
+﻿// src/routes/dashboard.routes.js
 import express from "express";
+import { logger } from "../config/logger.js";
 
 export default function dashboardRoutes({
   prisma,
@@ -69,7 +70,7 @@ export default function dashboardRoutes({
 
       return res.json(payload);
     } catch (e) {
-      console.error("dashboard summary error:", e);
+      logger.error("dashboard summary error:", e);
       return res.status(500).json({ error: "Error dashboard summary" });
     }
   });
@@ -232,7 +233,7 @@ export default function dashboardRoutes({
         total,
       });
     } catch (e) {
-      console.error("Error dashboard alerts:", e);
+      logger.error("Error dashboard alerts:", e);
       return res.status(500).json({ error: "Error dashboard alerts" });
     }
   });
@@ -556,7 +557,7 @@ export default function dashboardRoutes({
         total: dedup.length,
       });
     } catch (e) {
-      console.error("Error dashboard priority queue:", e);
+      logger.error("Error dashboard priority queue:", e);
       return res.status(500).json({ error: "Error dashboard priority queue" });
     }
   });
@@ -929,7 +930,7 @@ export default function dashboardRoutes({
           total,
         });
       } catch (e) {
-        console.error("Error dashboard predictive alerts:", e);
+        logger.error("Error dashboard predictive alerts:", e);
         return res.status(500).json({ error: "Error dashboard predictive alerts" });
       }
     }
@@ -956,7 +957,7 @@ export default function dashboardRoutes({
         equipmentsCount,
       });
     } catch (e) {
-      console.error("dashboard admin counts error:", e);
+      logger.error("dashboard admin counts error:", e);
       return res.status(500).json({ error: "Error dashboard admin counts" });
     }
   });
@@ -1015,7 +1016,7 @@ export default function dashboardRoutes({
         },
       });
     } catch (e) {
-      console.error("Error monthly activities:", e);
+      logger.error("Error monthly activities:", e);
       return res.status(500).json({ error: "Error monthly activities" });
     }
   });
@@ -1164,7 +1165,7 @@ export default function dashboardRoutes({
         items,
       });
     } catch (e) {
-      console.error("dashboard technicians efficiency-monthly error:", e);
+      logger.error("dashboard technicians efficiency-monthly error:", e);
       return res.status(500).json({ error: "Error dashboard technicians efficiency-monthly" });
     }
   });

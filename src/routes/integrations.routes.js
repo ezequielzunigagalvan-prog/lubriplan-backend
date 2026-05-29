@@ -109,7 +109,7 @@ export default function integrationsRoutes({ prisma, auth, requireRole }) {
       const existing = await prisma.integrationConfig.findFirst({ where: { id, plantId } });
       if (!existing) return res.status(404).json({ error: "Integración no encontrada" });
 
-      await prisma.integrationConfig.delete({ where: { id } });
+      await prisma.integrationConfig.deleteMany({ where: { id, plantId } });
       return res.json({ ok: true });
     } catch (e) {
       return res.status(500).json({ error: "Error eliminando integración" });

@@ -1,5 +1,6 @@
-// src/routes/analytics.routes.js
+﻿// src/routes/analytics.routes.js
 import express from "express";
+import { logger } from "../config/logger.js";
 
 // Helpers (LOCAL time)
 const up = (v) => String(v || "").trim().toUpperCase();
@@ -84,8 +85,12 @@ export default function analyticsRoutes({ prisma, auth }) {
 
       const { from, to } = parseRange(req);
 
-      // Base where
+      const plantId = req.currentPlantId;
+      if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
+
+      // Base where — siempre filtra por planta del usuario
       const where = {
+        plantId,
         createdAt: { gte: from, lte: to },
       };
       if (isTech) where.reportedById = req.user.id;
@@ -276,7 +281,7 @@ export default function analyticsRoutes({ prisma, auth }) {
         },
       });
     } catch (e) {
-      console.error("analytics/condition-reports error:", e);
+      logger.error("analytics/condition-reports error:", e);
       return res.status(500).json({ error: "Error generando analytics" });
     }
   });
@@ -431,7 +436,7 @@ export default function analyticsRoutes({ prisma, auth }) {
         },
       });
     } catch (e) {
-      console.error("analytics/executions error:", e);
+      logger.error("analytics/executions error:", e);
       return res.status(500).json({ error: "Error generando analytics de ejecuciones" });
     }
   });
@@ -575,7 +580,7 @@ export default function analyticsRoutes({ prisma, auth }) {
         },
       });
     } catch (e) {
-      console.error("analytics/lubricants error:", e);
+      logger.error("analytics/lubricants error:", e);
       return res.status(500).json({ error: "Error generando analytics de lubricantes" });
     }
   });
@@ -692,7 +697,7 @@ export default function analyticsRoutes({ prisma, auth }) {
         monthTrend: monthOle,
       });
     } catch (e) {
-      console.error("analytics/ole error:", e);
+      logger.error("analytics/ole error:", e);
       return res.status(500).json({ error: "Error calculando OLE" });
     }
   });
@@ -786,7 +791,7 @@ export default function analyticsRoutes({ prisma, auth }) {
         summary: { synced: synced.length, conflicts: conflicts.length, errors: errors.length },
       });
     } catch (e) {
-      console.error("POST /sync/executions error:", e);
+      logger.error("POST /sync/executions error:", e);
       return res.status(500).json({ error: "Error en sync de ejecuciones" });
     }
   });
@@ -892,7 +897,7 @@ export default function analyticsRoutes({ prisma, auth }) {
         plants: plantKpis.sort((a, b) => b.kpis.ole - a.kpis.ole),
       });
     } catch (e) {
-      console.error("analytics/corporate error:", e);
+      logger.error("analytics/corporate error:", e);
       return res.status(500).json({ error: "Error generando dashboard corporativo" });
     }
   });

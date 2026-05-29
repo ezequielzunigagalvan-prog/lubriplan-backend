@@ -6,6 +6,7 @@ import { normalizeImageInput, uploadBufferToCloudinary } from "../lib/cloudinary
 import { notifyManagers, notifyTechnicianAssignee } from "../notifications/notify.js";
 import { sseHub } from "../realtime/sseHub.js";
 import { sendConditionAlertEmail } from "../services/email/email.service.js";
+import { logger } from "../config/logger.js";
 
 // =========================
 // Multer config
@@ -94,7 +95,7 @@ export default function conditionReportsRoutes({ prisma, auth }) {
 
       return res.json({ items });
     } catch (e) {
-      console.error(e);
+      logger.error(e);
       return res.status(500).json({ error: "Error listando reportes" });
     }
   });
@@ -232,7 +233,7 @@ export default function conditionReportsRoutes({ prisma, auth }) {
           },
         });
       } catch (emailErr) {
-        console.error("Error enviando correo de condición anormal:", emailErr);
+        logger.error("Error enviando correo de condición anormal:", emailErr);
       }
 
       // SSE
@@ -264,7 +265,7 @@ export default function conditionReportsRoutes({ prisma, auth }) {
 
       return res.json({ item });
     } catch (e) {
-      console.error(e);
+      logger.error(e);
       return res.status(500).json({ error: "Error creando reporte" });
     }
   });
@@ -353,7 +354,7 @@ export default function conditionReportsRoutes({ prisma, auth }) {
 
       return res.json({ item: updated });
     } catch (e) {
-      console.error(e);
+      logger.error(e);
       return res.status(500).json({ error: "Error descartando reporte" });
     }
   });
@@ -530,13 +531,13 @@ export default function conditionReportsRoutes({ prisma, auth }) {
             link: "/activities",
           });
         } catch (notifyErr) {
-          console.error("No se pudo notificar accion correctiva al tecnico:", notifyErr);
+          logger.error("No se pudo notificar accion correctiva al tecnico:", notifyErr);
         }
       }
 
       return res.json(result);
     } catch (e) {
-      console.error(e);
+      logger.error(e);
       return res.status(500).json({ error: "Error programando acción correctiva" });
     }
   });

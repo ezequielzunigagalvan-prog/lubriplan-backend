@@ -1,9 +1,10 @@
-import express from "express";
+﻿import express from "express";
 import ExcelJS from "exceljs";
 import multer from "multer";
 import prisma from "../prisma.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { requireRole } from "../middleware/requireRole.js";
+import { logger } from "../config/logger.js";
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024 } });
@@ -654,7 +655,7 @@ router.post("/preview", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), uploa
     const result = await validateWorkbook(workbook, plantId);
     return res.json({ ok: true, summary: summaryFromResult(result), sheets: result });
   } catch (error) {
-    console.error("Import preview error:", error);
+    logger.error("Import preview error:", error);
     return res.status(500).json({ error: "Error validando archivo" });
   }
 });
@@ -679,7 +680,7 @@ router.post("/commit", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), async 
 
     return res.json({ ok: true, created, summary: Object.fromEntries(SHEETS.map((sheetKey) => [sheetKey, created[sheetKey]?.length || 0])) });
   } catch (error) {
-    console.error("Import commit error:", error);
+    logger.error("Import commit error:", error);
     return res.status(500).json({ error: error?.message || "Error importando archivo" });
   }
 });

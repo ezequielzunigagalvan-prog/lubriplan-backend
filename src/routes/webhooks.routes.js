@@ -1,7 +1,8 @@
-// src/routes/webhooks.routes.js
+﻿// src/routes/webhooks.routes.js
 import express from "express";
 import crypto from "crypto";
 import { retryDelivery } from "../services/webhooks.service.js";
+import { logger } from "../config/logger.js";
 
 const VALID_EVENTS = [
   "EXECUTION_COMPLETED",
@@ -37,7 +38,7 @@ export default function webhooksRoutes({ prisma, auth, requireRole }) {
 
       return res.json({ ok: true, items });
     } catch (e) {
-      console.error("GET /webhooks error:", e);
+      logger.error("GET /webhooks error:", e);
       return res.status(500).json({ error: "Error cargando webhooks" });
     }
   });
@@ -72,7 +73,7 @@ export default function webhooksRoutes({ prisma, auth, requireRole }) {
         endpoint: { ...endpoint, secret }, // secret visible solo en creación
       });
     } catch (e) {
-      console.error("POST /webhooks error:", e);
+      logger.error("POST /webhooks error:", e);
       return res.status(500).json({ error: "Error creando webhook" });
     }
   });
@@ -106,7 +107,7 @@ export default function webhooksRoutes({ prisma, auth, requireRole }) {
       const { secret: _s, ...safe } = endpoint;
       return res.json({ ok: true, endpoint: { ...safe, secretHint: `****${_s.slice(-4)}` } });
     } catch (e) {
-      console.error("PATCH /webhooks/:id error:", e);
+      logger.error("PATCH /webhooks/:id error:", e);
       return res.status(500).json({ error: "Error actualizando webhook" });
     }
   });
@@ -126,7 +127,7 @@ export default function webhooksRoutes({ prisma, auth, requireRole }) {
 
       return res.json({ ok: true, secret }); // nuevo secret visible solo aquí
     } catch (e) {
-      console.error("POST /webhooks/:id/rotate-secret error:", e);
+      logger.error("POST /webhooks/:id/rotate-secret error:", e);
       return res.status(500).json({ error: "Error rotando secret" });
     }
   });
@@ -144,7 +145,7 @@ export default function webhooksRoutes({ prisma, auth, requireRole }) {
       await prisma.webhookEndpoint.delete({ where: { id } });
       return res.json({ ok: true });
     } catch (e) {
-      console.error("DELETE /webhooks/:id error:", e);
+      logger.error("DELETE /webhooks/:id error:", e);
       return res.status(500).json({ error: "Error eliminando webhook" });
     }
   });
@@ -181,7 +182,7 @@ export default function webhooksRoutes({ prisma, auth, requireRole }) {
 
       return res.json({ ok: true, deliveries, total });
     } catch (e) {
-      console.error("GET /webhooks/:id/deliveries error:", e);
+      logger.error("GET /webhooks/:id/deliveries error:", e);
       return res.status(500).json({ error: "Error cargando entregas" });
     }
   });
@@ -202,7 +203,7 @@ export default function webhooksRoutes({ prisma, auth, requireRole }) {
       const updated = await retryDelivery(prisma, deliveryId);
       return res.json({ ok: true, delivery: updated });
     } catch (e) {
-      console.error("POST /webhooks/deliveries/:id/retry error:", e);
+      logger.error("POST /webhooks/deliveries/:id/retry error:", e);
       return res.status(400).json({ error: e?.message || "Error en reintento" });
     }
   });
