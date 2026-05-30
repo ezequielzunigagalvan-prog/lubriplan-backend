@@ -1,0 +1,92 @@
+services:
+
+  # ─────────────────────────────────────
+  # Base de datos PostgreSQL
+  # ─────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: lubriplan
+      POSTGRES_USER: lubriplan
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lubriplan -d lubriplan"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - lubriplan_net
+
+  # ─────────────────────────────────────
+  # Backend Node.js
+  # ─────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: postgresql://lubriplan:${POSTGRES_PASSWORD}@postgres:5432/lubriplan
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES: ${JWT_EXPIRES:-8h}
+      # IA
+      AI_MODE: ${AI_MODE:-mock}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      AI_LANG_DEFAULT: ${AI_LANG_DEFAULT:-es-MX}
+      # Email
+      MAIL_PROVIDER: ${MAIL_PROVIDER:-smtp}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      EMAIL_FROM: ${EMAIL_FROM:-LubriPlan <noreply@lubriplan.local>}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost}
+      API_PUBLIC_BASE_URL: ${APP_BASE_URL:-http://localhost}
+      # Cloudinary (opcional — si no se configura, imágenes van a volumen local)
+      CLOUDINARY_CLOUD_NAME: ${CLOUDINARY_CLOUD_NAME:-}
+      CLOUDINARY_API_KEY: ${CLOUDINARY_API_KEY:-}
+      CLOUDINARY_API_SECRET: ${CLOUDINARY_API_SECRET:-}
+      # Integración encriptada
+      INTEGRATION_SECRET: ${INTEGRATION_SECRET:-}
+    volumes:
+      - uploads_data:/app/uploads
+    entrypoint: ["/bin/sh", "prisma/init.sh"]
+    networks:
+      - lubriplan_net
+
+  # ─────────────────────────────────────
+  # Frontend React + nginx
+  # ─────────────────────────────────────
+  frontend:
+    build:
+      context: ../lubriplan-frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${APP_BASE_URL:-http://localhost}/api
+        VITE_ASSETS_BASE_URL: ${APP_BASE_URL:-http://localhost}
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${LUBRIPLAN_PORT:-80}:80"
+    networks:
+      - lubriplan_net
+
+volumes:
+  postgres_data:
+  uploads_data:
+
+networks:
+  lubriplan_net:
+    driver: bridge

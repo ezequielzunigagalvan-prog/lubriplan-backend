@@ -1,0 +1,17 @@
+node_modules
+.env
+.env.*
+!.env.local.example
+uploads
+dist
+.git
+*.log
+*.md
+prisma/dev.db
+scripts
+data
+db.json
+patch_analysis_page.ps1
+build_mobile_icon.py
+strip_logo_bg.py
+checkPrisma.mjs

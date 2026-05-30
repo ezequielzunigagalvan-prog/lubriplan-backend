@@ -1,4 +1,5 @@
 ﻿import { Resend } from "resend";
+import nodemailer from "nodemailer";
 import {
   conditionAlertTemplate,
   criticalAlertTemplate,
@@ -8,14 +9,27 @@ import {
 import { getPlantAlertRecipients } from "./email.recipients.js";
 import { logger } from "../../config/logger.js";
 
+// ── Proveedores de email ─────────────────────────────────────────────────────
+// Prioridad: RESEND_API_KEY (cloud) → SMTP_HOST (local) → ninguno (warn)
 const resend = process.env.RESEND_API_KEY
   ? new Resend(process.env.RESEND_API_KEY)
   : null;
 
-const EMAIL_FROM = process.env.EMAIL_FROM || "LubriPlan <onboarding@resend.dev>";
-const APP_BASE_URL = String(process.env.APP_BASE_URL || "http://localhost:5173").replace(/\/$/, "");
+const smtpTransport = !resend && process.env.SMTP_HOST
+  ? nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: Number(process.env.SMTP_PORT || 587),
+      secure: process.env.SMTP_SECURE === "true",
+      auth: process.env.SMTP_USER
+        ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
+        : undefined,
+    })
+  : null;
+
+const EMAIL_FROM = process.env.EMAIL_FROM || "LubriPlan <noreply@lubriplan.local>";
+const APP_BASE_URL = String(process.env.APP_BASE_URL || "http://localhost").replace(/\/$/, "");
 const API_PUBLIC_BASE_URL = String(
-  process.env.API_PUBLIC_BASE_URL || process.env.APP_BASE_URL || "http://localhost:5173"
+  process.env.API_PUBLIC_BASE_URL || process.env.APP_BASE_URL || "http://localhost"
 ).replace(/\/$/, "");
 
 async function getEmailSettings(prisma) {
@@ -46,23 +60,26 @@ function absolutizeUrl(url) {
 }
 
 async function sendEmail({ to, subject, html }) {
-  if (!resend) {
-    logger.warn("[email] RESEND_API_KEY no configurado. Correo omitido:", subject);
-    return { ok: false, skipped: true, reason: "RESEND_NOT_CONFIGURED" };
-  }
-
   if (!Array.isArray(to) || to.length === 0) {
     return { ok: false, skipped: true, reason: "NO_RECIPIENTS" };
   }
 
-  const result = await resend.emails.send({
-    from: EMAIL_FROM,
-    to,
-    subject,
-    html,
-  });
+  // ── Resend (cloud) ──────────────────────────────────────────────────────────
+  if (resend) {
+    const result = await resend.emails.send({ from: EMAIL_FROM, to, subject, html });
+    return { ok: true, provider: "resend", result };
+  }
 
-  return { ok: true, result };
+  // ── SMTP (local / on-premise) ───────────────────────────────────────────────
+  if (smtpTransport) {
+    const info = await smtpTransport.sendMail({ from: EMAIL_FROM, to, subject, html });
+    logger.info("[email] SMTP enviado", { messageId: info.messageId, subject });
+    return { ok: true, provider: "smtp", result: info };
+  }
+
+  // ── Sin proveedor configurado ───────────────────────────────────────────────
+  logger.warn("[email] Sin proveedor de email configurado. Correo omitido:", subject);
+  return { ok: false, skipped: true, reason: "NO_EMAIL_PROVIDER" };
 }
 
 export async function sendConditionAlertEmail({ prisma, payload }) {

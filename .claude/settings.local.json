@@ -50,7 +50,9 @@
       "Bash(node --check src/config/logger.js)",
       "Bash(node --check src/middleware/requestId.js)",
       "Bash(node --check src/lib/requestStore.js)",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(node --check prisma/baseline-and-deploy.js)",
+      "Bash(node --check src/services/email/email.service.js)"
     ]
   }
 }
