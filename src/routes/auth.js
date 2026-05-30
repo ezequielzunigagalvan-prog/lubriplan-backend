@@ -6,6 +6,8 @@ import jwt from "jsonwebtoken";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { requireRole } from "../middleware/requireRole.js";
 import { logger } from "../config/logger.js";
+import { validate } from "../middleware/validate.js";
+import { loginSchema, setPasswordSchema } from "../schemas/index.js";
 
 const router = express.Router();
 
@@ -18,7 +20,7 @@ const loginRateLimiter = rateLimit({
 });
 
 // ===== SET PASSWORD (ADMIN ONLY) =====
-router.post("/set-password", requireAuth, requireRole(["ADMIN"]), async (req, res) => {
+router.post("/set-password", requireAuth, requireRole(["ADMIN"]), validate(setPasswordSchema), async (req, res) => {
   try {
     const { email, password } = req.body || {};
     if (!email || !password) {
@@ -46,8 +48,37 @@ router.post("/set-password", requireAuth, requireRole(["ADMIN"]), async (req, re
   }
 });
 
+/**
+ * @swagger
+ * /auth/login:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Iniciar sesión
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [email, password]
+ *             properties:
+ *               email:
+ *                 type: string
+ *                 format: email
+ *               password:
+ *                 type: string
+ *                 minLength: 1
+ *     responses:
+ *       200:
+ *         description: Login exitoso — devuelve JWT y lista de plantas
+ *       401:
+ *         description: Credenciales inválidas
+ *       429:
+ *         description: Demasiados intentos
+ */
 // ===== LOGIN (PUBLIC) =====
-router.post("/login", loginRateLimiter, async (req, res) => {
+router.post("/login", loginRateLimiter, validate(loginSchema), async (req, res) => {
   try {
     const { email, password } = req.body || {};
 

@@ -2,9 +2,13 @@
     import express from "express";
     import dotenv from "dotenv";
     dotenv.config();
+    import { initSentry, Sentry } from "./config/sentry.js";
+    initSentry(); // debe ser lo primero antes de cualquier otro import
     import { logger } from "./config/logger.js";
     import rateLimit from "express-rate-limit";
     import { requestId } from "./middleware/requestId.js";
+    import swaggerUi from "swagger-ui-express";
+    import { swaggerSpec } from "./config/swagger.js";
     import cors from "cors";
     import helmet from "helmet";
     import path from "path";
@@ -218,6 +222,17 @@ app.options("*", cors(corsOptions));
   });
   app.use("/api", apiLimiter);
 
+  /* ========= SWAGGER DOCS ========= */
+  // Disponible en /api-docs — en producción protegido o desactivado con SWAGGER_ENABLED=false
+  if (process.env.SWAGGER_ENABLED !== "false") {
+    app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
+      customSiteTitle: "LubriPlan API Docs",
+      swaggerOptions: { persistAuthorization: true },
+    }));
+    app.get("/api-docs.json", (_req, res) => res.json(swaggerSpec));
+    logger.info("[STARTUP] Swagger docs en /api-docs");
+  }
+
   /* ========= HEALTH CHECK ========= */
   app.get("/health", async (_req, res) => {
     try {
@@ -401,10 +416,13 @@ app.options("*", cors(corsOptions));
   startMonthlyTechSummaryScheduler({ prisma });
 
     /* ========= PROTECCION GLOBAL ========= */
+    // Sentry debe capturar excepciones antes del logger
     process.on("unhandledRejection", (reason) => {
+      Sentry.captureException(reason instanceof Error ? reason : new Error(String(reason)));
       logger.error("Unhandled Rejection", reason instanceof Error ? reason : { reason });
     });
     process.on("uncaughtException", (err) => {
+      Sentry.captureException(err);
       logger.error("Uncaught Exception", err);
     });
 
@@ -8641,10 +8659,13 @@ app.get("/api/health", async (req, res) => {
   }
 });
 
+  // Sentry error handler — debe ir después de todas las rutas y antes de app.listen
+  app.use(Sentry.expressErrorHandler());
+
   const PORT = Number(process.env.PORT || 3001);
-  app.listen(process.env.PORT || 3001, "0.0.0.0", () => {
-  logger.info(`Server running on port ${process.env.PORT || 3001}`);
-});
+  app.listen(PORT, "0.0.0.0", () => {
+    logger.info(`Server running on port ${PORT}`);
+  });
 
   /* ========= CLEANUP ========= */
   process.on("SIGINT", async () => {

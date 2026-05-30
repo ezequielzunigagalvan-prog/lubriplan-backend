@@ -1170,6 +1170,31 @@ export default function dashboardRoutes({
     }
   });
 
+  // GET /api/dashboard/onboarding-progress
+  // Devuelve cuántos registros hay de cada entidad clave para el checklist de onboarding
+  router.get("/onboarding-progress", auth, requireRole(["ADMIN"]), async (req, res) => {
+    try {
+      const plantId = req.currentPlantId;
+      if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
+
+      const [areas, equipments, technicians, routes] = await Promise.all([
+        prisma.area.count({ where: { plantId } }),
+        prisma.equipment.count({ where: { plantId, deletedAt: null } }),
+        prisma.technician.count({ where: { plantId, deletedAt: null } }),
+        prisma.route.count({ where: { plantId } }),
+      ]);
+
+      return res.json({
+        ok: true,
+        progress: { areas, equipments, technicians, routes },
+        completed: areas > 0 && equipments > 0 && technicians > 0 && routes > 0,
+      });
+    } catch (e) {
+      logger.error("onboarding-progress error:", e);
+      return res.status(500).json({ error: "Error obteniendo progreso de onboarding" });
+    }
+  });
+
   return router;
 }
 
