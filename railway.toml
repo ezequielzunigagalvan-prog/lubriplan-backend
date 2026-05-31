@@ -1,5 +1,5 @@
 [build]
-buildCommand = "npm install && npm run db:deploy"
+buildCommand = "npm install && npx prisma generate && npm run db:deploy"
 
 [deploy]
 startCommand = "npm start"
