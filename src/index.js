@@ -211,12 +211,12 @@ app.options("*", cors(corsOptions));
   }
 
   /* ========= RATE LIMITING GLOBAL ========= */
+  // Sin keyGenerator personalizado — express-rate-limit v8 maneja IPv6 internamente
   const apiLimiter = rateLimit({
     windowMs: 60 * 1000,
     max: 300,
     standardHeaders: true,
     legacyHeaders: false,
-    keyGenerator: (req) => req.ip || "unknown",
     skip: (req) => req.method === "OPTIONS",
     message: { error: "Demasiadas solicitudes. Intenta en un momento." },
   });
