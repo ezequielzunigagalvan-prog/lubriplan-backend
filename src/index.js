@@ -170,13 +170,15 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
 
 
   // 1) CORS primero
- app.use(cors(corsOptions));
-app.options("*", cors(corsOptions));
+  app.use(cors(corsOptions));
+  app.options("*", cors(corsOptions));
   app.use("/api", (req, res, next) => {
     res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
     res.set("Pragma", "no-cache");
     res.set("Expires", "0");
     res.set("Surrogate-Control", "no-store");
+    // Deshabilita QUIC/HTTP3 para prevenir ERR_QUIC_PROTOCOL_ERROR en Chrome
+    res.set("Alt-Svc", "clear");
     next();
   });
 
