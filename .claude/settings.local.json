@@ -55,7 +55,18 @@
       "Bash(node --check src/services/email/email.service.js)",
       "Bash(node --check src/config/sentry.js)",
       "Bash(npm test *)",
-      "Bash(node --check src/config/swagger.js)"
+      "Bash(node --check src/config/swagger.js)",
+      "Bash(git commit -m 'fix\\(deploy\\): sincronizar package-lock.json con npm install *)",
+      "Bash(grep -v \"^--$\\\\|wasi-threads.*resolved\\\\|wasi-threads.*version\\\\|wasi-threads.*license\\\\|wasi-threads.*engines\\\\|wasi-threads.*integrity\\\\|emnapi/core\\\\|emnapi/runtime\")",
+      "Bash(node *)",
+      "Bash(git commit -m 'fix\\(deploy\\): agregar prisma generate al buildCommand de Railway *)",
+      "Bash(git rm *)",
+      "Bash(git commit -m 'fix\\(onboarding\\): registrar endpoint /api/dashboard/onboarding-progress en index.js *)",
+      "Bash(Route\")",
+      "Bash(cd /d \"C:\\\\Users\\\\ferga\\\\Documents\\\\lubriplan-backend\")",
+      "Bash(dir /B \"src\\\\routes\")",
+      "Bash(findstr /i route)",
+      "Bash(powershell *)"
     ]
   }
 }

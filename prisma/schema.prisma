@@ -730,6 +730,7 @@ model LubricationCard {
   equipmentId Int       @unique
   equipment   Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
 
+  // Imagen principal (backward-compatible)
   imageUrl      String?
   imagePublicId String?
 
@@ -737,14 +738,37 @@ model LubricationCard {
   updatedAt DateTime @updatedAt
 
   points LubricationPoint[]
+  images LubricationCardImage[]
 
   @@index([equipmentId])
+}
+
+// Imágenes adicionales para equipos grandes con varias secciones
+model LubricationCardImage {
+  id            Int             @id @default(autoincrement())
+  cardId        Int
+  card          LubricationCard @relation(fields: [cardId], references: [id], onDelete: Cascade)
+
+  imageUrl      String
+  imagePublicId String?
+  label         String          @default("Sección")
+  order         Int             @default(0)
+
+  points LubricationPoint[]
+
+  createdAt DateTime @default(now())
+
+  @@index([cardId])
 }
 
 model LubricationPoint {
   id     Int             @id @default(autoincrement())
   cardId Int
   card   LubricationCard @relation(fields: [cardId], references: [id], onDelete: Cascade)
+
+  // null = imagen principal de la carta, non-null = imagen adicional
+  imageId Int?
+  image   LubricationCardImage? @relation(fields: [imageId], references: [id], onDelete: SetNull)
 
   label     String
   x         Float
@@ -757,10 +781,14 @@ model LubricationPoint {
   method    LubricationMethod    @default(MANUAL)
   notes     String?
 
+  // Ruta de origen cuando fue sincronizado automáticamente
+  routeId Int?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([cardId])
+  @@index([imageId])
 }
 
 // =========================
