@@ -178,18 +178,35 @@ export async function getPredictiveMetrics({
       const s = byEq.get(id);
       const meta = eqMeta.get(id);
 
-      const moveCount = Number(s?.moveCount || 0);
+      const moveCount       = Number(s?.moveCount || 0);
       const recentMoveCount = Number(s?.recentMoveCount || 0);
-      // Daily rate = total consumed / period length (not per-movement average)
-      const baselineAvgDaily = (s.totalOut || 0) / Number(histDays || 90);
-      const lastNAvgDaily = (s?.recentTotal || 0) / Number(shortWindowDays || 14);
-      const ratio = baselineAvgDaily > 0 ? lastNAvgDaily / baselineAvgDaily : null;
-      // Require at least 3 historical movements so one-off spikes don't trigger
-      const minSampleOk = moveCount >= 3 && (s.totalOut || 0) > 0;
+
+      // ── Separar datos históricos (> shortWindowDays) de los recientes ──────
+      // Bug anterior: baselineAvgDaily = totalOut / histDays donde totalOut
+      // incluía los datos recientes. Cuando todos los movimientos son recientes,
+      // ratio = (recentTotal/14) / (recentTotal/90) = 90/14 ≈ 6.4 → siempre HIGH.
+      //
+      // Fix: el baseline usa SOLO movimientos anteriores a la ventana reciente.
+      const olderTotal     = Math.max(0, (s.totalOut || 0) - (s.recentTotal || 0));
+      const olderMoveCount = Math.max(0, moveCount - recentMoveCount);
+      // Días de la ventana histórica sin incluir el período reciente
+      const olderDays = Math.max(1, Number(histDays || 90) - Number(shortWindowDays || 14));
+
+      // Se requiere: ≥ 3 movimientos totales Y ≥ 2 en el período histórico antiguo.
+      // Sin baseline histórico (todo el consumo es reciente) no podemos detectar anomalía.
+      const hasOlderBaseline = moveCount >= 3 && olderMoveCount >= 2 && olderTotal > 0;
+
+      const baselineAvgDaily = hasOlderBaseline ? olderTotal / olderDays : null;
+      const lastNAvgDaily    = recentMoveCount > 0
+        ? (s.recentTotal || 0) / Number(shortWindowDays || 14)
+        : 0;
+      const ratio = hasOlderBaseline && baselineAvgDaily > 0
+        ? lastNAvgDaily / baselineAvgDaily
+        : null;
 
       let risk = "LOW";
-      if (minSampleOk && ratio != null && ratio >= 1.8) risk = "HIGH";
-      else if (minSampleOk && ratio != null && ratio >= 1.5) risk = "MED";
+      if (hasOlderBaseline && ratio != null && ratio >= 1.8) risk = "HIGH";
+      else if (hasOlderBaseline && ratio != null && ratio >= 1.5) risk = "MED";
 
       const criticality = String(meta?.criticality || "").toUpperCase();
       const critBoost = ["CRITICA", "CRÍTICA", "ALTA"].includes(criticality);
@@ -206,7 +223,10 @@ export async function getPredictiveMetrics({
         criticality: meta?.criticality || null,
         movementCount: moveCount,
         recentMovementCount: recentMoveCount,
-        baselineAvgDaily: Number.isFinite(baselineAvgDaily) ? Number(baselineAvgDaily.toFixed(2)) : 0,
+        olderMovementCount: olderMoveCount,
+        // baselineAvgDaily ahora refleja solo el consumo histórico (> 14 días atrás)
+        baselineAvgDaily: baselineAvgDaily != null && Number.isFinite(baselineAvgDaily)
+          ? Number(baselineAvgDaily.toFixed(2)) : 0,
         lastNAvgDaily: Number.isFinite(lastNAvgDaily) ? Number(lastNAvgDaily.toFixed(2)) : 0,
         last14AvgDaily: Number.isFinite(lastNAvgDaily) ? Number(lastNAvgDaily.toFixed(2)) : 0,
         ratio: ratio == null ? null : Number(ratio.toFixed(2)),
