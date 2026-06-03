@@ -328,7 +328,7 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
   app.use("/api", auditLogRoutes({ prisma, auth: requireAuth, requireRole }));
   app.use("/api", webhooksRoutes({ prisma, auth: requireAuth, requireRole }));
   app.use("/api", lubricationCardsRoutes({ prisma, auth: requireAuth, requireRole }));
-  app.use("/api/preventive-orders", preventiveOrdersRoutes);
+  app.use("/api/preventive-orders", preventiveOrdersRoutes({ prisma, auth: requireAuth, requireRole }));
 
   app.use("/api", realtimeRoutes({ auth: requireAuth }));
 
