@@ -9,6 +9,15 @@
     import { requestId } from "./middleware/requestId.js";
     import swaggerUi from "swagger-ui-express";
     import { swaggerSpec } from "./config/swagger.js";
+    import {
+      parseDateOrNull as _parseDateOrNull,
+      startOfDay as _startOfDay,
+      endOfDay as _endOfDay,
+      toSafeNoon as _toSafeNoon,
+      addMonthsClamped as _addMonthsClamped,
+      getNextWeeklySelectedDate as _getNextWeeklySelectedDate,
+      resolveNextRouteDate as _resolveNextRouteDate,
+    } from "./utils/routeScheduling.js";
     import cors from "cors";
     import helmet from "helmet";
     import path from "path";
@@ -60,10 +69,11 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
   import { startMonthlyTechSummaryScheduler } from "./jobs/monthlyTechSummary.job.js";
   import monthlyReportRoutes from "./routes/monthlyReport.routes.js";
   import lubricationCardsRoutes from "./routes/lubricationCards.routes.js";
+  import preventiveOrdersRoutes from "./routes/preventiveOrders.routes.js";
 
 
 
-    
+
 
 
 
@@ -318,6 +328,7 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
   app.use("/api", auditLogRoutes({ prisma, auth: requireAuth, requireRole }));
   app.use("/api", webhooksRoutes({ prisma, auth: requireAuth, requireRole }));
   app.use("/api", lubricationCardsRoutes({ prisma, auth: requireAuth, requireRole }));
+  app.use("/api/preventive-orders", preventiveOrdersRoutes);
 
   app.use("/api", realtimeRoutes({ auth: requireAuth }));
 
@@ -516,53 +527,14 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
   }
 
     /* ========= HELPERS ========= */
-    function parseDateOrNull(value) {
-    if (!value) return null;
-
-    if (value instanceof Date && !Number.isNaN(value.getTime())) {
-      return new Date(
-        value.getFullYear(),
-        value.getMonth(),
-        value.getDate(),
-        12, 0, 0, 0
-      );
-    }
-
-    const s = String(value).trim();
-    if (!s) return null;
-
-    const onlyDate = s.slice(0, 10);
-    const [y, m, d] = onlyDate.split("-").map(Number);
-
-    if (!y || !m || !d) return null;
-
-    return new Date(y, m - 1, d, 12, 0, 0, 0);
-  }
-
-    function startOfDay(value) {
-    const d = parseDateOrNull(value);
-    if (!d) return null;
-
-    return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
-  }
-  const toStartOfDay = (value) => startOfDay(value);
-
-    const endOfDay = (d) => {
-      const dt = d instanceof Date ? d : new Date(d);
-      if (Number.isNaN(dt.getTime())) return null;
-      const out = new Date(dt);
-      out.setHours(23, 59, 59, 999);
-      return out;
-    };
-
+    // Funciones de scheduling importadas desde src/utils/routeScheduling.js
+    // Se mantienen como alias locales para no tocar ninguna de las llamadas existentes
+    const parseDateOrNull = _parseDateOrNull;
+    function startOfDay(value) { return _startOfDay(value); }
+    const toStartOfDay = (value) => startOfDay(value);
+    const endOfDay = (d) => _endOfDay(d);
     // OK evita desfase UTC/local guardando scheduledAt a medio dia
-    const toSafeNoon = (d) => {
-      const dt = d instanceof Date ? d : new Date(d);
-      if (Number.isNaN(dt.getTime())) return null;
-      const out = new Date(dt);
-      out.setHours(12, 0, 0, 0);
-      return out;
-    };
+    const toSafeNoon = (d) => _toSafeNoon(d);
 
     // OK parsea YYYY-MM-DD como local (no UTC)
     const parseDateOnlyLocal = (ymd) => {
@@ -627,102 +599,11 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
     },
   };
 
-  function getLastDayOfMonth(year, monthIndexZeroBased) {
-    return new Date(year, monthIndexZeroBased + 1, 0).getDate();
-  }
-
-  function addMonthsClamped(baseDate, monthsToAdd, anchorDay) {
-    const base = startOfDay(baseDate);
-    const y = base.getFullYear();
-    const m = base.getMonth();
-
-    const targetMonthDate = new Date(y, m + monthsToAdd, 1);
-    const targetYear = targetMonthDate.getFullYear();
-    const targetMonth = targetMonthDate.getMonth();
-
-    const desiredDay = Number(anchorDay) || base.getDate();
-    const lastDay = getLastDayOfMonth(targetYear, targetMonth);
-    const finalDay = Math.min(desiredDay, lastDay);
-
-    return new Date(targetYear, targetMonth, finalDay, 0, 0, 0, 0);
-  }
-
-  function getIsoWeekday(date) {
-    const jsDay = date.getDay(); // 0 domingo ... 6 sabado
-    return jsDay === 0 ? 7 : jsDay;
-  }
-
-  function getNextWeeklySelectedDate(fromDate, weeklyDays = []) {
-    const base = startOfDay(fromDate);
-    const validDays = Array.from(new Set((weeklyDays || []).map(Number)))
-      .filter((n) => n >= 1 && n <= 7)
-      .sort((a, b) => a - b);
-
-    if (!validDays.length) return null;
-
-    for (let i = 1; i <= 14; i += 1) {
-      const candidate = new Date(base);
-      candidate.setDate(candidate.getDate() + i);
-
-      const iso = getIsoWeekday(candidate);
-      if (validDays.includes(iso)) {
-        candidate.setHours(0, 0, 0, 0);
-        return candidate;
-      }
-    }
-
-    return null;
-  }
-
-  function resolveNextRouteDate({
-    lastDate,
-    nextDate,
-    frequencyDays,
-    frequencyType,
-    weeklyDays,
-    monthlyAnchorDay,
-  }) {
-    const parsedNext = parseDateOrNull(nextDate);
-    if (parsedNext) return startOfDay(parsedNext);
-
-    const parsedLast = parseDateOrNull(lastDate);
-    if (!parsedLast) return null;
-
-    const type = String(frequencyType || "").toUpperCase().trim();
-
-    if (type === "WEEKLY" && Array.isArray(weeklyDays) && weeklyDays.length > 0) {
-      return getNextWeeklySelectedDate(parsedLast, weeklyDays);
-    }
-
-    if (type === "MONTHLY") {
-      return addMonthsClamped(parsedLast, 1, monthlyAnchorDay || parsedLast.getDate());
-    }
-
-    if (type === "BIMONTHLY") {
-      return addMonthsClamped(parsedLast, 2, monthlyAnchorDay || parsedLast.getDate());
-    }
-
-    if (type === "QUARTERLY") {
-      return addMonthsClamped(parsedLast, 4, monthlyAnchorDay || parsedLast.getDate());
-    }
-
-    if (type === "SEMIANNUAL") {
-      return addMonthsClamped(parsedLast, 6, monthlyAnchorDay || parsedLast.getDate());
-    }
-
-    if (type === "ANNUAL") {
-      return addMonthsClamped(parsedLast, 12, monthlyAnchorDay || parsedLast.getDate());
-    }
-
-    const days = Number(frequencyDays);
-    if (Number.isFinite(days) && days > 0) {
-      const d = startOfDay(parsedLast);
-      d.setDate(d.getDate() + days);
-      return d;
-    }
-
-    return null;
-  }
+  // addMonthsClamped, getNextWeeklySelectedDate y resolveNextRouteDate
+  // ahora viven en src/utils/routeScheduling.js — alias locales:
+  const addMonthsClamped = _addMonthsClamped;
+  const getNextWeeklySelectedDate = _getNextWeeklySelectedDate;
+  function resolveNextRouteDate(opts) { return _resolveNextRouteDate(opts); }
 
     // =========================
     // HELPERS: unidades a "base"

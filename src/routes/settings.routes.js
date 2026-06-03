@@ -50,6 +50,9 @@ export default function settingsRoutes({ prisma, auth, requireRole }) {
         monthlyReportEmailEnabled: "boolean",
         monthlyTechSummaryEnabled: "boolean",
 
+        // OLP — Órdenes de Lubricación Preventiva
+        requiresPhotoOLP: "boolean",
+
         // avanzados
         overloadWindowDays: "int",
         overloadOverdueLookbackDays: "int",

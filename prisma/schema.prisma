@@ -25,29 +25,34 @@ model AppSettings {
   // =========================
   // Inventario
   // =========================
-  preventNegativeStock Boolean @default(true)
+  preventNegativeStock   Boolean @default(true)
   lowStockWarningEnabled Boolean @default(true)
 
   // =========================
   // Alertas / IA
   // =========================
-  technicianOverloadEnabled Boolean @default(true)
-  predictiveAlertsEnabled   Boolean @default(true)
-  aiSummaryEnabled          Boolean @default(true)
-  criticalActivityEmailEnabled   Boolean @default(true)
-  conditionReportEmailEnabled    Boolean @default(true)
-  overdueSummaryEmailEnabled     Boolean @default(true)
-  monthlyReportEmailEnabled      Boolean @default(true)
-  monthlyTechSummaryEnabled      Boolean @default(false)
+  technicianOverloadEnabled    Boolean @default(true)
+  predictiveAlertsEnabled      Boolean @default(true)
+  aiSummaryEnabled             Boolean @default(true)
+  criticalActivityEmailEnabled Boolean @default(true)
+  conditionReportEmailEnabled  Boolean @default(true)
+  overdueSummaryEmailEnabled   Boolean @default(true)
+  monthlyReportEmailEnabled    Boolean @default(true)
+  monthlyTechSummaryEnabled    Boolean @default(false)
 
-  // =========================  
+  // =========================
   // Sobrecarga técnicos
   // =========================
-  overloadWindowDays Int @default(7)
-  overloadOverdueLookbackDays Int @default(30)
-  overloadCapacityPerDay Int @default(6)
-  overloadWarnRatio Float @default(1.1)
-  overloadCriticalRatio Float @default(1.4)
+  overloadWindowDays          Int   @default(7)
+  overloadOverdueLookbackDays Int   @default(30)
+  overloadCapacityPerDay      Int   @default(6)
+  overloadWarnRatio           Float @default(1.1)
+  overloadCriticalRatio       Float @default(1.4)
+
+  // =========================
+  // OLP — Órdenes de Lubricación Preventiva
+  // =========================
+  requiresPhotoOLP Boolean @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -64,12 +69,13 @@ model User {
   technicianId Int?        @unique
   technician   Technician? @relation("UserTechnician", fields: [technicianId], references: [id], onDelete: SetNull)
 
-  notifications    Notification[]
-  conditionReports ConditionReport[]
+  notifications             Notification[]
+  conditionReports          ConditionReport[]
   dismissedConditionReports ConditionReport[] @relation("ConditionReportDismissedBy")
-  requestedPurchaseOrders PurchaseOrder[] @relation("PORequester")
-  approvedPurchaseOrders  PurchaseOrder[] @relation("POApprover")
-  auditLogs    AuditLog[]
+  requestedPurchaseOrders   PurchaseOrder[]   @relation("PORequester")
+  approvedPurchaseOrders    PurchaseOrder[]   @relation("POApprover")
+  auditLogs                 AuditLog[]
+  createdPreventiveOrders   PreventiveOrder[] @relation("PreventiveOrderCreatedBy")
 
   userPlants UserPlant[]
 
@@ -78,10 +84,10 @@ model User {
 }
 
 model Technician {
-  id        Int       @id @default(autoincrement())
+  id Int @id @default(autoincrement())
 
-  plantId   Int
-  plant     Plant     @relation(fields: [plantId], references: [id], onDelete: Cascade)
+  plantId Int
+  plant   Plant @relation(fields: [plantId], references: [id], onDelete: Cascade)
 
   name      String
   code      String
@@ -91,19 +97,21 @@ model Technician {
   updatedAt DateTime  @default(now()) @updatedAt
   deletedAt DateTime?
 
-  executions Execution[]
-  routes     Route[]
+  executions                    Execution[]
+  routes                        Route[]
+  assignedPreventiveOrders      PreventiveOrder[]
+  completedPreventiveOrderItems PreventiveOrderItem[] @relation("PreventiveOrderItemCompletedBy")
 
   user User? @relation("UserTechnician")
 
-  @@index([plantId])
   @@unique([plantId, code]) // recomendado: código único por planta
+  @@index([plantId])
 }
 
 model EquipmentArea {
-  id          Int      @id @default(autoincrement())
-  plantId     Int
-  plant       Plant   @relation(fields: [plantId], references: [id], onDelete: Cascade)
+  id      Int   @id @default(autoincrement())
+  plantId Int
+  plant   Plant @relation(fields: [plantId], references: [id], onDelete: Cascade)
 
   name        String
   description String?
@@ -141,8 +149,9 @@ model Equipment {
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
 
-  routes     Route[]
-  executions Execution[]
+  routes           Route[]
+  executions       Execution[]
+  preventiveOrders PreventiveOrder[]
 
   @@index([plantId])
   @@index([areaId])
@@ -150,7 +159,7 @@ model Equipment {
 }
 
 model Lubricant {
-  id        Int     @id @default(autoincrement())
+  id Int @id @default(autoincrement())
 
   plantId Int
   plant   Plant @relation(fields: [plantId], references: [id], onDelete: Cascade)
@@ -172,16 +181,16 @@ model Lubricant {
   // Ficha técnica
   isoVg            String?
   nlgiGrade        String?
-  baseType         String?   // MINERAL | SINTETICO | SEMISINT
+  baseType         String? // MINERAL | SINTETICO | SEMISINT
   operatingTempMin Float?
   operatingTempMax Float?
   sdsUrl           String?
   sdsPublicId      String?
-  compatibility    String?   // texto libre o JSON con IDs compatibles
+  compatibility    String? // texto libre o JSON con IDs compatibles
 
-  routes Route[] @relation("LubricantRoutes")
-  movements LubricantMovement[]
-  oilSamples OilSample[]
+  routes             Route[]             @relation("LubricantRoutes")
+  movements          LubricantMovement[]
+  oilSamples         OilSample[]
   purchaseOrderItems PurchaseOrderItem[]
 
   createdAt DateTime @default(now())
@@ -220,7 +229,7 @@ model LubricantMovement {
 }
 
 model Route {
-  id            Int     @id @default(autoincrement())
+  id Int @id @default(autoincrement())
 
   plantId Int
   plant   Plant @relation(fields: [plantId], references: [id], onDelete: Cascade)
@@ -239,9 +248,9 @@ model Route {
 
   frequencyDays Int
 
-  frequencyType String?
-  weeklyDays    Int[]     @default([])
-  monthlyAnchorDay Int?
+  frequencyType      String?
+  weeklyDays         Int[]   @default([])
+  monthlyAnchorDay   Int?
   customIntervalDays Int?
 
   method       String?
@@ -253,7 +262,7 @@ model Route {
   lastDate DateTime?
   nextDate DateTime?
 
-  imageUrl String?
+  imageUrl      String?
   imagePublicId String?
 
   equipmentId Int
@@ -265,7 +274,8 @@ model Route {
   technicianId Int?
   technician   Technician? @relation(fields: [technicianId], references: [id], onDelete: SetNull)
 
-  executions Execution[]
+  executions           Execution[]
+  preventiveOrderItems PreventiveOrderItem[] @relation("PreventiveOrderItems")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
@@ -274,7 +284,6 @@ model Route {
   @@index([equipmentId])
   @@index([lubricantId])
   @@index([technicianId])
-
   @@index([plantId, equipmentId, normalizedName])
 }
 
@@ -311,19 +320,22 @@ model Execution {
   observations String?
 
   // ✅ NUEVO
-  usedInputQuantity      Float?
-  usedInputUnit          String?
-  usedConvertedQuantity  Float?
-  usedConvertedUnit      String?
+  usedInputQuantity     Float?
+  usedInputUnit         String?
+  usedConvertedQuantity Float?
+  usedConvertedUnit     String?
 
-  evidenceImage String?
+  evidenceImage         String?
   evidenceImagePublicId String?
-  evidenceNote  String?
+  evidenceNote          String?
 
   inventoryDeductedAt DateTime?
 
   // Clave de idempotencia para operaciones offline. El cliente genera un UUID v4 y lo envía en el body.
   clientId String? @unique
+
+  // Origen de la ejecución: 'ROUTE' | 'OLP' para tracking de órdenes preventivas
+  sourceType String? @default("ROUTE")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
@@ -334,6 +346,7 @@ model Execution {
   @@index([technicianId])
   @@index([status, scheduledAt])
   @@index([origin, scheduledAt])
+  @@index([sourceType])
 }
 
 enum ExecutionOrigin {
@@ -398,7 +411,7 @@ enum WebhookEvent {
 }
 
 model ConditionReport {
-  id           Int @id @default(autoincrement())
+  id Int @id @default(autoincrement())
 
   plantId Int
   plant   Plant @relation(fields: [plantId], references: [id], onDelete: Cascade)
@@ -406,11 +419,11 @@ model ConditionReport {
   equipmentId  Int
   reportedById Int
 
-  condition     ConditionLevel
-  category      ConditionReportCategory?
-  description   String
-  detectedAt    DateTime                 @db.Date
-  evidenceImage String?
+  condition             ConditionLevel
+  category              ConditionReportCategory?
+  description           String
+  detectedAt            DateTime                 @db.Date
+  evidenceImage         String?
   evidenceImagePublicId String?
 
   status ConditionReportStatus @default(OPEN)
@@ -422,12 +435,12 @@ model ConditionReport {
 
   createdAt DateTime @default(now())
 
-  equipment  Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
-  reportedBy User      @relation(fields: [reportedById], references: [id], onDelete: Cascade)
-  resolvedAt  DateTime?
-  dismissedAt DateTime?
+  equipment     Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+  reportedBy    User      @relation(fields: [reportedById], references: [id], onDelete: Cascade)
+  resolvedAt    DateTime?
+  dismissedAt   DateTime?
   dismissedById Int?
-  dismissedBy   User? @relation("ConditionReportDismissedBy", fields: [dismissedById], references: [id], onDelete: SetNull)
+  dismissedBy   User?     @relation("ConditionReportDismissedBy", fields: [dismissedById], references: [id], onDelete: SetNull)
 
   @@index([plantId])
   @@index([equipmentId])
@@ -450,7 +463,7 @@ enum NotificationType {
 }
 
 model Notification {
-  id        Int              @id @default(autoincrement())
+  id Int @id @default(autoincrement())
 
   plantId Int?
   plant   Plant? @relation(fields: [plantId], references: [id], onDelete: SetNull)
@@ -477,9 +490,9 @@ model Plant {
   timezone String  @default("America/Mexico_City")
   active   Boolean @default(true)
 
-  monthlyReportEnabled        Boolean @default(true)
-  monthlyReportDay            Int     @default(1)
-  monthlyReportHour           Int     @default(8)
+  monthlyReportEnabled         Boolean @default(true)
+  monthlyReportDay             Int     @default(1)
+  monthlyReportHour            Int     @default(8)
   monthlyReportRecipientsExtra String?
 
   createdAt DateTime @default(now())
@@ -488,28 +501,29 @@ model Plant {
   // relaciones
   userPlants UserPlant[]
 
-  equipmentAreas EquipmentArea[]
-  equipments     Equipment[]
-  lubricants     Lubricant[]
-  routes         Route[]
-  executions     Execution[]
-  conditionReports ConditionReport[]
-  notifications  Notification[]
-  technicians Technician[]
-  scheduledJobRuns ScheduledJobRun[]
-  purchaseOrders   PurchaseOrder[]
-  oilSamples       OilSample[]
-  webhookEndpoints    WebhookEndpoint[]
-  auditLogs           AuditLog[]
-  integrationConfigs  IntegrationConfig[]
+  equipmentAreas     EquipmentArea[]
+  equipments         Equipment[]
+  lubricants         Lubricant[]
+  routes             Route[]
+  executions         Execution[]
+  conditionReports   ConditionReport[]
+  notifications      Notification[]
+  technicians        Technician[]
+  scheduledJobRuns   ScheduledJobRun[]
+  purchaseOrders     PurchaseOrder[]
+  oilSamples         OilSample[]
+  webhookEndpoints   WebhookEndpoint[]
+  auditLogs          AuditLog[]
+  integrationConfigs IntegrationConfig[]
+  preventiveOrders   PreventiveOrder[]
 }
 
 model UserPlant {
-  id        Int      @id @default(autoincrement())
+  id        Int     @id @default(autoincrement())
   userId    Int
   plantId   Int
-  isDefault Boolean  @default(false)
-  active    Boolean  @default(true)
+  isDefault Boolean @default(false)
+  active    Boolean @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -525,12 +539,12 @@ model UserPlant {
 // ÓRDENES DE COMPRA
 // =========================
 model PurchaseOrder {
-  id      Int                 @id @default(autoincrement())
+  id      Int   @id @default(autoincrement())
   plantId Int
-  plant   Plant               @relation(fields: [plantId], references: [id], onDelete: Cascade)
+  plant   Plant @relation(fields: [plantId], references: [id], onDelete: Cascade)
 
-  status  PurchaseOrderStatus @default(DRAFT)
-  notes   String?
+  status PurchaseOrderStatus @default(DRAFT)
+  notes  String?
 
   requestedById Int
   requestedBy   User  @relation("PORequester", fields: [requestedById], references: [id], onDelete: Cascade)
@@ -555,8 +569,8 @@ model PurchaseOrderItem {
   purchaseOrderId Int
   purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
 
-  lubricantId  Int
-  lubricant    Lubricant @relation(fields: [lubricantId], references: [id], onDelete: Cascade)
+  lubricantId Int
+  lubricant   Lubricant @relation(fields: [lubricantId], references: [id], onDelete: Cascade)
 
   requestedQty Float
   receivedQty  Float?
@@ -572,9 +586,9 @@ model PurchaseOrderItem {
 // ANÁLISIS DE ACEITE
 // =========================
 model OilSample {
-  id        Int      @id @default(autoincrement())
-  plantId   Int
-  plant     Plant    @relation(fields: [plantId], references: [id], onDelete: Cascade)
+  id      Int   @id @default(autoincrement())
+  plantId Int
+  plant   Plant @relation(fields: [plantId], references: [id], onDelete: Cascade)
 
   equipmentId Int
   equipment   Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
@@ -587,12 +601,12 @@ model OilSample {
   labReportUrl String?
 
   // Propiedades físico-químicas
-  viscosity40  Float?   // cSt a 40°C
-  viscosity100 Float?   // cSt a 100°C
-  tan          Float?   // Total Acid Number mg KOH/g
-  tbn          Float?   // Total Base Number mg KOH/g
-  waterPct     Float?   // % agua
-  flashPoint   Float?   // °C punto de inflamación
+  viscosity40  Float? // cSt a 40°C
+  viscosity100 Float? // cSt a 100°C
+  tan          Float? // Total Acid Number mg KOH/g
+  tbn          Float? // Total Base Number mg KOH/g
+  waterPct     Float? // % agua
+  flashPoint   Float? // °C punto de inflamación
 
   // Metales de desgaste (ppm)
   ironPpm     Float?
@@ -603,8 +617,8 @@ model OilSample {
   siliconPpm  Float?
 
   // Contaminación
-  particleCount  Int?     // ISO 4406
-  particleIso    String?  // e.g. "18/16/13"
+  particleCount Int? // ISO 4406
+  particleIso   String? // e.g. "18/16/13"
 
   status OilSampleStatus @default(PENDING)
   notes  String?
@@ -621,15 +635,15 @@ model OilSample {
 // AUDIT LOG
 // =========================
 model AuditLog {
-  id        Int      @id @default(autoincrement())
+  id        Int     @id @default(autoincrement())
   plantId   Int?
   userId    Int?
   userEmail String?
 
-  action   String   // CREATE | UPDATE | DELETE
-  model    String   // Route | Equipment | Lubricant | Technician | ...
+  action   String // CREATE | UPDATE | DELETE
+  model    String // Route | Equipment | Lubricant | Technician | ...
   recordId String?
-  changes  Json?    // { before: {}, after: {} }
+  changes  Json? // { before: {}, after: {} }
 
   ip        String?
   createdAt DateTime @default(now())
@@ -647,14 +661,14 @@ model AuditLog {
 // WEBHOOKS
 // =========================
 model WebhookEndpoint {
-  id      Int     @id @default(autoincrement())
+  id      Int   @id @default(autoincrement())
   plantId Int
-  plant   Plant   @relation(fields: [plantId], references: [id], onDelete: Cascade)
+  plant   Plant @relation(fields: [plantId], references: [id], onDelete: Cascade)
 
-  url    String
-  secret String
-  events WebhookEvent[]
-  active Boolean        @default(true)
+  url         String
+  secret      String
+  events      WebhookEvent[]
+  active      Boolean        @default(true)
   description String?
 
   deliveries WebhookDelivery[]
@@ -672,8 +686,8 @@ model WebhookDelivery {
 
   event          String
   payload        Json
-  status         String   @default("PENDING") // PENDING | SUCCESS | FAILED
-  attempts       Int      @default(0)
+  status         String    @default("PENDING") // PENDING | SUCCESS | FAILED
+  attempts       Int       @default(0)
   lastAttemptAt  DateTime?
   responseStatus Int?
   responseBody   String?
@@ -685,20 +699,20 @@ model WebhookDelivery {
 }
 
 model ScheduledJobRun {
-  id        Int              @id @default(autoincrement())
-  jobType   ScheduledJobType
-  plantId   Int
-  period    String           // YYYY-MM
-  status    String           @default("PENDING") // PENDING | SENT | FAILED | SKIPPED
+  id      Int              @id @default(autoincrement())
+  jobType ScheduledJobType
+  plantId Int
+  period  String // YYYY-MM
+  status  String           @default("PENDING") // PENDING | SENT | FAILED | SKIPPED
 
   recipientsJson String?
   subject        String?
   errorMessage   String?
 
-  startedAt   DateTime?
-  finishedAt  DateTime?
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
+  startedAt  DateTime?
+  finishedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 
   plant Plant @relation(fields: [plantId], references: [id], onDelete: Cascade)
 
@@ -725,6 +739,20 @@ enum LubricationMethod {
   OIL_CAN
 }
 
+enum PreventiveOrderStatus {
+  DRAFT
+  OPEN
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum PreventiveOrderItemStatus {
+  PENDING
+  COMPLETED
+  SKIPPED
+}
+
 model LubricationCard {
   id          Int       @id @default(autoincrement())
   equipmentId Int       @unique
@@ -745,14 +773,14 @@ model LubricationCard {
 
 // Imágenes adicionales para equipos grandes con varias secciones
 model LubricationCardImage {
-  id            Int             @id @default(autoincrement())
-  cardId        Int
-  card          LubricationCard @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  id     Int             @id @default(autoincrement())
+  cardId Int
+  card   LubricationCard @relation(fields: [cardId], references: [id], onDelete: Cascade)
 
   imageUrl      String
   imagePublicId String?
-  label         String          @default("Sección")
-  order         Int             @default(0)
+  label         String  @default("Sección")
+  order         Int     @default(0)
 
   points LubricationPoint[]
 
@@ -770,9 +798,9 @@ model LubricationPoint {
   imageId Int?
   image   LubricationCardImage? @relation(fields: [imageId], references: [id], onDelete: SetNull)
 
-  label     String
-  x         Float
-  y         Float
+  label String
+  x     Float
+  y     Float
 
   lubricant String?
   quantity  Float?
@@ -802,9 +830,9 @@ enum IntegrationType {
 }
 
 model IntegrationConfig {
-  id      Int             @id @default(autoincrement())
+  id      Int   @id @default(autoincrement())
   plantId Int
-  plant   Plant           @relation(fields: [plantId], references: [id], onDelete: Cascade)
+  plant   Plant @relation(fields: [plantId], references: [id], onDelete: Cascade)
 
   type        IntegrationType
   name        String
@@ -813,34 +841,34 @@ model IntegrationConfig {
   username    String?
   passwordEnc String?
   extra       Json?
-  active      Boolean @default(true)
+  active      Boolean         @default(true)
 
-  lastSyncAt  DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  lastSyncAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 
-  assetMappings   AssetMapping[]
-  syncLogs        IntegrationSyncLog[]
+  assetMappings AssetMapping[]
+  syncLogs      IntegrationSyncLog[]
 
   @@index([plantId])
   @@index([type])
 }
 
 model AssetMapping {
-  id              Int               @id @default(autoincrement())
-  integrationId   Int
-  integration     IntegrationConfig @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  id            Int               @id @default(autoincrement())
+  integrationId Int
+  integration   IntegrationConfig @relation(fields: [integrationId], references: [id], onDelete: Cascade)
 
-  equipmentId     Int?
-  equipment       Equipment?        @relation(fields: [equipmentId], references: [id], onDelete: SetNull)
+  equipmentId Int?
+  equipment   Equipment? @relation(fields: [equipmentId], references: [id], onDelete: SetNull)
 
-  externalId      String
-  externalName    String?
-  externalData    Json?
-  confirmed       Boolean @default(false)
+  externalId   String
+  externalName String?
+  externalData Json?
+  confirmed    Boolean @default(false)
 
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([integrationId, externalId])
   @@index([integrationId])
@@ -852,16 +880,16 @@ model IntegrationSyncLog {
   integrationId Int
   integration   IntegrationConfig @relation(fields: [integrationId], references: [id], onDelete: Cascade)
 
-  direction     String   // PULL | PUSH
-  entity        String   // assets | workorders
-  status        String   // OK | PARTIAL | ERROR
-  recordsTotal  Int      @default(0)
-  recordsOk     Int      @default(0)
-  recordsError  Int      @default(0)
-  errors        Json?
+  direction    String // PULL | PUSH
+  entity       String // assets | workorders
+  status       String // OK | PARTIAL | ERROR
+  recordsTotal Int    @default(0)
+  recordsOk    Int    @default(0)
+  recordsError Int    @default(0)
+  errors       Json?
 
-  startedAt     DateTime @default(now())
-  finishedAt    DateTime?
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
 
   @@index([integrationId])
   @@index([status])
@@ -902,4 +930,71 @@ model LandingLead {
   @@index([source])
   @@index([status])
   @@index([createdAt])
+}
+
+// =========================
+// ÓRDENES DE LUBRICACIÓN PREVENTIVA (OLP)
+// =========================
+model PreventiveOrder {
+  id Int @id @default(autoincrement())
+
+  plantId Int
+  plant   Plant @relation(fields: [plantId], references: [id], onDelete: Cascade)
+
+  equipmentId Int
+  equipment   Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+
+  title         String
+  scheduledDate DateTime
+  status        PreventiveOrderStatus @default(DRAFT)
+
+  createdBy     Int
+  createdByUser User @relation("PreventiveOrderCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+
+  assignedTo     Int?
+  assignedToUser Technician? @relation(fields: [assignedTo], references: [id], onDelete: SetNull)
+
+  requiresPhoto  Boolean @default(false)
+  notes          String?
+  signatureImage String?
+
+  items PreventiveOrderItem[]
+
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([plantId])
+  @@index([equipmentId])
+  @@index([status])
+  @@index([scheduledDate])
+  @@index([createdAt])
+  @@index([plantId, status])
+}
+
+model PreventiveOrderItem {
+  id Int @id @default(autoincrement())
+
+  preventiveOrderId Int
+  preventiveOrder   PreventiveOrder @relation(fields: [preventiveOrderId], references: [id], onDelete: Cascade)
+
+  routeId Int
+  route   Route @relation("PreventiveOrderItems", fields: [routeId], references: [id], onDelete: Cascade)
+
+  status PreventiveOrderItemStatus @default(PENDING)
+
+  observations String?
+  photoUrl     String?
+
+  completedAt     DateTime?
+  completedBy     Int?
+  completedByUser Technician? @relation("PreventiveOrderItemCompletedBy", fields: [completedBy], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([preventiveOrderId, routeId])
+  @@index([preventiveOrderId])
+  @@index([routeId])
+  @@index([status])
 }
