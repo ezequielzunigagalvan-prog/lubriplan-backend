@@ -281,7 +281,7 @@ export default function preventiveOrdersRoutes({ prisma, auth, requireRole }) {
           status: status || "COMPLETED",
           observations,
           photoUrl,
-          ...(status === "COMPLETED" && { completedAt: new Date(), completedBy: userId }),
+          ...(status === "COMPLETED" && { completedAt: new Date(), completedBy: req.user.technicianId || null }),
         },
         include: {
           route: {
@@ -312,12 +312,23 @@ export default function preventiveOrdersRoutes({ prisma, auth, requireRole }) {
           monthlyAnchorDay: route.monthlyAnchorDay,
         });
 
+        // Validar que se calculó correctamente
+        if (!nextDate) {
+          console.error(`[OLP] No se pudo calcular nextDate para route ${route.id}`, {
+            frequencyType: route.frequencyType,
+            frequencyDays: route.frequencyDays,
+          });
+          return res.status(400).json({
+            error: `No se pudo calcular próxima fecha para la ruta. Verifica su configuración de frecuencia.`,
+          });
+        }
+
         // Crear Execution con sourceType='OLP'
         await prisma.execution.create({
           data: {
             plantId,
             origin: "ONE_OFF",
-            sourceType: "OLP",
+            sourceType: "OLP",  // Enum ExecutionSourceType.OLP
             routeId: route.id,
             equipmentId: order.equipmentId,
             technicianId: userId,

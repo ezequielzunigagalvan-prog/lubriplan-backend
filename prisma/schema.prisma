@@ -14,6 +14,11 @@ enum UserRole {
   TECHNICIAN
 }
 
+enum ExecutionSourceType {
+  ROUTE
+  OLP
+}
+
 model AppSettings {
   id Int @id @default(1)
 
@@ -334,8 +339,8 @@ model Execution {
   // Clave de idempotencia para operaciones offline. El cliente genera un UUID v4 y lo envía en el body.
   clientId String? @unique
 
-  // Origen de la ejecución: 'ROUTE' | 'OLP' para tracking de órdenes preventivas
-  sourceType String? @default("ROUTE")
+  // Origen de la ejecución: ROUTE | OLP para tracking de órdenes preventivas
+  sourceType String? @default("ROUTE")  // Valores: ROUTE | OLP
 
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
