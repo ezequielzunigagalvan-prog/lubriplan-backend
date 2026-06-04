@@ -1,7 +1,6 @@
 import express from "express";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { requirePlantAccess } from "../middleware/requirePlantAccess.js";
-import { currentPlantId } from "../middleware/currentPlant.js";
 import { resolveNextRouteDate } from "../utils/routeScheduling.js";
 
 export default function preventiveOrdersRoutes({ prisma, auth, requireRole }) {
@@ -17,7 +16,7 @@ export default function preventiveOrdersRoutes({ prisma, auth, requireRole }) {
   // ==========================================
   router.post("/", async (req, res) => {
     const { equipmentId, scheduledDate, title, notes } = req.body;
-    const plantId = currentPlantId(req);
+    const plantId = req.currentPlantId;
     const userId = req.user.id;
 
     if (!equipmentId || !scheduledDate) {
@@ -65,7 +64,7 @@ export default function preventiveOrdersRoutes({ prisma, auth, requireRole }) {
   // Listar órdenes de la planta actual
   // ==========================================
   router.get("/", async (req, res) => {
-    const plantId = currentPlantId(req);
+    const plantId = req.currentPlantId;
     const { status, equipmentId, page = 1, limit = 20 } = req.query;
 
     try {
@@ -100,7 +99,7 @@ export default function preventiveOrdersRoutes({ prisma, auth, requireRole }) {
   // ==========================================
   router.get("/:id", async (req, res) => {
     const { id } = req.params;
-    const plantId = currentPlantId(req);
+    const plantId = req.currentPlantId;
 
     try {
       const order = await prisma.preventiveOrder.findUnique({
@@ -146,7 +145,7 @@ export default function preventiveOrdersRoutes({ prisma, auth, requireRole }) {
   router.put("/:id", async (req, res) => {
     const { id } = req.params;
     const { title, notes, assignedTo } = req.body;
-    const plantId = currentPlantId(req);
+    const plantId = req.currentPlantId;
 
     try {
       const order = await prisma.preventiveOrder.findUnique({
@@ -185,7 +184,7 @@ export default function preventiveOrdersRoutes({ prisma, auth, requireRole }) {
   // ==========================================
   router.put("/:id/open", async (req, res) => {
     const { id } = req.params;
-    const plantId = currentPlantId(req);
+    const plantId = req.currentPlantId;
 
     try {
       const order = await prisma.preventiveOrder.findUnique({
@@ -221,7 +220,7 @@ export default function preventiveOrdersRoutes({ prisma, auth, requireRole }) {
   router.put("/:id/start", async (req, res) => {
     const { id } = req.params;
     const { assignedTo } = req.body;
-    const plantId = currentPlantId(req);
+    const plantId = req.currentPlantId;
 
     if (!assignedTo) {
       return res.status(400).json({ error: "assignedTo es requerido" });
@@ -261,7 +260,7 @@ export default function preventiveOrdersRoutes({ prisma, auth, requireRole }) {
   router.put("/:id/items/:itemId", async (req, res) => {
     const { id, itemId } = req.params;
     const { status, observations, photoUrl } = req.body;
-    const plantId = currentPlantId(req);
+    const plantId = req.currentPlantId;
     const userId = req.user.id;
 
     try {
@@ -354,7 +353,7 @@ export default function preventiveOrdersRoutes({ prisma, auth, requireRole }) {
   router.put("/:id/complete", async (req, res) => {
     const { id } = req.params;
     const { signatureImage } = req.body;
-    const plantId = currentPlantId(req);
+    const plantId = req.currentPlantId;
 
     try {
       const order = await prisma.preventiveOrder.findUnique({
@@ -396,7 +395,7 @@ export default function preventiveOrdersRoutes({ prisma, auth, requireRole }) {
   // ==========================================
   router.delete("/:id", async (req, res) => {
     const { id } = req.params;
-    const plantId = currentPlantId(req);
+    const plantId = req.currentPlantId;
 
     try {
       const order = await prisma.preventiveOrder.findUnique({

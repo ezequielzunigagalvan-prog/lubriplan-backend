@@ -67,7 +67,8 @@
       "Bash(dir /B \"src\\\\routes\")",
       "Bash(findstr /i route)",
       "Bash(powershell *)",
-      "Bash(git commit -m 'fix\\(lubrication-card\\): entrar a modo edición automáticamente después del sync *)"
+      "Bash(git commit -m 'fix\\(lubrication-card\\): entrar a modo edición automáticamente después del sync *)",
+      "Bash(git commit -m 'fix\\(olp\\): usar req.currentPlantId en lugar de función inexistente *)"
     ]
   }
 }
