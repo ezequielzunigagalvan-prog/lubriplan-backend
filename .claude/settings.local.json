@@ -69,7 +69,9 @@
       "Bash(powershell *)",
       "Bash(git commit -m 'fix\\(lubrication-card\\): entrar a modo edición automáticamente después del sync *)",
       "Bash(git commit -m 'fix\\(olp\\): usar req.currentPlantId en lugar de función inexistente *)",
-      "Bash(git commit -m 'fix\\(olp\\): completedBy type correction, nextDate validation, ExecutionSourceTypeEnum *)"
+      "Bash(git commit -m 'fix\\(olp\\): completedBy type correction, nextDate validation, ExecutionSourceTypeEnum *)",
+      "Bash(curl -s https://api.lubriplan.com/health)",
+      "Bash(git commit -m 'docs\\(olp\\): agregar diagnóstico y soluciones para errores de CORS en producción *)"
     ]
   }
 }
