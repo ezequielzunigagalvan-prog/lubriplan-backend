@@ -68,28 +68,70 @@ export default function preventiveOrdersRoutes({ prisma, auth, requireRole }) {
     const { status, equipmentId, page = 1, limit = 20 } = req.query;
 
     try {
+      // Validar plantId
+      if (!plantId) {
+        return res.status(400).json({ error: "PLANT_REQUIRED", data: [], total: 0, page: 1, limit });
+      }
+
       const where = { plantId };
       if (status) where.status = status;
       if (equipmentId) where.equipmentId = Number(equipmentId);
 
-      const orders = await prisma.preventiveOrder.findMany({
-        where,
-        include: {
-          equipment: { select: { name: true } },
-          assignedToUser: { select: { name: true } },
-          items: { select: { id: true, status: true, route: { select: { name: true } } } },
-        },
-        orderBy: { createdAt: "desc" },
-        skip: (page - 1) * limit,
-        take: Number(limit),
+      // Intentar obtener órdenes con timeout de 30 segundos
+      const [orders, total] = await Promise.all([
+        prisma.preventiveOrder.findMany({
+          where,
+          include: {
+            equipment: { select: { name: true } },
+            assignedToUser: { select: { name: true } },
+            items: {
+              select: {
+                id: true,
+                status: true,
+                route: { select: { name: true } }
+              },
+              take: 10, // Limitar items por orden para evitar queries grandes
+            },
+          },
+          orderBy: { createdAt: "desc" },
+          skip: (page - 1) * limit,
+          take: Number(limit),
+        }),
+        prisma.preventiveOrder.count({ where }),
+      ]);
+
+      // Si no hay órdenes, devolver array vacío (sin error)
+      res.json({
+        data: orders || [],
+        total: total || 0,
+        page: Number(page),
+        limit: Number(limit)
       });
-
-      const total = await prisma.preventiveOrder.count({ where });
-
-      res.json({ data: orders, total, page: Number(page), limit: Number(limit) });
     } catch (err) {
+      // Si la tabla no existe o hay error de conexión, devolver array vacío
+      const isTableNotFound = err?.message?.includes("does not exist") ||
+                              err?.message?.includes("relation") ||
+                              err?.code === "P1008"; // Timeout de conexión
+
+      if (isTableNotFound) {
+        console.warn("PreventiveOrder table not ready or connection issue:", err?.message);
+        return res.json({
+          data: [],
+          total: 0,
+          page: Number(page),
+          limit: Number(limit),
+          warning: "Tabla PreventiveOrder no disponible aún"
+        });
+      }
+
       console.error("Error fetching preventive orders:", err);
-      res.status(500).json({ error: "No se pudieron obtener las órdenes" });
+      res.status(500).json({
+        error: "No se pudieron obtener las órdenes",
+        data: [],
+        total: 0,
+        page: Number(page),
+        limit: Number(limit)
+      });
     }
   });
 

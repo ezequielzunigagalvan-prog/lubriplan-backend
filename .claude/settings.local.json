@@ -71,7 +71,11 @@
       "Bash(git commit -m 'fix\\(olp\\): usar req.currentPlantId en lugar de función inexistente *)",
       "Bash(git commit -m 'fix\\(olp\\): completedBy type correction, nextDate validation, ExecutionSourceTypeEnum *)",
       "Bash(curl -s https://api.lubriplan.com/health)",
-      "Bash(git commit -m 'docs\\(olp\\): agregar diagnóstico y soluciones para errores de CORS en producción *)"
+      "Bash(git commit -m 'docs\\(olp\\): agregar diagnóstico y soluciones para errores de CORS en producción *)",
+      "Bash(cat)",
+      "Read(//tmp/**)",
+      "Bash(git commit -m 'fix\\(db\\): agregar campos faltantes para resolver 500 errors en producción *)",
+      "Bash(git commit -m 'fix\\(api\\): GET /api/preventive-orders - mejor manejo de errores y timeout *)"
     ]
   }
 }
