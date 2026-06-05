@@ -321,7 +321,12 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
   app.use("/api", auditLogRoutes({ prisma, auth: requireAuth, requireRole }));
   app.use("/api", webhooksRoutes({ prisma, auth: requireAuth, requireRole }));
   app.use("/api", lubricationCardsRoutes({ prisma, auth: requireAuth, requireRole }));
-  app.use("/api/preventive-orders", preventiveOrdersRoutes({ prisma, auth: requireAuth, requireRole }));
+  // TEST: endpoint temporal para diagnosticar CORS
+  app.get('/api/preventive-orders', (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', 'https://www.lubriplan.com');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    return res.json({ data: [], total: 0, page: 1, totalPages: 0 });
+  });
 
   app.use("/api", realtimeRoutes({ auth: requireAuth }));
 
