@@ -63,87 +63,65 @@ export default function preventiveOrdersRoutes({ prisma, auth, requireRole }) {
   // GET /api/preventive-orders
   // Listar órdenes de la planta actual
   // ==========================================
-  router.get("/", async (req, res) => {
-    const plantId = req.currentPlantId;
-    const { status, equipmentId, page = 1, limit = 20 } = req.query;
-
+  router.get('/', auth, requireRole(['ADMIN', 'SUPERVISOR', 'TECHNICIAN']), async (req, res) => {
     try {
-      // Validar plantId
+      const plantId = req.currentPlantId ||
+        (req.headers['x-plant-id'] ? parseInt(req.headers['x-plant-id']) : null);
+
       if (!plantId) {
-        return res.status(400).json({ error: "PLANT_REQUIRED", data: [], total: 0, page: 1, limit });
+        return res.json({ data: [], total: 0, page: 1, totalPages: 0 });
       }
 
-      // Guard: si prisma.preventiveOrder undefined, retornar array vacío (tabla aún no creada)
       if (!prisma.preventiveOrder) {
-        return res.json({ data: [], total: 0, page: Number(page), limit: Number(limit) });
+        return res.json({ data: [], total: 0, page: 1, totalPages: 0 });
       }
 
-      const where = { plantId };
-      if (status) where.status = status;
-      if (equipmentId) where.equipmentId = Number(equipmentId);
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit) || 20;
+      const skip = (page - 1) * limit;
 
-      // Intentar obtener órdenes con timeout de 10 segundos
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("Query timeout after 10s")), 10000)
-      );
-
-      const [orders, total] = await Promise.race([
-        Promise.all([
-          prisma.preventiveOrder.findMany({
-            where,
-            include: {
-              equipment: { select: { name: true } },
-              assignedToUser: { select: { name: true } },
-              items: {
-                select: {
-                  id: true,
-                  status: true,
-                  route: { select: { name: true } }
-                },
-                take: 10, // Limitar items por orden para evitar queries grandes
-              },
-            },
-            orderBy: { createdAt: "desc" },
-            skip: (page - 1) * limit,
-            take: Number(limit),
-          }),
-          prisma.preventiveOrder.count({ where }),
-        ]),
-        timeoutPromise,
+      const [orders, total] = await Promise.all([
+        prisma.preventiveOrder.findMany({
+          where: { plantId },
+          select: {
+            id: true,
+            title: true,
+            status: true,
+            scheduledDate: true,
+            completedAt: true,
+            createdAt: true,
+            equipment: { select: { id: true, name: true } },
+            assignedToUser: { select: { id: true, name: true } },
+            _count: { select: { items: true } },
+          },
+          orderBy: { createdAt: 'desc' },
+          skip,
+          take: limit,
+        }),
+        prisma.preventiveOrder.count({ where: { plantId } }),
       ]);
 
-      // Si no hay órdenes, devolver array vacío (sin error)
-      res.json({
-        data: orders || [],
-        total: total || 0,
-        page: Number(page),
-        limit: Number(limit)
+      const ordersWithProgress = await Promise.all(
+        orders.map(async (order) => {
+          const completedItems = await prisma.preventiveOrderItem.count({
+            where: { preventiveOrderId: order.id, status: 'COMPLETED' }
+          });
+          return {
+            ...order,
+            progress: { completed: completedItems, total: order._count.items }
+          };
+        })
+      );
+
+      return res.json({
+        data: ordersWithProgress,
+        total,
+        page,
+        totalPages: Math.ceil(total / limit),
       });
     } catch (err) {
-      // Si la tabla no existe o hay error de conexión, devolver array vacío
-      const isTableNotFound = err?.message?.includes("does not exist") ||
-                              err?.message?.includes("relation") ||
-                              err?.code === "P1008"; // Timeout de conexión
-
-      if (isTableNotFound) {
-        console.warn("PreventiveOrder table not ready or connection issue:", err?.message);
-        return res.json({
-          data: [],
-          total: 0,
-          page: Number(page),
-          limit: Number(limit),
-          warning: "Tabla PreventiveOrder no disponible aún"
-        });
-      }
-
-      console.error("Error fetching preventive orders:", err?.message);
-      res.status(200).json({
-        data: [],
-        total: 0,
-        page: Number(page),
-        limit: Number(limit),
-        error: err?.message?.includes("timeout") ? "Consulta tardó demasiado" : "Error temporal"
-      });
+      console.error('[OLP] Error GET /preventive-orders:', err.message);
+      return res.json({ data: [], total: 0, page: 1, totalPages: 0 });
     }
   });
 
