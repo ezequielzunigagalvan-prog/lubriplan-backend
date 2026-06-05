@@ -1172,7 +1172,7 @@ export default function dashboardRoutes({
 
   // GET /api/dashboard/onboarding-progress
   // Devuelve cuántos registros hay de cada entidad clave para el checklist de onboarding
-  router.get('/onboarding-progress', requireAuth, async (req, res) => {
+  router.get('/onboarding-progress', auth, async (req, res) => {
     try {
       const plantId = req.headers['x-plant-id'] ? parseInt(req.headers['x-plant-id']) : null;
 
