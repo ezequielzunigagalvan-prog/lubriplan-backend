@@ -1177,21 +1177,28 @@ export default function dashboardRoutes({
       const plantId = req.currentPlantId;
       if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
 
-      const safeCount = async (model, where) => {
+      const safeCount = async (modelRef, where) => {
         try {
-          if (!model) return 0;
-          return await model.count({ where });
-        } catch {
+          if (modelRef === undefined || modelRef === null) return 0;
+          return await modelRef.count({ where });
+        } catch (e) {
           return 0;
         }
       };
 
-      const [areas, equipments, technicians, routes] = await Promise.all([
-        safeCount(prisma.area, { plantId }),
-        safeCount(prisma.equipment, { plantId, deletedAt: null }),
-        safeCount(prisma.technician, { plantId, deletedAt: null }),
-        safeCount(prisma.route, { plantId }),
-      ]);
+      let areas = 0, equipments = 0, technicians = 0, routes = 0;
+      try {
+        areas = await safeCount(prisma.area, { plantId });
+      } catch(e) { areas = 0; }
+      try {
+        equipments = await safeCount(prisma.equipment, { plantId, deletedAt: null });
+      } catch(e) { equipments = 0; }
+      try {
+        technicians = await safeCount(prisma.technician, { plantId, deletedAt: null });
+      } catch(e) { technicians = 0; }
+      try {
+        routes = await safeCount(prisma.route, { plantId });
+      } catch(e) { routes = 0; }
 
       return res.json({
         ok: true,
@@ -1200,7 +1207,11 @@ export default function dashboardRoutes({
       });
     } catch (e) {
       logger.error("onboarding-progress error:", e);
-      return res.status(500).json({ error: "Error obteniendo progreso de onboarding" });
+      return res.json({
+        ok: true,
+        progress: { areas: 0, equipments: 0, technicians: 0, routes: 0 },
+        completed: false,
+      });
     }
   });
 
