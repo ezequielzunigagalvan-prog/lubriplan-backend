@@ -1172,46 +1172,31 @@ export default function dashboardRoutes({
 
   // GET /api/dashboard/onboarding-progress
   // Devuelve cuántos registros hay de cada entidad clave para el checklist de onboarding
-  router.get("/onboarding-progress", auth, requireRole(["ADMIN"]), async (req, res) => {
+  router.get('/onboarding-progress', requireAuth, async (req, res) => {
     try {
-      const plantId = req.currentPlantId;
-      if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
+      const plantId = req.headers['x-plant-id'] ? parseInt(req.headers['x-plant-id']) : null;
 
-      const safeCount = async (modelRef, where) => {
-        try {
-          if (modelRef === undefined || modelRef === null) return 0;
-          return await modelRef.count({ where });
-        } catch (e) {
-          return 0;
-        }
-      };
+      if (!plantId) {
+        return res.json({ ok: true, progress: { areas: 0, equipments: 0, technicians: 0, routes: 0 }, completed: false });
+      }
 
       let areas = 0, equipments = 0, technicians = 0, routes = 0;
-      try {
-        areas = await safeCount(prisma.area, { plantId });
-      } catch(e) { areas = 0; }
-      try {
-        equipments = await safeCount(prisma.equipment, { plantId, deletedAt: null });
-      } catch(e) { equipments = 0; }
-      try {
-        technicians = await safeCount(prisma.technician, { plantId, deletedAt: null });
-      } catch(e) { technicians = 0; }
-      try {
-        routes = await safeCount(prisma.route, { plantId });
-      } catch(e) { routes = 0; }
+
+      try { areas = await prisma.area.count({ where: { plantId } }); } catch(e) { areas = 0; }
+      try { equipments = await prisma.equipment.count({ where: { plantId } }); } catch(e) { equipments = 0; }
+      try { technicians = await prisma.technician.count({ where: { plantId } }); } catch(e) { technicians = 0; }
+      try { routes = await prisma.route.count({ where: { plantId } }); } catch(e) { routes = 0; }
+
+      const completed = areas > 0 && equipments > 0 && technicians > 0 && routes > 0;
 
       return res.json({
         ok: true,
         progress: { areas, equipments, technicians, routes },
-        completed: areas > 0 && equipments > 0 && technicians > 0 && routes > 0,
+        completed,
       });
-    } catch (e) {
-      logger.error("onboarding-progress error:", e);
-      return res.json({
-        ok: true,
-        progress: { areas: 0, equipments: 0, technicians: 0, routes: 0 },
-        completed: false,
-      });
+    } catch (err) {
+      console.error('onboarding-progress error:', err.message, err.stack);
+      return res.json({ ok: true, progress: { areas: 0, equipments: 0, technicians: 0, routes: 0 }, completed: false });
     }
   });
 
