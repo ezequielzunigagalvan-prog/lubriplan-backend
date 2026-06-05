@@ -18,9 +18,7 @@
       getNextWeeklySelectedDate as _getNextWeeklySelectedDate,
       resolveNextRouteDate as _resolveNextRouteDate,
     } from "./utils/routeScheduling.js";
-    import cors from "cors";
     import helmet from "helmet";
-    import { corsMiddleware } from "./config/cors.js";
     import path from "path";
     import fs from "fs";
     import multer from "multer";
@@ -144,10 +142,37 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
   // Cabeceras de seguridad HTTP (X-Frame-Options, X-Content-Type-Options, HSTS, etc.)
   app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 
-  // CORS: Usar configuración centralizada de src/config/cors.js (una sola fuente de verdad)
-  // 1) CORS primero
-  app.use(corsMiddleware);
-  app.options("*", corsMiddleware);
+  // CORS: Middleware manual robusto que lee headers correctamente incluso con Cloudflare
+  app.use((req, res, next) => {
+    // Leer origin del request (con fallback a Origin mayúscula)
+    const origin = req.headers.origin || req.headers.Origin || '';
+    const allowedOrigins = [
+      'http://localhost:5173',
+      'http://localhost:3000',
+      'https://lubriplan.com',
+      'https://www.lubriplan.com',
+      'https://app.lubriplan.com',
+      'https://api.lubriplan.com',
+      'https://lubriplan-frontend.vercel.app',
+    ];
+
+    // Permitir si no hay origin o si está en la lista de permitidos
+    if (!origin || allowedOrigins.includes(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin || '*');
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,x-plant-id,x-request-id,X-Plant-Id,X-User-Id,x-user-id,Cache-Control,Pragma');
+    }
+
+    // Responder a requests OPTIONS (preflight)
+    if (req.method === 'OPTIONS') {
+      return res.status(204).end();
+    }
+
+    next();
+  });
+
+  // Cache headers para API
   app.use("/api", (req, res, next) => {
     res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
     res.set("Pragma", "no-cache");
@@ -157,9 +182,6 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
     res.set("Alt-Svc", "clear");
     next();
   });
-
-  // 2) Preflight
-  app.options("*", corsMiddleware, (req, res) => res.sendStatus(204));
 
   // 3) Body parsers
   app.use(express.json({ limit: "20mb" }));
