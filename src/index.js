@@ -48,6 +48,7 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
     import settingsRoutes from "./routes/settings.routes.js";
     import { attachCurrentPlant } from "./middleware/currentPlant.js";
   import { requirePlantAccess } from "./middleware/requirePlantAccess.js";
+  import { mountRoutes } from "./routes/index.js";
   import plantsRoutes from "./routes/plants.routes.js";
   import { runWithTenant } from "./tenancy/tenantContext.js";
   import {
@@ -8533,6 +8534,9 @@ app.get("/api/health", async (req, res) => {
     });
   }
 });
+
+  // ✅ Registrar todas las rutas desde src/routes/index.js (dashboard, alerts, analytics, etc.)
+  mountRoutes(app, { prisma });
 
   // Sentry error handler — debe ir después de todas las rutas y antes de app.listen
   app.use(Sentry.expressErrorHandler());
