@@ -76,7 +76,9 @@
       "Read(//tmp/**)",
       "Bash(git commit -m 'fix\\(db\\): agregar campos faltantes para resolver 500 errors en producción *)",
       "Bash(git commit -m 'fix\\(api\\): GET /api/preventive-orders - mejor manejo de errores y timeout *)",
-      "Bash(git commit -m 'fix\\(prod\\): resolver 4 problemas críticos en producción *})"
+      "Bash(git commit -m 'fix\\(prod\\): resolver 4 problemas críticos en producción *})",
+      "Bash(xargs grep -l \"cors\\\\|Access-Control\\\\|CORS\")",
+      "Bash(git commit -m 'fix: CORS orígenes faltantes + prisma generate para modelos OLP *)"
     ]
   }
 }
