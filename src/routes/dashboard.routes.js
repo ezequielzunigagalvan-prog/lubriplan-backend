@@ -1178,10 +1178,10 @@ export default function dashboardRoutes({
       if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
 
       const [areas, equipments, technicians, routes] = await Promise.all([
-        prisma.area.count({ where: { plantId } }),
-        prisma.equipment.count({ where: { plantId, deletedAt: null } }),
-        prisma.technician.count({ where: { plantId, deletedAt: null } }),
-        prisma.route.count({ where: { plantId } }),
+        prisma.area.count({ where: { plantId } }).catch(() => 0),
+        prisma.equipment.count({ where: { plantId, deletedAt: null } }).catch(() => 0),
+        prisma.technician.count({ where: { plantId, deletedAt: null } }).catch(() => 0),
+        prisma.route.count({ where: { plantId } }).catch(() => 0),
       ]);
 
       return res.json({

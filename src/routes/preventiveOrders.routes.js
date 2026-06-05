@@ -77,27 +77,34 @@ export default function preventiveOrdersRoutes({ prisma, auth, requireRole }) {
       if (status) where.status = status;
       if (equipmentId) where.equipmentId = Number(equipmentId);
 
-      // Intentar obtener órdenes con timeout de 30 segundos
-      const [orders, total] = await Promise.all([
-        prisma.preventiveOrder.findMany({
-          where,
-          include: {
-            equipment: { select: { name: true } },
-            assignedToUser: { select: { name: true } },
-            items: {
-              select: {
-                id: true,
-                status: true,
-                route: { select: { name: true } }
+      // Intentar obtener órdenes con timeout de 10 segundos
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Query timeout after 10s")), 10000)
+      );
+
+      const [orders, total] = await Promise.race([
+        Promise.all([
+          prisma.preventiveOrder.findMany({
+            where,
+            include: {
+              equipment: { select: { name: true } },
+              assignedToUser: { select: { name: true } },
+              items: {
+                select: {
+                  id: true,
+                  status: true,
+                  route: { select: { name: true } }
+                },
+                take: 10, // Limitar items por orden para evitar queries grandes
               },
-              take: 10, // Limitar items por orden para evitar queries grandes
             },
-          },
-          orderBy: { createdAt: "desc" },
-          skip: (page - 1) * limit,
-          take: Number(limit),
-        }),
-        prisma.preventiveOrder.count({ where }),
+            orderBy: { createdAt: "desc" },
+            skip: (page - 1) * limit,
+            take: Number(limit),
+          }),
+          prisma.preventiveOrder.count({ where }),
+        ]),
+        timeoutPromise,
       ]);
 
       // Si no hay órdenes, devolver array vacío (sin error)
@@ -124,13 +131,13 @@ export default function preventiveOrdersRoutes({ prisma, auth, requireRole }) {
         });
       }
 
-      console.error("Error fetching preventive orders:", err);
-      res.status(500).json({
-        error: "No se pudieron obtener las órdenes",
+      console.error("Error fetching preventive orders:", err?.message);
+      res.status(200).json({
         data: [],
         total: 0,
         page: Number(page),
-        limit: Number(limit)
+        limit: Number(limit),
+        error: err?.message?.includes("timeout") ? "Consulta tardó demasiado" : "Error temporal"
       });
     }
   });

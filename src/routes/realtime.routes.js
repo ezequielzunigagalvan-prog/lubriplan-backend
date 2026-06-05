@@ -45,10 +45,10 @@ function realtimeRoutes({ auth }) {
     // Registrar cliente
     sseHub.add(userId, res);
 
-    // keep-alive para que no muera en proxies
+    // keep-alive para que no muera en proxies (cada 15s para evitar timeout)
     const ping = setInterval(() => {
       res.write(`event: ping\ndata: {}\n\n`);
-    }, 25000);
+    }, 15000);
 
     req.on("close", () => {
       clearInterval(ping);

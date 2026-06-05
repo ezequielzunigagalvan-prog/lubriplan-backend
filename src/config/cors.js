@@ -3,6 +3,8 @@ import { logger } from "../config/logger.js";
 
 export const allowedOrigins = [
   "http://localhost:5173",
+  "http://localhost:3000",
+  "https://api.lubriplan.com",
   "https://lubriplan.com",
   "https://www.lubriplan.com",
   "https://app.lubriplan.com",
