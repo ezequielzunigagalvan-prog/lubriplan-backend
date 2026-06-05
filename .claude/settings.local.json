@@ -78,7 +78,10 @@
       "Bash(git commit -m 'fix\\(api\\): GET /api/preventive-orders - mejor manejo de errores y timeout *)",
       "Bash(git commit -m 'fix\\(prod\\): resolver 4 problemas críticos en producción *})",
       "Bash(xargs grep -l \"cors\\\\|Access-Control\\\\|CORS\")",
-      "Bash(git commit -m 'fix: CORS orígenes faltantes + prisma generate para modelos OLP *)"
+      "Bash(git commit -m 'fix: CORS orígenes faltantes + prisma generate para modelos OLP *)",
+      "Bash(git commit *)",
+      "Bash(dir prisma/migrations/)",
+      "Bash(Select-String -Path \"src/routes/dashboard.routes.js\" -Pattern \"preventiveOrder\" -Context 2)"
     ]
   }
 }
