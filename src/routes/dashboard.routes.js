@@ -1182,7 +1182,7 @@ export default function dashboardRoutes({
 
       let areas = 0, equipments = 0, technicians = 0, routes = 0;
 
-      try { areas = await prisma.area.count({ where: { plantId } }); } catch(e) { areas = 0; }
+      try { areas = await prisma.equipmentArea.count({ where: { plantId } }); } catch(e) { areas = 0; }
       try { equipments = await prisma.equipment.count({ where: { plantId } }); } catch(e) { equipments = 0; }
       try { technicians = await prisma.technician.count({ where: { plantId } }); } catch(e) { technicians = 0; }
       try { routes = await prisma.route.count({ where: { plantId } }); } catch(e) { routes = 0; }
