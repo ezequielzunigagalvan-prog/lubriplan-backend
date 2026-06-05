@@ -1177,20 +1177,20 @@ export default function dashboardRoutes({
       const plantId = req.currentPlantId;
       if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
 
-      // Guard: si prisma.preventiveOrder undefined, retornar null (tabla aún no creada)
-      if (!prisma.preventiveOrder) {
-        return res.json({
-          ok: true,
-          progress: { areas: 0, equipments: 0, technicians: 0, routes: 0 },
-          completed: false,
-        });
-      }
+      const safeCount = async (model, where) => {
+        try {
+          if (!model) return 0;
+          return await model.count({ where });
+        } catch {
+          return 0;
+        }
+      };
 
       const [areas, equipments, technicians, routes] = await Promise.all([
-        prisma.area.count({ where: { plantId } }).catch(() => 0),
-        prisma.equipment.count({ where: { plantId, deletedAt: null } }).catch(() => 0),
-        prisma.technician.count({ where: { plantId, deletedAt: null } }).catch(() => 0),
-        prisma.route.count({ where: { plantId } }).catch(() => 0),
+        safeCount(prisma.area, { plantId }),
+        safeCount(prisma.equipment, { plantId, deletedAt: null }),
+        safeCount(prisma.technician, { plantId, deletedAt: null }),
+        safeCount(prisma.route, { plantId }),
       ]);
 
       return res.json({

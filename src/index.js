@@ -144,7 +144,6 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
 
   // CORS: Middleware manual robusto que lee headers correctamente incluso con Cloudflare
   app.use((req, res, next) => {
-    // Leer origin del request (con fallback a Origin mayúscula)
     const origin = req.headers.origin || req.headers.Origin || '';
     const allowedOrigins = [
       'http://localhost:5173',
@@ -156,15 +155,20 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
       'https://lubriplan-frontend.vercel.app',
     ];
 
-    // Permitir si no hay origin o si está en la lista de permitidos
-    if (!origin || allowedOrigins.includes(origin)) {
-      res.setHeader('Access-Control-Allow-Origin', origin || '*');
+    const allowed = allowedOrigins.includes(origin);
+
+    if (allowed) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Access-Control-Allow-Credentials', 'true');
-      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,x-plant-id,x-request-id,X-Plant-Id,X-User-Id,x-user-id,Cache-Control,Pragma');
+    } else if (!origin) {
+      // Sin origin (requests del servidor o Cloudflare sin header) — permitir sin credentials
+      res.setHeader('Access-Control-Allow-Origin', 'https://www.lubriplan.com');
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
     }
 
-    // Responder a requests OPTIONS (preflight)
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,x-plant-id,x-request-id');
+
     if (req.method === 'OPTIONS') {
       return res.status(204).end();
     }
