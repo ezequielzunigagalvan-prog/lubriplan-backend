@@ -73,6 +73,11 @@ export default function preventiveOrdersRoutes({ prisma, auth, requireRole }) {
         return res.status(400).json({ error: "PLANT_REQUIRED", data: [], total: 0, page: 1, limit });
       }
 
+      // Guard: si prisma.preventiveOrder undefined, retornar array vacío (tabla aún no creada)
+      if (!prisma.preventiveOrder) {
+        return res.json({ data: [], total: 0, page: Number(page), limit: Number(limit) });
+      }
+
       const where = { plantId };
       if (status) where.status = status;
       if (equipmentId) where.equipmentId = Number(equipmentId);

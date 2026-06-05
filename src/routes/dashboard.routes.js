@@ -1177,6 +1177,15 @@ export default function dashboardRoutes({
       const plantId = req.currentPlantId;
       if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
 
+      // Guard: si prisma.preventiveOrder undefined, retornar null (tabla aún no creada)
+      if (!prisma.preventiveOrder) {
+        return res.json({
+          ok: true,
+          progress: { areas: 0, equipments: 0, technicians: 0, routes: 0 },
+          completed: false,
+        });
+      }
+
       const [areas, equipments, technicians, routes] = await Promise.all([
         prisma.area.count({ where: { plantId } }).catch(() => 0),
         prisma.equipment.count({ where: { plantId, deletedAt: null } }).catch(() => 0),
