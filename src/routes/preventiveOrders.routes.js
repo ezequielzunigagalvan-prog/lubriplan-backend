@@ -79,10 +79,16 @@ export default function preventiveOrdersRoutes({ prisma, auth, requireRole }) {
       const page = parseInt(req.query.page) || 1;
       const limit = parseInt(req.query.limit) || 20;
       const skip = (page - 1) * limit;
+      const status = req.query.status || null;
+
+      const where = {
+        plantId,
+        ...(status && { status }),
+      };
 
       const [orders, total] = await Promise.all([
         prisma.preventiveOrder.findMany({
-          where: { plantId },
+          where,
           select: {
             id: true,
             title: true,
@@ -98,7 +104,7 @@ export default function preventiveOrdersRoutes({ prisma, auth, requireRole }) {
           skip,
           take: limit,
         }),
-        prisma.preventiveOrder.count({ where: { plantId } }),
+        prisma.preventiveOrder.count({ where }),
       ]);
 
       const ordersWithProgress = await Promise.all(
