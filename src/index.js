@@ -208,21 +208,27 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
   });
 
   app.post('/api/preventive-orders', requireAuth, async (req, res) => {
+    const t0 = Date.now();
     try {
       res.setHeader('Access-Control-Allow-Origin', 'https://www.lubriplan.com');
       res.setHeader('Access-Control-Allow-Credentials', 'true');
       const plantId = req.currentPlantId || parseInt(req.headers['x-plant-id']);
       const { equipmentId, scheduledDate, title, notes, assignedTo } = req.body;
 
+      console.log('[OLP POST] Iniciando, equipmentId:', equipmentId, 'plantId:', plantId);
+
       if (!equipmentId || !scheduledDate) {
         return res.status(400).json({ error: 'Equipo y fecha son requeridos' });
       }
 
+      const t1 = Date.now();
       const routes = await prisma.route.findMany({
         where: { equipmentId: parseInt(equipmentId), plantId },
         select: { id: true, name: true }
       });
+      console.log('[OLP POST] Routes encontradas:', routes.length, 'en', Date.now()-t1, 'ms');
 
+      const t2 = Date.now();
       const order = await prisma.preventiveOrder.create({
         data: {
           plantId,
@@ -243,6 +249,7 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
         },
         include: { items: true }
       });
+      console.log('[OLP POST] Orden creada en', Date.now()-t2, 'ms. Total:', Date.now()-t0, 'ms');
 
       return res.status(201).json(order);
     } catch (err) {
