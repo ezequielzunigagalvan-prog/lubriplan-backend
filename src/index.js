@@ -203,6 +203,51 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
     return res.json({ data: [], total: 0, page: 1, totalPages: 0 });
   });
 
+  app.post('/api/preventive-orders', requireAuth, async (req, res) => {
+    try {
+      res.setHeader('Access-Control-Allow-Origin', 'https://www.lubriplan.com');
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      const plantId = req.currentPlantId || parseInt(req.headers['x-plant-id']);
+      const { equipmentId, scheduledDate, title, notes, assignedTo } = req.body;
+
+      if (!equipmentId || !scheduledDate) {
+        return res.status(400).json({ error: 'Equipo y fecha son requeridos' });
+      }
+
+      const routes = await prisma.route.findMany({
+        where: { equipmentId: parseInt(equipmentId), plantId },
+        select: { id: true, name: true }
+      });
+
+      const order = await prisma.preventiveOrder.create({
+        data: {
+          plantId,
+          equipmentId: parseInt(equipmentId),
+          title: title || `Preventivo ${new Date(scheduledDate).toLocaleDateString('es-MX')}`,
+          scheduledDate: new Date(scheduledDate),
+          status: 'DRAFT',
+          createdBy: req.user.id,
+          assignedTo: assignedTo ? parseInt(assignedTo) : null,
+          notes: notes || null,
+          requiresPhoto: false,
+          items: {
+            create: routes.map((route, index) => ({
+              routeId: route.id,
+              status: 'PENDING',
+              order: index,
+            }))
+          }
+        },
+        include: { items: true }
+      });
+
+      return res.status(201).json(order);
+    } catch (err) {
+      console.error('[OLP] Error POST:', err.message);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
   // 3) Body parsers
   app.use(express.json({ limit: "20mb" }));
   app.use(express.urlencoded({ extended: true, limit: "20mb" }));
