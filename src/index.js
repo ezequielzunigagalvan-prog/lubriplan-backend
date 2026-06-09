@@ -188,6 +188,21 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
     next();
   });
 
+  // TEST: Endpoints hardcoded para diagnosticar CORS
+  app.options('/api/preventive-orders', (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', 'https://www.lubriplan.com');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,x-plant-id,x-request-id');
+    res.status(204).end();
+  });
+
+  app.get('/api/preventive-orders', (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', 'https://www.lubriplan.com');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    return res.json({ data: [], total: 0, page: 1, totalPages: 0 });
+  });
+
   // 3) Body parsers
   app.use(express.json({ limit: "20mb" }));
   app.use(express.urlencoded({ extended: true, limit: "20mb" }));
