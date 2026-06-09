@@ -188,6 +188,10 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
     next();
   });
 
+  // 3) Body parsers
+  app.use(express.json({ limit: "20mb" }));
+  app.use(express.urlencoded({ extended: true, limit: "20mb" }));
+
   // TEST: Endpoints hardcoded para diagnosticar CORS
   app.options('/api/preventive-orders', (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', 'https://www.lubriplan.com');
@@ -247,10 +251,6 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
       return res.status(500).json({ error: err.message });
     }
   });
-
-  // 3) Body parsers
-  app.use(express.json({ limit: "20mb" }));
-  app.use(express.urlencoded({ extended: true, limit: "20mb" }));
 
   // 3b) Request ID — adjunta x-request-id a cada request para trazabilidad en logs
   app.use(requestId);
