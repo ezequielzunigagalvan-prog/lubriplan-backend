@@ -235,10 +235,9 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
           notes: notes || null,
           requiresPhoto: false,
           items: {
-            create: routes.map((route, index) => ({
+            create: routes.map((route) => ({
               routeId: route.id,
               status: 'PENDING',
-              order: index,
             }))
           }
         },
