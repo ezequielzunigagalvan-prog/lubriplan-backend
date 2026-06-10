@@ -318,7 +318,7 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
   });
 
   // ── DELETE /api/preventive-orders/:id ──
-  app.delete('/api/preventive-orders/:id', requireAuth, async (req, res) => {
+  app.delete('/api/preventive-orders/:id', requireAuth, requireRole(['ADMIN', 'SUPERVISOR']), async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', req.headers.origin || 'https://www.lubriplan.com');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     try {
@@ -339,18 +339,22 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
   });
 
   // ── POST /api/preventive-orders/:id/open ──
-  app.post('/api/preventive-orders/:id/open', requireAuth, async (req, res) => {
+  app.post('/api/preventive-orders/:id/open', requireAuth, requireRole(['ADMIN', 'SUPERVISOR']), async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', req.headers.origin || 'https://www.lubriplan.com');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     try {
       const { id } = req.params;
       const plantId = req.currentPlantId || parseInt(req.headers['x-plant-id']);
-      const order = await prisma.preventiveOrder.update({
+      const order = await prisma.preventiveOrder.findFirst({
+        where: { id: parseInt(id), plantId }
+      });
+      if (!order) return res.status(404).json({ error: 'Orden no encontrada' });
+      const updated = await prisma.preventiveOrder.update({
         where: { id: parseInt(id) },
         data: { status: 'OPEN' },
         include: { items: true }
       });
-      return res.json(order);
+      return res.json(updated);
     } catch (err) {
       console.error('[OLP OPEN] Error:', err.message);
       return res.status(500).json({ error: err.message });
