@@ -221,7 +221,13 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
       const page = parseInt(req.query.page) || 1;
       const limit = parseInt(req.query.limit) || 20;
       const status = req.query.status || undefined;
-      const where = { plantId, ...(status ? { status } : {}) };
+      const userRole = req.user?.role;
+      const userId = req.user?.id;
+
+      let where = { plantId, ...(status ? { status } : {}) };
+      if (userRole === 'TECHNICIAN') {
+        where = { ...where, OR: [{ assignedTo: userId }, { assignedTo: null }] };
+      }
       const [orders, total] = await Promise.all([
         prisma.preventiveOrder.findMany({
           where,
@@ -307,6 +313,46 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
       return res.status(201).json(order);
     } catch (err) {
       console.error('[OLP] Error POST:', err.message);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── DELETE /api/preventive-orders/:id ──
+  app.delete('/api/preventive-orders/:id', requireAuth, async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', req.headers.origin || 'https://www.lubriplan.com');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    try {
+      const { id } = req.params;
+      const plantId = req.currentPlantId || parseInt(req.headers['x-plant-id']);
+      const order = await prisma.preventiveOrder.findFirst({
+        where: { id: parseInt(id), plantId }
+      });
+      if (!order) return res.status(404).json({ error: 'Orden no encontrada' });
+      if (order.status !== 'DRAFT') return res.status(400).json({ error: 'Solo se pueden eliminar borradores' });
+      await prisma.preventiveOrderItem.deleteMany({ where: { preventiveOrderId: parseInt(id) } });
+      await prisma.preventiveOrder.delete({ where: { id: parseInt(id) } });
+      return res.json({ ok: true });
+    } catch (err) {
+      console.error('[OLP DELETE] Error:', err.message);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── POST /api/preventive-orders/:id/open ──
+  app.post('/api/preventive-orders/:id/open', requireAuth, async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', req.headers.origin || 'https://www.lubriplan.com');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    try {
+      const { id } = req.params;
+      const plantId = req.currentPlantId || parseInt(req.headers['x-plant-id']);
+      const order = await prisma.preventiveOrder.update({
+        where: { id: parseInt(id) },
+        data: { status: 'OPEN' },
+        include: { items: true }
+      });
+      return res.json(order);
+    } catch (err) {
+      console.error('[OLP OPEN] Error:', err.message);
       return res.status(500).json({ error: err.message });
     }
   });
