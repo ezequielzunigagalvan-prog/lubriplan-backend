@@ -201,12 +201,6 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
     res.status(204).end();
   });
 
-  app.get('/api/preventive-orders', (req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', 'https://www.lubriplan.com');
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-    return res.json({ data: [], total: 0, page: 1, totalPages: 0 });
-  });
-
   app.post('/api/preventive-orders', requireAuth, async (req, res) => {
     const t0 = Date.now();
     try {
