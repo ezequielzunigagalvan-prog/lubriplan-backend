@@ -192,19 +192,78 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
   app.use(express.json({ limit: "20mb" }));
   app.use(express.urlencoded({ extended: true, limit: "20mb" }));
 
-  // TEST: Endpoints hardcoded para diagnosticar CORS
+  // ── OPTIONS preflight para preventive-orders ──
   app.options('/api/preventive-orders', (req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', 'https://www.lubriplan.com');
+    res.setHeader('Access-Control-Allow-Origin', req.headers.origin || 'https://www.lubriplan.com');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,x-plant-id,x-request-id');
     res.status(204).end();
   });
 
+  app.options('/api/preventive-orders/:id', (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', req.headers.origin || 'https://www.lubriplan.com');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,x-plant-id,x-request-id');
+    res.status(204).end();
+  });
+
+  // ── GET /api/preventive-orders ──
+  app.get('/api/preventive-orders', requireAuth, async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', req.headers.origin || 'https://www.lubriplan.com');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    try {
+      const plantId = req.currentPlantId || parseInt(req.headers['x-plant-id']);
+      if (!plantId || !prisma.preventiveOrder) {
+        return res.json({ data: [], total: 0, page: 1, totalPages: 0 });
+      }
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit) || 20;
+      const status = req.query.status || undefined;
+      const where = { plantId, ...(status ? { status } : {}) };
+      const [orders, total] = await Promise.all([
+        prisma.preventiveOrder.findMany({
+          where,
+          select: {
+            id: true,
+            title: true,
+            status: true,
+            scheduledDate: true,
+            completedAt: true,
+            createdAt: true,
+            requiresPhoto: true,
+            notes: true,
+            equipment: { select: { id: true, name: true } },
+            assignedToUser: { select: { id: true, name: true } },
+            _count: { select: { items: true } },
+          },
+          orderBy: { createdAt: 'desc' },
+          skip: (page - 1) * limit,
+          take: limit,
+        }),
+        prisma.preventiveOrder.count({ where }),
+      ]);
+      const ordersWithProgress = await Promise.all(
+        orders.map(async (order) => {
+          const completed = await prisma.preventiveOrderItem.count({
+            where: { preventiveOrderId: order.id, status: 'COMPLETED' }
+          });
+          return { ...order, progress: { completed, total: order._count.items } };
+        })
+      );
+      return res.json({ data: ordersWithProgress, total, page, totalPages: Math.ceil(total / limit) });
+    } catch (err) {
+      console.error('[OLP GET] Error:', err.message);
+      return res.json({ data: [], total: 0, page: 1, totalPages: 0 });
+    }
+  });
+
+  // ── POST /api/preventive-orders ──
   app.post('/api/preventive-orders', requireAuth, async (req, res) => {
     const t0 = Date.now();
     try {
-      res.setHeader('Access-Control-Allow-Origin', 'https://www.lubriplan.com');
+      res.setHeader('Access-Control-Allow-Origin', req.headers.origin || 'https://www.lubriplan.com');
       res.setHeader('Access-Control-Allow-Credentials', 'true');
       const plantId = req.currentPlantId || parseInt(req.headers['x-plant-id']);
       const { equipmentId, scheduledDate, title, notes, assignedTo } = req.body;
@@ -381,7 +440,8 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
   app.use("/api", auditLogRoutes({ prisma, auth: requireAuth, requireRole }));
   app.use("/api", webhooksRoutes({ prisma, auth: requireAuth, requireRole }));
   app.use("/api", lubricationCardsRoutes({ prisma, auth: requireAuth, requireRole }));
-  app.use("/api/preventive-orders", preventiveOrdersRoutes({ prisma, auth: requireAuth, requireRole }));
+  // DESHABILITADO: usando endpoints hardcodeados abajo en su lugar
+  // app.use("/api/preventive-orders", preventiveOrdersRoutes({ prisma, auth: requireAuth, requireRole }));
 
   app.use("/api", realtimeRoutes({ auth: requireAuth }));
 
