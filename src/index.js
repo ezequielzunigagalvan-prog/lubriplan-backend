@@ -401,6 +401,50 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
     }
   });
 
+  // ── GET /api/preventive-orders/:id ──
+  app.get('/api/preventive-orders/:id', requireAuth, async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', req.headers.origin || 'https://www.lubriplan.com');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    try {
+      const { id } = req.params;
+      const plantId = req.currentPlantId || parseInt(req.headers['x-plant-id']);
+
+      const order = await prisma.preventiveOrder.findUnique({
+        where: { id: parseInt(id) },
+        include: {
+          plant: { select: { name: true } },
+          equipment: { select: { id: true, name: true, code: true } },
+          createdByUser: { select: { id: true, name: true } },
+          assignedToUser: { select: { id: true, name: true } },
+          items: {
+            include: {
+              route: {
+                select: {
+                  id: true,
+                  name: true,
+                  frequencyType: true,
+                  weeklyDays: true,
+                  lastDate: true,
+                  nextDate: true,
+                },
+              },
+              completedByUser: { select: { name: true } },
+            },
+          },
+        },
+      });
+
+      if (!order || order.plantId !== plantId) {
+        return res.status(404).json({ error: "Orden no encontrada" });
+      }
+
+      return res.json(order);
+    } catch (err) {
+      console.error('[OLP GET DETAIL] Error:', err.message);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
   // 3b) Request ID — adjunta x-request-id a cada request para trazabilidad en logs
   app.use(requestId);
 
