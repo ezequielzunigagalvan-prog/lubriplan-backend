@@ -220,12 +220,23 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
       }
       const page = parseInt(req.query.page) || 1;
       const limit = parseInt(req.query.limit) || 20;
-      const status = req.query.status || undefined;
+      const statusParam = req.query.status || undefined;
       const assignedTo = req.query.assignedTo ? parseInt(req.query.assignedTo) : undefined;
 
-      let where = { plantId, ...(status ? { status } : {}) };
+      let where = { plantId };
+
+      // Parsear status: puede ser "DRAFT" o "OPEN,IN_PROGRESS"
+      if (statusParam) {
+        const statuses = statusParam.split(',').map(s => s.trim());
+        if (statuses.length > 1) {
+          where.status = { in: statuses };
+        } else {
+          where.status = statuses[0];
+        }
+      }
+
       if (assignedTo) {
-        where = { ...where, assignedTo };
+        where.assignedTo = assignedTo;
       }
       const [orders, total] = await Promise.all([
         prisma.preventiveOrder.findMany({
