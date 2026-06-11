@@ -221,12 +221,11 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
       const page = parseInt(req.query.page) || 1;
       const limit = parseInt(req.query.limit) || 20;
       const status = req.query.status || undefined;
-      const userRole = req.user?.role;
-      const userId = req.user?.id;
+      const assignedTo = req.query.assignedTo ? parseInt(req.query.assignedTo) : undefined;
 
       let where = { plantId, ...(status ? { status } : {}) };
-      if (userRole === 'TECHNICIAN') {
-        where = { ...where, OR: [{ assignedTo: userId }, { assignedTo: null }] };
+      if (assignedTo) {
+        where = { ...where, assignedTo };
       }
       const [orders, total] = await Promise.all([
         prisma.preventiveOrder.findMany({
@@ -361,6 +360,36 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
     }
   });
 
+  // ── PUT /api/preventive-orders/:id/start ──
+  app.put('/api/preventive-orders/:id/start', requireAuth, async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', req.headers.origin || 'https://www.lubriplan.com');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    try {
+      const { id } = req.params;
+      const { assignedTo } = req.body;
+      const plantId = req.currentPlantId || parseInt(req.headers['x-plant-id']);
+
+      if (!assignedTo) {
+        return res.status(400).json({ error: 'assignedTo es requerido' });
+      }
+
+      const order = await prisma.preventiveOrder.findFirst({
+        where: { id: parseInt(id), plantId }
+      });
+      if (!order) return res.status(404).json({ error: 'Orden no encontrada' });
+
+      const updated = await prisma.preventiveOrder.update({
+        where: { id: parseInt(id) },
+        data: { status: 'IN_PROGRESS', assignedTo: parseInt(assignedTo) },
+        include: { assignedToUser: { select: { id: true, name: true } } }
+      });
+      return res.json(updated);
+    } catch (err) {
+      console.error('[OLP START] Error:', err.message);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
   // 3b) Request ID — adjunta x-request-id a cada request para trazabilidad en logs
   app.use(requestId);
 
@@ -490,7 +519,7 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
   app.use("/api", auditLogRoutes({ prisma, auth: requireAuth, requireRole }));
   app.use("/api", webhooksRoutes({ prisma, auth: requireAuth, requireRole }));
   app.use("/api", lubricationCardsRoutes({ prisma, auth: requireAuth, requireRole }));
-  // DESHABILITADO: usando endpoints hardcodeados abajo en su lugar
+  // DESHABILITADO: usando endpoints hardcodeados arriba (líneas ~212-362)
   // app.use("/api/preventive-orders", preventiveOrdersRoutes({ prisma, auth: requireAuth, requireRole }));
 
   app.use("/api", realtimeRoutes({ auth: requireAuth }));
