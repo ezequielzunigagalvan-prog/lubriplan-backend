@@ -409,7 +409,7 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
       const { id, itemId } = req.params;
       const { status = 'COMPLETED', observations = '', photoUrl = null } = req.body;
       const plantId = req.currentPlantId || parseInt(req.headers['x-plant-id']);
-      const userId = req.user?.id;
+      const technicianId = req.user?.technicianId ? Number(req.user.technicianId) : null;
 
       const order = await prisma.preventiveOrder.findFirst({
         where: { id: parseInt(id), plantId }
@@ -428,7 +428,7 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
           observations: observations || null,
           photoUrl: photoUrl || null,
           completedAt: status === 'COMPLETED' ? new Date() : null,
-          completedBy: status === 'COMPLETED' ? userId : null,
+          completedBy: status === 'COMPLETED' ? technicianId : null,
         },
         include: {
           completedByUser: { select: { name: true } },
