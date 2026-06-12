@@ -401,6 +401,149 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
     }
   });
 
+  // ── PUT /api/preventive-orders/:id/items/:itemId ──
+  app.put('/api/preventive-orders/:id/items/:itemId', requireAuth, async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', req.headers.origin || 'https://www.lubriplan.com');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    try {
+      const { id, itemId } = req.params;
+      const { status = 'COMPLETED', observations = '', photoUrl = null } = req.body;
+      const plantId = req.currentPlantId || parseInt(req.headers['x-plant-id']);
+      const userId = req.user?.id;
+
+      const order = await prisma.preventiveOrder.findFirst({
+        where: { id: parseInt(id), plantId }
+      });
+      if (!order) return res.status(404).json({ error: 'Orden no encontrada' });
+
+      const item = await prisma.preventiveOrderItem.findFirst({
+        where: { id: parseInt(itemId), preventiveOrderId: parseInt(id) }
+      });
+      if (!item) return res.status(404).json({ error: 'Item no encontrado' });
+
+      const updatedItem = await prisma.preventiveOrderItem.update({
+        where: { id: parseInt(itemId) },
+        data: {
+          status,
+          observations: observations || null,
+          photoUrl: photoUrl || null,
+          completedAt: status === 'COMPLETED' ? new Date() : null,
+          completedBy: status === 'COMPLETED' ? userId : null,
+        },
+        include: {
+          completedByUser: { select: { name: true } },
+          route: { select: { name: true } }
+        }
+      });
+
+      // Verificar si todos los items están completados
+      const pendingItems = await prisma.preventiveOrderItem.count({
+        where: { preventiveOrderId: parseInt(id), status: { not: 'COMPLETED' } }
+      });
+
+      // Si todos están completados, actualizar orden automáticamente
+      if (pendingItems === 0) {
+        await prisma.preventiveOrder.update({
+          where: { id: parseInt(id) },
+          data: { status: 'COMPLETED', completedAt: new Date() }
+        });
+      }
+
+      return res.json(updatedItem);
+    } catch (err) {
+      console.error('[OLP COMPLETE ITEM] Error:', err.message);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── PUT /api/preventive-orders/:id/complete ──
+  app.put('/api/preventive-orders/:id/complete', requireAuth, async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', req.headers.origin || 'https://www.lubriplan.com');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    try {
+      const { id } = req.params;
+      const { signatureImage } = req.body;
+      const plantId = req.currentPlantId || parseInt(req.headers['x-plant-id']);
+
+      const order = await prisma.preventiveOrder.findFirst({
+        where: { id: parseInt(id), plantId }
+      });
+      if (!order) return res.status(404).json({ error: 'Orden no encontrada' });
+
+      const completedOrder = await prisma.preventiveOrder.update({
+        where: { id: parseInt(id) },
+        data: {
+          status: 'COMPLETED'
+        },
+        include: {
+          items: {
+            include: {
+              route: { select: { id: true, name: true, frequencyType: true, frequencyDays: true, weeklyDays: true, monthlyAnchorDay: true } }
+            }
+          }
+        }
+      });
+
+      // Reprogramar rutas automáticamente basándose en su frecuencia
+      for (const item of completedOrder.items) {
+        if (item.route && item.route.frequencyType) {
+          // Obtener ruta completa con información de frecuencia
+          const fullRoute = await prisma.route.findUnique({
+            where: { id: item.route.id },
+            select: {
+              id: true,
+              name: true,
+              frequencyType: true,
+              frequencyDays: true,
+              weeklyDays: true,
+              monthlyAnchorDay: true,
+              lastDate: true,
+              nextDate: true
+            }
+          });
+
+          if (fullRoute) {
+            // Calcular próxima fecha usando la función de scheduling
+            const nextDate = resolveNextRouteDate({
+              lastDate: new Date(),
+              nextDate: null,
+              frequencyDays: fullRoute.frequencyDays,
+              frequencyType: fullRoute.frequencyType,
+              weeklyDays: fullRoute.weeklyDays,
+              monthlyAnchorDay: fullRoute.monthlyAnchorDay
+            });
+
+            if (nextDate) {
+              // Crear nueva orden preventiva para la próxima ejecución
+              await prisma.preventiveOrder.create({
+                data: {
+                  plantId,
+                  equipmentId: completedOrder.equipmentId,
+                  scheduledDate: nextDate,
+                  title: completedOrder.title,
+                  notes: `Reprogramada automáticamente desde orden #${id}`,
+                  status: 'DRAFT',
+                  createdBy: completedOrder.createdBy,
+                  items: {
+                    create: {
+                      routeId: item.route.id,
+                      status: 'PENDING'
+                    }
+                  }
+                }
+              });
+            }
+          }
+        }
+      }
+
+      return res.json(completedOrder);
+    } catch (err) {
+      console.error('[OLP COMPLETE] Error:', err.message);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
   // ── GET /api/preventive-orders/:id ──
   app.get('/api/preventive-orders/:id', requireAuth, async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', req.headers.origin || 'https://www.lubriplan.com');
