@@ -484,21 +484,18 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
         }
       });
 
-      // Reprogramar rutas automáticamente basándose en su frecuencia
+      // Actualizar información de ejecución en las rutas
       for (const item of completedOrder.items) {
-        if (item.route && item.route.frequencyType) {
+        if (item.route) {
           // Obtener ruta completa con información de frecuencia
           const fullRoute = await prisma.route.findUnique({
             where: { id: item.route.id },
             select: {
               id: true,
-              name: true,
               frequencyType: true,
               frequencyDays: true,
               weeklyDays: true,
-              monthlyAnchorDay: true,
-              lastDate: true,
-              nextDate: true
+              monthlyAnchorDay: true
             }
           });
 
@@ -513,26 +510,14 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
               monthlyAnchorDay: fullRoute.monthlyAnchorDay
             });
 
-            if (nextDate) {
-              // Crear nueva orden preventiva para la próxima ejecución
-              await prisma.preventiveOrder.create({
-                data: {
-                  plantId,
-                  equipmentId: completedOrder.equipmentId,
-                  scheduledDate: nextDate,
-                  title: completedOrder.title,
-                  notes: `Reprogramada automáticamente desde orden #${id}`,
-                  status: 'DRAFT',
-                  createdBy: completedOrder.createdBy,
-                  items: {
-                    create: {
-                      routeId: item.route.id,
-                      status: 'PENDING'
-                    }
-                  }
-                }
-              });
-            }
+            // Actualizar ruta con nueva información de ejecución
+            await prisma.route.update({
+              where: { id: item.route.id },
+              data: {
+                lastDate: new Date(),
+                nextDate: nextDate || undefined
+              }
+            });
           }
         }
       }
