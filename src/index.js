@@ -551,7 +551,13 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
                 select: {
                   id: true,
                   name: true,
+                  lubricant: true,
+                  quantity: true,
+                  unit: true,
                   frequencyType: true,
+                  frequency: true,
+                  method: true,
+                  instructions: true,
                   weeklyDays: true,
                   lastDate: true,
                   nextDate: true,
