@@ -154,6 +154,7 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
       'https://app.lubriplan.com',
       'https://api.lubriplan.com',
       'https://lubriplan-frontend.vercel.app',
+      'https://lubriplan-frontend-hlrw2zysu-lubriplan.vercel.app',
     ];
 
     const allowed = allowedOrigins.includes(origin);
