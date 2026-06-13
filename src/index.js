@@ -437,6 +437,127 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
         }
       });
 
+      // ═══════════════════════════════════════════════════════════════════
+      // CREAR EJECUCIÓN REAL CUANDO ITEM SE MARCA COMO COMPLETADO
+      // ═══════════════════════════════════════════════════════════════════
+      if (status === 'COMPLETED') {
+        try {
+          // Obtener datos completos del item con su ruta
+          const fullItem = await prisma.preventiveOrderItem.findUnique({
+            where: { id: parseInt(itemId) },
+            include: {
+              route: {
+                include: {
+                  equipment: true,
+                  lubricant: true,
+                }
+              }
+            }
+          });
+
+          if (fullItem?.route) {
+            const route = fullItem.route;
+
+            // 1) CREAR EJECUCIÓN REAL
+            const execution = await prisma.execution.create({
+              data: {
+                plantId,
+                routeId: route.id,
+                equipmentId: route.equipmentId,
+                technicianId: technicianId || null,
+                origin: 'MANUAL',
+                sourceType: 'OLP',
+                status: 'COMPLETED',
+                scheduledAt: order.scheduledDate || new Date(),
+                executedAt: new Date(),
+                observations: observations || null,
+                evidenceImage: photoUrl || null,
+                evidenceNote: `Ejecutado desde Orden Preventiva #${id}`,
+                condition: 'NORMAL',
+                usedQuantity: route.quantity || null,
+                usedInputQuantity: route.quantity || null,
+                usedInputUnit: route.unit || null,
+                usedConvertedQuantity: route.quantity || null,
+                usedConvertedUnit: route.unit || null,
+                inventoryDeductedAt: new Date(),
+              }
+            });
+
+            console.log(`[OLP] Ejecución creada #${execution.id} para ruta #${route.id}`);
+
+            // 2) CREAR MOVIMIENTO DE INVENTARIO SI HAY LUBRICANTE
+            if (route.lubricantId && route.quantity) {
+              try {
+                const lubricant = await prisma.lubricant.findUnique({
+                  where: { id: route.lubricantId },
+                  select: { id: true, stock: true, unit: true }
+                });
+
+                if (lubricant) {
+                  const stockBefore = lubricant.stock || 0;
+                  const stockAfter = Math.max(0, stockBefore - route.quantity);
+
+                  await prisma.lubricantMovement.create({
+                    data: {
+                      lubricantId: route.lubricantId,
+                      executionId: execution.id,
+                      type: 'OUT',
+                      quantity: route.quantity,
+                      inputQuantity: route.quantity,
+                      inputUnit: route.unit || null,
+                      convertedQuantity: route.quantity,
+                      convertedUnit: route.unit || null,
+                      reason: 'EXECUTION',
+                      note: `OLP #${id} - ${route.name}`,
+                      stockBefore,
+                      stockAfter,
+                    }
+                  });
+
+                  // Actualizar stock en lubricante
+                  await prisma.lubricant.update({
+                    where: { id: route.lubricantId },
+                    data: { stock: stockAfter }
+                  });
+
+                  console.log(`[OLP] Inventario actualizado: ${route.lubricantName} ${stockBefore} → ${stockAfter}`);
+                }
+              } catch (invErr) {
+                console.error('[OLP] Error actualizando inventario:', invErr.message);
+                // No falla el flujo principal si inventario falla
+              }
+            }
+
+            // 3) REPROGRAMAR LA RUTA (actualizar lastDate y nextDate)
+            try {
+              const nextDate = resolveNextRouteDate({
+                lastDate: new Date(),
+                frequencyDays: route.frequencyDays,
+                frequencyType: route.frequencyType,
+                weeklyDays: Array.isArray(route.weeklyDays) ? route.weeklyDays : [],
+                monthlyAnchorDay: route.monthlyAnchorDay,
+                customIntervalDays: route.customIntervalDays,
+              });
+
+              await prisma.route.update({
+                where: { id: route.id },
+                data: {
+                  lastDate: new Date(),
+                  nextDate: nextDate || undefined,
+                }
+              });
+
+              console.log(`[OLP] Ruta reprogramada: #${route.id} próxima ejecución ${nextDate?.toLocaleDateString()}`);
+            } catch (schedErr) {
+              console.error('[OLP] Error reprogramando ruta:', schedErr.message);
+            }
+          }
+        } catch (execErr) {
+          console.error('[OLP] Error creando ejecución real:', execErr.message);
+          // No falla el flujo principal si la ejecución falla
+        }
+      }
+
       // Verificar si todos los items están completados
       const pendingItems = await prisma.preventiveOrderItem.count({
         where: { preventiveOrderId: parseInt(id), status: { not: 'COMPLETED' } }
