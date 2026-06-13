@@ -559,6 +559,7 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
                   frequencyDays: true,
                   method: true,
                   instructions: true,
+                  imageUrl: true,
                   weeklyDays: true,
                   lastDate: true,
                   nextDate: true,
