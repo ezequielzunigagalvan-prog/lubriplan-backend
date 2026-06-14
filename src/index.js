@@ -57,6 +57,7 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
     sendOverdueSummaryEmail,
   } from "./services/email/email.service.js";
   import { logAudit, logExecutionStateChange } from "./services/audit.service.js";
+  import { validateStateChangeAllowed } from "./middleware/validateExecutionStateTransition.js";
   import { runOverdueSummaryJob, startOverdueSummaryScheduler } from "./jobs/overdueSummary.job.js";
   import uploadsRoutes from "./routes/uploads.routes.js";
   import exportRoutes from "./routes/export.js";
@@ -7646,6 +7647,16 @@ app.patch(
 
       if (!execution) {
         return res.status(404).json({ error: "Actividad no encontrada" });
+      }
+
+      // Validar transición de estado según máquina de estados
+      const isValidTransition = validateStateChangeAllowed(req, res, execution, "COMPLETED");
+      if (!isValidTransition) {
+        return res.status(400).json({
+          error: "Cambio de estado no permitido",
+          currentStatus: execution.status,
+          attemptedStatus: "COMPLETED",
+        });
       }
 
       if (String(execution.status || "").toUpperCase() === "COMPLETED") {
