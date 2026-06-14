@@ -84,7 +84,19 @@ export default function preventiveOrdersRoutes({ prisma, auth, requireRole }) {
       const where = {
         plantId,
         ...(status && { status }),
+        ...(req.query.assignedTo && { assignedTo: parseInt(req.query.assignedTo) }),
       };
+
+      // Agregar filtro de fecha si se proporciona from y/o to
+      if (req.query.from || req.query.to) {
+        where.completedAt = {};
+        if (req.query.from) {
+          where.completedAt.gte = new Date(req.query.from);
+        }
+        if (req.query.to) {
+          where.completedAt.lte = new Date(req.query.to);
+        }
+      }
 
       const [orders, total] = await Promise.all([
         prisma.preventiveOrder.findMany({
