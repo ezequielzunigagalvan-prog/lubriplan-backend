@@ -56,6 +56,7 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
     sendCriticalActivityEmail,
     sendOverdueSummaryEmail,
   } from "./services/email/email.service.js";
+  import { logAudit, logExecutionStateChange } from "./services/audit.service.js";
   import { runOverdueSummaryJob, startOverdueSummaryScheduler } from "./jobs/overdueSummary.job.js";
   import uploadsRoutes from "./routes/uploads.routes.js";
   import exportRoutes from "./routes/export.js";
@@ -8146,6 +8147,23 @@ app.patch(
       if (!updated) {
         return res.status(500).json({ error: "No se pudo refrescar la actividad completada" });
       }
+
+      // Log auditoría — registro de cambio de estado en Execution
+      logExecutionStateChange({
+        plantId,
+        userId: req.user?.id || null,
+        executionId: updated.id,
+        oldStatus: execution.status,
+        newStatus: "COMPLETED",
+        ip: req.ip,
+        userAgent: req.get("user-agent"),
+        additionalInfo: {
+          condition,
+          observations,
+          routeId: route?.id,
+          equipmentId: updated.equipment?.id,
+        },
+      }).catch((err) => logger.error("[AUDIT] Error al loguear cambio de estado:", err));
 
       if (completionResult?.resolvedConditionReport) {
         const resolvedReport = completionResult.resolvedConditionReport;
