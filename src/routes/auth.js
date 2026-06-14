@@ -11,13 +11,28 @@ import { loginSchema, setPasswordSchema } from "../schemas/index.js";
 
 const router = express.Router();
 
-const loginRateLimiter = rateLimit({
+// Rate limiter por email (previene ataques contra cuenta específica)
+const loginRateLimiterByEmail = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: (req) => req.body?.email?.toLowerCase() || req.ip,
   message: { error: "Demasiados intentos. Intenta nuevamente en 15 minutos." },
 });
+
+// Rate limiter por IP (previene ataques distribuidos)
+const loginRateLimiterByIP = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20, // máximo 20 intentos por IP en 15 minutos (más permisivo que por email)
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => !req.ip, // si no hay IP, no limitar
+  message: { error: "Demasiadas solicitudes desde esta IP. Intenta nuevamente en 15 minutos." },
+});
+
+// Combinar ambos limitadores
+const loginRateLimiter = [loginRateLimiterByIP, loginRateLimiterByEmail];
 
 // ===== SET PASSWORD (ADMIN ONLY) =====
 router.post("/set-password", requireAuth, requireRole(["ADMIN"]), validate(setPasswordSchema), async (req, res) => {

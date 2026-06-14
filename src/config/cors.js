@@ -15,7 +15,17 @@ const corsOptions = {
   origin(origin, callback) {
     logger.info("[CORS] Origin recibido:", origin);
 
-    if (!origin) return callback(null, true);
+    // En desarrollo sin origin (ej: requests del servidor) se permite
+    // En producción (CORS_STRICT=true) se rechaza
+    if (!origin) {
+      const isStrict = process.env.CORS_STRICT === "true";
+      const isDev = process.env.NODE_ENV !== "production";
+
+      if (isStrict || !isDev) {
+        return callback(new Error("Origin header requerido (CSRF protection)"));
+      }
+      return callback(null, true);
+    }
 
     if (
       allowedOrigins.includes(origin) ||
