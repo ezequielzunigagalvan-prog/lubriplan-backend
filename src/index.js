@@ -58,6 +58,7 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
   } from "./services/email/email.service.js";
   import { logAudit, logExecutionStateChange } from "./services/audit.service.js";
   import { validateStateChangeAllowed } from "./middleware/validateExecutionStateTransition.js";
+  import { validateFileMimeType } from "./utils/mimeValidator.js";
   import { runOverdueSummaryJob, startOverdueSummaryScheduler } from "./jobs/overdueSummary.job.js";
   import uploadsRoutes from "./routes/uploads.routes.js";
   import exportRoutes from "./routes/export.js";
@@ -7721,6 +7722,34 @@ app.patch(
 
       const evidenceNote =
         req.body?.evidenceNote != null ? String(req.body.evidenceNote).trim() : null;
+
+      // Validar MIME type de evidencia si se proporciona
+      if (evidenceImage && evidenceImage.includes("base64")) {
+        // Si es base64, extraer el MIME type declarado
+        const mimeMatch = evidenceImage.match(/data:([^;]+)/);
+        const declaredMimeType = mimeMatch ? mimeMatch[1] : null;
+
+        // Validar que el MIME type esté en la lista permitida
+        const allowedMimes = [
+          "image/jpeg",
+          "image/png",
+          "image/gif",
+          "image/webp",
+          "image/bmp",
+          "image/tiff",
+          "application/pdf",
+          "video/mp4",
+          "video/quicktime",
+        ];
+
+        if (declaredMimeType && !allowedMimes.includes(declaredMimeType)) {
+          return res.status(400).json({
+            error: `Tipo de archivo no permitido: ${declaredMimeType}`,
+            allowedTypes: allowedMimes,
+          });
+        }
+      }
+
       const uploadedEvidence = await normalizeImageInput(evidenceImage, {
         folder: "lubriplan/execution-evidence",
         publicId: `execution_complete_${id}_${Date.now()}_${Math.random()
