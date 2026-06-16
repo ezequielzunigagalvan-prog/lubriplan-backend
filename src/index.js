@@ -7774,10 +7774,22 @@ app.patch(
         return res.status(400).json({ error: "condition invalida" });
       }
 
-      const executedAt =
-        req.body?.executedAt != null
-          ? parseDateOnlyLocal(String(req.body.executedAt).slice(0, 10))
-          : new Date();
+      // Mantener hora real si se proporciona (ISO string o timestamp)
+      // Si solo es fecha (10 chars), usar startOfDay para mantener consistencia
+      let executedAt;
+      if (req.body?.executedAt != null) {
+        const executedAtStr = String(req.body.executedAt).trim();
+
+        // Si incluye 'T' o es un timestamp largo, es un ISO string completo con hora
+        if (executedAtStr.includes('T') || executedAtStr.length > 10) {
+          executedAt = new Date(executedAtStr);
+        } else {
+          // Solo fecha (YYYY-MM-DD) — usar startOfDay para 00:00
+          executedAt = parseDateOnlyLocal(executedAtStr.slice(0, 10));
+        }
+      } else {
+        executedAt = new Date();
+      }
 
       if (!executedAt || Number.isNaN(executedAt.getTime())) {
         return res.status(400).json({ error: "executedAt invalida" });
