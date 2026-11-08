@@ -1003,3 +1003,193 @@ model PreventiveOrderItem {
   @@index([routeId])
   @@index([status])
 }
+
+// =========================
+// MAINTENANCE MODULE (Mt*)
+// =========================
+enum MtWorkOrderType {
+  CORRECTIVE
+  PREVENTIVE
+  INSPECTION
+}
+
+enum MtWorkOrderStatus {
+  REQUESTED
+  REJECTED
+  APPROVED
+  ASSIGNED
+  IN_PROGRESS
+  WAITING_PARTS
+  WAITING_PRODUCTION
+  FINISHED
+  VALIDATED
+  CANCELLED
+}
+
+enum MtWorkOrderPriority {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum MtAssetLevel {
+  AREA
+  LINE
+  EQUIPMENT
+  SUBASSEMBLY
+  COMPONENT
+}
+
+enum MtAssetCriticality {
+  A
+  B
+  C
+}
+
+enum MtAssetStatus {
+  OPERATING
+  STOPPED
+  OUT_OF_SERVICE
+}
+
+model MtPlantAccess {
+  id        Int     @id @default(autoincrement())
+  plantId   Int     @unique
+  enabled   Boolean @default(false)
+  plan      String?
+  enabledAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([plantId])
+}
+
+model MtCounter {
+  id    Int    @id @default(autoincrement())
+  plantId Int
+  key   String
+  value Int    @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([plantId, key])
+  @@index([plantId])
+}
+
+model MtAsset {
+  id           Int            @id @default(autoincrement())
+  plantId      Int
+  parentId     Int?
+  parent       MtAsset?       @relation("AssetHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children     MtAsset[]      @relation("AssetHierarchy")
+
+  level        MtAssetLevel
+  code         String
+  name         String
+  location     String?
+  manufacturer String?
+  model        String?
+  serialNumber String?
+  installedAt  DateTime?
+  criticality  MtAssetCriticality?
+  status       MtAssetStatus      @default(OPERATING)
+  notes        String?
+  deletedAt    DateTime?
+
+  workOrders MtWorkOrder[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([plantId, code])
+  @@index([plantId])
+  @@index([parentId])
+  @@index([level])
+  @@index([deletedAt])
+}
+
+model MtWorkOrder {
+  id           Int                    @id @default(autoincrement())
+  plantId      Int
+  number       Int
+  type         MtWorkOrderType
+  status       MtWorkOrderStatus      @default(REQUESTED)
+  priority     MtWorkOrderPriority    @default(MEDIUM)
+
+  assetId      Int?
+  asset        MtAsset?               @relation(fields: [assetId], references: [id], onDelete: SetNull)
+
+  title        String
+  description  String?
+  requestedBy  Int
+  assignedTo   Int?
+  scheduledAt  DateTime?
+  startedAt    DateTime?
+  finishedAt   DateTime?
+  validatedAt  DateTime?
+  validatedBy  Int?
+
+  diagnosis    String?
+  failureCause String?
+  workDone     String?
+  downtimeMinutes Int?
+
+  version      Int    @default(0)
+  planId       Int?
+  cycleKey     String?
+
+  events       MtWorkOrderEvent[]
+  photos       MtWorkOrderPhoto[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([plantId, number])
+  @@index([plantId])
+  @@index([status])
+  @@index([assetId])
+  @@index([assignedTo])
+  @@index([createdAt])
+  @@index([plantId, status])
+  @@index([plantId, assetId])
+  @@index([plantId, assignedTo])
+  @@index([plantId, createdAt])
+}
+
+model MtWorkOrderEvent {
+  id        Int     @id @default(autoincrement())
+  workOrderId Int
+  workOrder MtWorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  plantId   Int
+
+  fromStatus  MtWorkOrderStatus?
+  toStatus    MtWorkOrderStatus
+  userId      Int
+  comment     String?
+  metadata    Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([workOrderId])
+  @@index([plantId])
+  @@index([createdAt])
+}
+
+model MtWorkOrderPhoto {
+  id        Int     @id @default(autoincrement())
+  workOrderId Int
+  workOrder MtWorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  plantId   Int
+
+  kind       String // BEFORE | AFTER | OTHER
+  url        String
+  publicId   String
+  uploadedBy Int
+  createdAt  DateTime @default(now())
+
+  @@index([workOrderId])
+  @@index([plantId])
+}

@@ -73,6 +73,7 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
   import monthlyReportRoutes from "./routes/monthlyReport.routes.js";
   import lubricationCardsRoutes from "./routes/lubricationCards.routes.js";
   import preventiveOrdersRoutes from "./routes/preventiveOrders.routes.js";
+  import { mountMaintenance } from "./modules/maintenance/index.js";
 
 
 
@@ -774,6 +775,8 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
     runWithTenant({ plantId: req.currentPlantId || null }, () => next());
   });
 
+  // 8) Maintenance module (CMMS)
+  mountMaintenance(app, { prisma });
 
   /* ========= ROUTES PROTEGIDAS ========= */
   app.use("/api/users", requireAuth, usersRouter);

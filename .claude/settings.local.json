@@ -120,7 +120,8 @@
       "Bash(sed -i 's/#070B0F/#070B0F/g; s/#0D1117/#0D1117/g; s/#F4A020/#818cf8/g; s/#E09010/#6366f1/g; s/#1E2D42/#1E2D42/g; s/#F0F4F8/#F0F4F8/g; s/#8899AA/#8899AA/g' src/pages/PreventiveOrderDetail.jsx)",
       "Bash(sed -i 's/#070B0F/#070B0F/g; s/#0D1117/#0D1117/g; s/#F4A020/#818cf8/g; s/#E09010/#6366f1/g; s/#1E2D42/#1E2D42/g; s/#F0F4F8/#F0F4F8/g; s/#8899AA/#8899AA/g' src/pages/PreventiveOrderExecution.jsx)",
       "Bash(grep -n '$transaction\\\\|transaction\\\\|lock' /c/Users/ferga/Documents/lubriplan-backend/src/index.js)",
-      "Bash(grep -n 'prisma.$transaction\\\\|execution.*update\\\\|status.*COMPLETED' /c/Users/ferga/Documents/lubriplan-backend/src/index.js)"
+      "Bash(grep -n 'prisma.$transaction\\\\|execution.*update\\\\|status.*COMPLETED' /c/Users/ferga/Documents/lubriplan-backend/src/index.js)",
+      "PowerShell(Write-Host $summary)"
     ]
   }
 }
