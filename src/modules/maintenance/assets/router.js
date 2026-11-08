@@ -3,6 +3,7 @@ import { z } from "zod";
 import prisma from "../../../prisma.js";
 import { logger } from "../../../config/logger.js";
 import { canDeleteAsset } from "../permissions.js";
+import historyRouter from "./historyRouter.js";
 
 const router = express.Router();
 
@@ -212,5 +213,8 @@ router.delete("/:id", async (req, res) => {
     return res.status(500).json({ error: "Error deleting asset" });
   }
 });
+
+// Mount history subrouter
+router.use(historyRouter);
 
 export default router;
