@@ -16,6 +16,7 @@ import indicatorsRouter from "./indicators/router.js";
 import notificationsRouter from "./notifications/router.js";
 import schedulerRouter from "./scheduler/router.js";
 import analyticsRouter from "./analytics/analyticsRouter.js";
+import reportsRouter from "./reports/reportsRouter.js";
 
 export function mountMaintenance(app, deps) {
   const { prisma } = deps;
@@ -68,6 +69,7 @@ export function mountMaintenance(app, deps) {
   maintenanceRouter.use("/notifications", notificationsRouter);
   maintenanceRouter.use("/scheduler", schedulerRouter);
   maintenanceRouter.use("/analytics", analyticsRouter);
+  maintenanceRouter.use("/reports", reportsRouter);
 
   maintenanceRouter.get("/assignable-users", async (req, res) => {
     try {
