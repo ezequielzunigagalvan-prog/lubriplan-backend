@@ -1100,6 +1100,8 @@ model MtAsset {
   deletedAt    DateTime?
 
   workOrders MtWorkOrder[]
+  plans      MtPlan[]
+  meterReadings MtMeterReading[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1141,8 +1143,13 @@ model MtWorkOrder {
   planId       Int?
   cycleKey     String?
 
+  dueAt        DateTime?
+  sourceWorkOrderId Int?
+  rescheduleCount Int @default(0)
+
   events       MtWorkOrderEvent[]
   photos       MtWorkOrderPhoto[]
+  tasks        MtWorkOrderTask[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1191,5 +1198,168 @@ model MtWorkOrderPhoto {
   createdAt  DateTime @default(now())
 
   @@index([workOrderId])
+  @@index([plantId])
+}
+
+// =========================
+// MAINTENANCE PHASE 2 (Mt*)
+// =========================
+enum MtTriggerType {
+  TIME
+  METER
+}
+
+enum MtScheduleMode {
+  FIXED
+  FLOATING
+}
+
+enum MtTaskKind {
+  CHECK
+  MEASURE
+  TEXT
+}
+
+enum MtTaskResult {
+  OK
+  NOT_OK
+  NA
+}
+
+model MtPlan {
+  id            Int             @id @default(autoincrement())
+  plantId       Int
+  code          String
+  assetId       Int
+  asset         MtAsset         @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  title         String
+  description   String?
+  type          MtWorkOrderType @default(PREVENTIVE)
+  triggerType   MtTriggerType   @default(TIME)
+
+  frequencyUnit String?
+  frequencyEvery Int?
+  meterIntervalHours Float?
+  meterBaseline Float?
+  lastMeterTrigger Float?
+
+  scheduleMode  MtScheduleMode @default(FIXED)
+  anchorDate    DateTime
+  leadDays      Int @default(0)
+  graceDays     Int @default(0)
+
+  priority      MtWorkOrderPriority @default(MEDIUM)
+  defaultAssigneeId Int?
+  estimatedMinutes Int?
+  skipIfOpen    Boolean @default(true)
+
+  active        Boolean @default(true)
+  nextDueAt     DateTime?
+  lastGeneratedAt DateTime?
+  lastCompletedAt DateTime?
+
+  createdBy     Int
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  deletedAt     DateTime?
+
+  tasks         MtPlanTask[]
+  runs          MtPlanRun[]
+
+  @@unique([plantId, code])
+  @@index([plantId])
+  @@index([assetId])
+  @@index([active])
+  @@index([nextDueAt])
+}
+
+model MtPlanTask {
+  id              Int        @id @default(autoincrement())
+  planId          Int
+  plan            MtPlan     @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  position        Int
+  description     String
+  kind            MtTaskKind
+  unit            String?
+  minValue        Float?
+  maxValue        Float?
+  required        Boolean @default(true)
+  createsCorrectiveOnFail Boolean @default(false)
+
+  createdAt       DateTime @default(now())
+
+  @@index([planId])
+}
+
+model MtWorkOrderTask {
+  id              Int        @id @default(autoincrement())
+  workOrderId     Int
+  workOrder       MtWorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  plantId         Int
+
+  position        Int
+  description     String
+  kind            MtTaskKind
+  unit            String?
+  minValue        Float?
+  maxValue        Float?
+  required        Boolean @default(true)
+  createsCorrectiveOnFail Boolean @default(false)
+
+  result          MtTaskResult?
+  valueNumber     Float?
+  valueText       String?
+  note            String?
+  doneBy          Int?
+  doneAt          DateTime?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([workOrderId])
+  @@index([plantId])
+}
+
+model MtMeterReading {
+  id        Int     @id @default(autoincrement())
+  plantId   Int
+  assetId   Int
+  asset     MtAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  value     Float
+  readAt    DateTime
+  source    String @default("MANUAL")
+  isReset   Boolean @default(false)
+  userId    Int
+  note      String?
+
+  createdAt DateTime @default(now())
+
+  @@index([assetId, readAt])
+  @@index([plantId])
+}
+
+model MtPlanRun {
+  id          Int     @id @default(autoincrement())
+  plantId     Int
+  planId      Int
+  plan        MtPlan  @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  runAt       DateTime @default(now())
+  trigger     String
+  dryRun      Boolean @default(false)
+  decision    String
+  cycleKey    String?
+  dueAt       DateTime?
+  workOrderId Int?
+
+  missedCycles Int @default(0)
+  detail      Json?
+
+  createdAt   DateTime @default(now())
+
+  @@index([planId, runAt])
   @@index([plantId])
 }

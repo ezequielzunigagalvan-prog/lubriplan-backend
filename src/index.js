@@ -74,6 +74,7 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
   import lubricationCardsRoutes from "./routes/lubricationCards.routes.js";
   import preventiveOrdersRoutes from "./routes/preventiveOrders.routes.js";
   import { mountMaintenance } from "./modules/maintenance/index.js";
+  import { startMaintenanceScheduler } from "./modules/maintenance/scheduler/index.js";
 
 
 
@@ -938,6 +939,8 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
   });
 
   startMonthlyTechSummaryScheduler({ prisma });
+
+  startMaintenanceScheduler();
 
     /* ========= PROTECCION GLOBAL ========= */
     // Sentry debe capturar excepciones antes del logger
