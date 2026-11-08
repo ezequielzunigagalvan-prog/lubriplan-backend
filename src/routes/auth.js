@@ -1,5 +1,5 @@
 ﻿import express from "express";
-import rateLimit from "express-rate-limit";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import prisma from "../prisma.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
@@ -17,7 +17,7 @@ const loginRateLimiterByEmail = rateLimit({
   max: 10,
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: (req) => req.body?.email?.toLowerCase() || req.ip,
+  keyGenerator: (req) => req.body?.email?.toLowerCase() || ipKeyGenerator(req),
   message: { error: "Demasiados intentos. Intenta nuevamente en 15 minutos." },
 });
 
@@ -27,6 +27,7 @@ const loginRateLimiterByIP = rateLimit({
   max: 20, // máximo 20 intentos por IP en 15 minutos (más permisivo que por email)
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: ipKeyGenerator,
   skip: (req) => !req.ip, // si no hay IP, no limitar
   message: { error: "Demasiadas solicitudes desde esta IP. Intenta nuevamente en 15 minutos." },
 });

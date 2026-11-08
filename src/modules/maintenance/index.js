@@ -14,6 +14,7 @@ import inventoryRouter from "./inventory/router.js";
 import failureCodesRouter from "./failureCodes/router.js";
 import indicatorsRouter from "./indicators/router.js";
 import notificationsRouter from "./notifications/router.js";
+import schedulerRouter from "./scheduler/router.js";
 
 export function mountMaintenance(app, deps) {
   const { prisma } = deps;
@@ -24,8 +25,18 @@ export function mountMaintenance(app, deps) {
 
   app.get("/api/maintenance/me/access", requireAuth, async (req, res) => {
     try {
+      const plantId = req.currentPlantId;
+
+      if (!plantId) {
+        console.error("[DEBUG] currentPlantId is null/undefined", {
+          headers: req.headers,
+          user: req.user?.id,
+        });
+        return res.status(400).json({ error: "PLANT_REQUIRED" });
+      }
+
       const access = await prisma.mtPlantAccess.findUnique({
-        where: { plantId: req.currentPlantId ?? 0 },
+        where: { plantId },
         select: { enabled: true, plan: true },
       });
 
@@ -54,6 +65,7 @@ export function mountMaintenance(app, deps) {
   maintenanceRouter.use("/failure-codes", failureCodesRouter);
   maintenanceRouter.use("/indicators", indicatorsRouter);
   maintenanceRouter.use("/notifications", notificationsRouter);
+  maintenanceRouter.use("/scheduler", schedulerRouter);
 
   maintenanceRouter.get("/assignable-users", async (req, res) => {
     try {

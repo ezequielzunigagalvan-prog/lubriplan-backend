@@ -21,7 +21,7 @@ const router = Router();
 // ============================================================
 
 // POST /api/maintenance/inventory/warehouses
-router.post("/warehouses", requireRole("ADMIN", "SUPERVISOR"), async (req, res) => {
+router.post("/warehouses", requireRole(["ADMIN", "SUPERVISOR"]), async (req, res) => {
   try {
     const plantId = req.currentPlantId;
     const { name, location } = req.body;
@@ -75,7 +75,7 @@ router.get("/warehouses/:id", async (req, res) => {
 // ============================================================
 
 // POST /api/maintenance/inventory/stock - Get or create stock entry
-router.post("/stock", requireRole("ADMIN", "SUPERVISOR"), async (req, res) => {
+router.post("/stock", requireRole(["ADMIN", "SUPERVISOR"]), async (req, res) => {
   try {
     const plantId = req.currentPlantId;
     const { warehouseId, sparePartId } = req.body;
@@ -131,7 +131,7 @@ router.get("/warehouses/:warehouseId/stock", async (req, res) => {
 // ============================================================
 
 // POST /api/maintenance/inventory/movements - Record stock movement
-router.post("/movements", requireRole("ADMIN", "SUPERVISOR", "TECHNICIAN"), async (req, res) => {
+router.post("/movements", requireRole(["ADMIN", "SUPERVISOR", "TECHNICIAN"]), async (req, res) => {
   try {
     const plantId = req.currentPlantId;
     const userId = req.user.id;
@@ -182,7 +182,7 @@ router.get("/stock/:stockId/movements", async (req, res) => {
 // ============================================================
 
 // POST /api/maintenance/inventory/consume - Record spare part consumption in work order
-router.post("/consume", requireRole("ADMIN", "SUPERVISOR", "TECHNICIAN"), async (req, res) => {
+router.post("/consume", requireRole(["ADMIN", "SUPERVISOR", "TECHNICIAN"]), async (req, res) => {
   try {
     const plantId = req.currentPlantId;
     const userId = req.user.id;

@@ -13,7 +13,7 @@ import {
 const router = Router();
 
 // POST /api/maintenance/spare-parts - Create spare part
-router.post("/", requireRole("ADMIN", "SUPERVISOR"), async (req, res) => {
+router.post("/", requireRole(["ADMIN", "SUPERVISOR"]), async (req, res) => {
   try {
     const plantId = req.currentPlantId;
     const { code, name, description, category, brand, partNumber, unit, minStock, maxStock, location, costPerUnit } = req.body;
@@ -83,7 +83,7 @@ router.get("/:id", async (req, res) => {
 });
 
 // PATCH /api/maintenance/spare-parts/:id - Update spare part
-router.patch("/:id", requireRole("ADMIN", "SUPERVISOR"), async (req, res) => {
+router.patch("/:id", requireRole(["ADMIN", "SUPERVISOR"]), async (req, res) => {
   try {
     const plantId = req.currentPlantId;
     const sparePart = await updateSparePart(parseInt(req.params.id), plantId, req.body);
@@ -100,7 +100,7 @@ router.patch("/:id", requireRole("ADMIN", "SUPERVISOR"), async (req, res) => {
 });
 
 // POST /api/maintenance/spare-parts/:id/assets/:assetId - Link spare part to asset
-router.post("/:id/assets/:assetId", requireRole("ADMIN", "SUPERVISOR"), async (req, res) => {
+router.post("/:id/assets/:assetId", requireRole(["ADMIN", "SUPERVISOR"]), async (req, res) => {
   try {
     const plantId = req.currentPlantId;
     const link = await linkSparePartToAsset(parseInt(req.params.id), parseInt(req.params.assetId), plantId);

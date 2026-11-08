@@ -36,15 +36,21 @@ export async function createNotification(plantId, data) {
 }
 
 export async function getUserNotifications(plantId, userId, limit = 50) {
-  return await prisma.mtNotification.findMany({
-    where: {
-      plantId,
-      OR: [{ userId }, { userId: null }],
-      expiresAt: { gt: new Date() },
-    },
-    orderBy: { createdAt: "desc" },
-    take: limit,
-  });
+  try {
+    const notifications = await prisma.mtNotification.findMany({
+      where: {
+        plantId,
+        OR: [{ userId }, { userId: null }],
+        expiresAt: { gt: new Date() },
+      },
+      orderBy: { createdAt: "desc" },
+      take: limit,
+    });
+    return notifications || [];
+  } catch (error) {
+    logger.error("[getUserNotifications]", error);
+    return [];
+  }
 }
 
 export async function markNotificationAsRead(notificationId, plantId) {
@@ -66,14 +72,20 @@ export async function markNotificationAsRead(notificationId, plantId) {
 }
 
 export async function getUnreadCount(plantId, userId) {
-  return await prisma.mtNotification.count({
-    where: {
-      plantId,
-      OR: [{ userId }, { userId: null }],
-      isRead: false,
-      expiresAt: { gt: new Date() },
-    },
-  });
+  try {
+    const count = await prisma.mtNotification.count({
+      where: {
+        plantId,
+        OR: [{ userId }, { userId: null }],
+        isRead: false,
+        expiresAt: { gt: new Date() },
+      },
+    });
+    return count || 0;
+  } catch (error) {
+    logger.error("[getUnreadCount]", error);
+    return 0;
+  }
 }
 
 // ============================================================

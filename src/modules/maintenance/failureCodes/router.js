@@ -14,7 +14,7 @@ import {
 const router = Router();
 
 // POST /api/maintenance/failure-codes/seed - Initialize base failure codes
-router.post("/seed", requireRole("ADMIN"), async (req, res) => {
+router.post("/seed", requireRole(["ADMIN"]), async (req, res) => {
   try {
     const plantId = req.currentPlantId;
     const result = await seedFailureCodesForPlant(plantId);
@@ -31,7 +31,7 @@ router.post("/seed", requireRole("ADMIN"), async (req, res) => {
 });
 
 // POST /api/maintenance/failure-codes - Create custom failure code
-router.post("/", requireRole("ADMIN", "SUPERVISOR"), async (req, res) => {
+router.post("/", requireRole(["ADMIN", "SUPERVISOR"]), async (req, res) => {
   try {
     const plantId = req.currentPlantId;
     const { code, name, category, parentId, assetClass } = req.body;
@@ -96,7 +96,7 @@ router.get("/:id", async (req, res) => {
 });
 
 // PATCH /api/maintenance/failure-codes/:id - Update custom failure code
-router.patch("/:id", requireRole("ADMIN", "SUPERVISOR"), async (req, res) => {
+router.patch("/:id", requireRole(["ADMIN", "SUPERVISOR"]), async (req, res) => {
   try {
     const plantId = req.currentPlantId;
     const code = await updateFailureCode(parseInt(req.params.id), plantId, req.body);
@@ -120,7 +120,7 @@ router.patch("/:id", requireRole("ADMIN", "SUPERVISOR"), async (req, res) => {
 // ============================================================
 
 // POST /api/maintenance/work-orders/:workOrderId/failure - Assign failure codes to WO
-router.post("/work-orders/:workOrderId/failure", requireRole("ADMIN", "SUPERVISOR", "TECHNICIAN"), async (req, res) => {
+router.post("/work-orders/:workOrderId/failure", requireRole(["ADMIN", "SUPERVISOR", "TECHNICIAN"]), async (req, res) => {
   try {
     const plantId = req.currentPlantId;
     const { failureModeId, mechanismId, rootCauseId, productionEffect } = req.body;
