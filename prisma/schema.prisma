@@ -81,6 +81,7 @@ model User {
   approvedPurchaseOrders    PurchaseOrder[]   @relation("POApprover")
   auditLogs                 AuditLog[]
   createdPreventiveOrders   PreventiveOrder[] @relation("PreventiveOrderCreatedBy")
+  stockMovements            MtStockMovement[] @relation("MtStockMovements")
 
   userPlants UserPlant[]
 
@@ -1102,6 +1103,8 @@ model MtAsset {
   workOrders MtWorkOrder[]
   plans      MtPlan[]
   meterReadings MtMeterReading[]
+  spareParts MtSparePartAsset[] @relation("AssetSpareParts")
+  failures   MtWorkOrderFailure[] @relation("AssetFailures")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1150,6 +1153,8 @@ model MtWorkOrder {
   events       MtWorkOrderEvent[]
   photos       MtWorkOrderPhoto[]
   tasks        MtWorkOrderTask[]
+  parts        MtWorkOrderPart[] @relation("WorkOrderParts")
+  failure      MtWorkOrderFailure? @relation("WorkOrderFailure")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1361,5 +1366,231 @@ model MtPlanRun {
   createdAt   DateTime @default(now())
 
   @@index([planId, runAt])
+  @@index([plantId])
+}
+
+// =========================
+// MAINTENANCE PHASE 3A
+// Spare Parts & Inventory
+// =========================
+
+enum MtStockMovementType {
+  IN
+  OUT
+  ADJUST
+  TRANSFER
+}
+
+model MtSparePart {
+  id              Int     @id @default(autoincrement())
+  plantId         Int
+  code            String
+  name            String
+  description     String?
+  category        String?
+  brand           String?
+  partNumber      String?
+  unit            String  @default("piece")
+  minStock        Decimal @default(0)
+  maxStock        Decimal @default(0)
+  location        String?
+  costPerUnit     Decimal @default(0)
+  status          String  @default("ACTIVE") // ACTIVE, INACTIVE
+  version         Int     @default(0)
+
+  plant           Plant                   @relation(fields: [plantId], references: [id], onDelete: Cascade)
+  assets          MtSparePartAsset[]
+  stocks          MtStock[]
+  workOrderParts  MtWorkOrderPart[]
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([plantId, code])
+  @@index([plantId])
+  @@index([status])
+}
+
+model MtWarehouse {
+  id              Int     @id @default(autoincrement())
+  plantId         Int
+  name            String
+  location        String?
+
+  plant           Plant   @relation(fields: [plantId], references: [id], onDelete: Cascade)
+  stocks          MtStock[]
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([plantId, name])
+  @@index([plantId])
+}
+
+model MtStock {
+  id              Int     @id @default(autoincrement())
+  warehouseId     Int
+  sparePartId     Int
+  quantity        Decimal @default(0)
+  lastCost        Decimal @default(0)
+  version         Int     @default(0)
+
+  warehouse       MtWarehouse      @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  sparePart       MtSparePart      @relation(fields: [sparePartId], references: [id], onDelete: Cascade)
+  movements       MtStockMovement[]
+
+  updatedAt       DateTime @updatedAt
+
+  @@unique([warehouseId, sparePartId])
+  @@index([warehouseId])
+  @@index([sparePartId])
+}
+
+model MtStockMovement {
+  id              Int     @id @default(autoincrement())
+  stockId         Int
+  type            MtStockMovementType
+  quantity        Decimal
+  reason          String?
+  costPerUnit     Decimal @default(0)
+  referenceId     Int?    // workOrderId or transferId
+  referenceType   String? // WORK_ORDER, TRANSFER
+  createdById     Int
+
+  stock           MtStock @relation(fields: [stockId], references: [id], onDelete: Cascade)
+  createdBy       User    @relation("MtStockMovements", fields: [createdById], references: [id], onDelete: Restrict)
+
+  createdAt       DateTime @default(now())
+
+  @@index([stockId])
+  @@index([createdAt])
+  @@index([referenceId])
+}
+
+model MtWorkOrderPart {
+  id              Int     @id @default(autoincrement())
+  workOrderId     Int
+  sparePartId     Int
+  quantity        Decimal
+  costPerUnitAtTime Decimal
+
+  workOrder       MtWorkOrder @relation("WorkOrderParts", fields: [workOrderId], references: [id], onDelete: Cascade)
+  sparePart       MtSparePart @relation(fields: [sparePartId], references: [id], onDelete: Restrict)
+
+  createdAt       DateTime @default(now())
+
+  @@index([workOrderId])
+  @@index([sparePartId])
+}
+
+model MtSparePartAsset {
+  id              Int     @id @default(autoincrement())
+  sparePartId     Int
+  assetId         Int
+
+  sparePart       MtSparePart @relation(fields: [sparePartId], references: [id], onDelete: Cascade)
+  asset           MtAsset     @relation("AssetSpareParts", fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@unique([sparePartId, assetId])
+  @@index([assetId])
+}
+
+model MtFailureCode {
+  id              Int     @id @default(autoincrement())
+  plantId         Int
+  code            String
+  name            String
+  category        String  // FAILURE_MODE, MECHANISM, ROOT_CAUSE (ISO 14224)
+  parentId        Int?
+  assetClass      String? // rotating, electrical, pneumatic, structural, instrumentation
+  status          String  @default("ACTIVE") // ACTIVE, INACTIVE
+  isBaseCode      Boolean @default(false)
+
+  plant           Plant   @relation(fields: [plantId], references: [id], onDelete: Cascade)
+  parent          MtFailureCode? @relation("hierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children        MtFailureCode[] @relation("hierarchy")
+  workOrderFailures MtWorkOrderFailure[]
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([plantId, code])
+  @@index([plantId])
+  @@index([category])
+}
+
+model MtWorkOrderFailure {
+  id              Int     @id @default(autoincrement())
+  workOrderId     Int     @unique
+  assetId         Int
+  failureModeId   Int?
+  mechanismId     Int?
+  rootCauseId     Int?
+  productionEffect String? // TOTAL_STOP, PARTIAL_STOP, NO_EFFECT
+
+  workOrder       MtWorkOrder     @relation("WorkOrderFailure", fields: [workOrderId], references: [id], onDelete: Cascade)
+  asset           MtAsset         @relation("AssetFailures", fields: [assetId], references: [id], onDelete: Restrict)
+  failureMode     MtFailureCode?  @relation("failureMode", fields: [failureModeId], references: [id], onDelete: SetNull)
+  mechanism       MtFailureCode?  @relation("mechanism", fields: [mechanismId], references: [id], onDelete: SetNull)
+  rootCause       MtFailureCode?  @relation("rootCause", fields: [rootCauseId], references: [id], onDelete: SetNull)
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// =========================
+// MAINTENANCE NOTIFICATIONS (Phase 4)
+// =========================
+
+model MtNotification {
+  id              Int     @id @default(autoincrement())
+  plantId         Int
+  userId          Int?    // null = para todos los supervisores
+  type            String  // LOW_STOCK, OVERDUE_WO, TECHNICIAN_OVERLOAD, PREVENTIVE_SOON, CRITICAL_FAILURE
+  title           String
+  message         String
+  severity        String  @default("INFO") // INFO, WARNING, CRITICAL
+
+  referenceId     Int?    // OT ID, Asset ID, SparePart ID, etc.
+  referenceType   String? // WORK_ORDER, ASSET, SPARE_PART, PLAN
+
+  isRead          Boolean @default(false)
+  readAt          DateTime?
+
+  actionUrl       String? // Link para ir al recurso
+  actionLabel     String? // "Ver orden", "Ir a inventario"
+
+  plant           Plant   @relation(fields: [plantId], references: [id], onDelete: Cascade)
+
+  createdAt       DateTime @default(now())
+  expiresAt       DateTime? // Se auto-borra después de N días
+
+  @@index([plantId])
+  @@index([userId])
+  @@index([isRead])
+  @@index([createdAt])
+}
+
+model MtNotificationPreference {
+  id              Int     @id @default(autoincrement())
+  userId          Int     @unique
+  plantId         Int
+
+  // Alert types
+  lowStockEnabled         Boolean @default(true)
+  overdueWoEnabled        Boolean @default(true)
+  technicianOverloadEnabled Boolean @default(true)
+  preventiveSoonEnabled   Boolean @default(true)
+  criticalFailureEnabled  Boolean @default(true)
+
+  // Channels
+  inAppEnabled    Boolean @default(true)
+  emailEnabled    Boolean @default(false)
+
+  plant           Plant   @relation(fields: [plantId], references: [id], onDelete: Cascade)
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
   @@index([plantId])
 }

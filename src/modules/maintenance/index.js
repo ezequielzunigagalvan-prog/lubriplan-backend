@@ -9,6 +9,11 @@ import plansRouter from "./plans/router.js";
 import metersRouter from "./meters/router.js";
 import calendarRouter from "./calendar/router.js";
 import complianceRouter from "./compliance/router.js";
+import sparePartsRouter from "./spareParts/router.js";
+import inventoryRouter from "./inventory/router.js";
+import failureCodesRouter from "./failureCodes/router.js";
+import indicatorsRouter from "./indicators/router.js";
+import notificationsRouter from "./notifications/router.js";
 
 export function mountMaintenance(app, deps) {
   const { prisma } = deps;
@@ -44,6 +49,11 @@ export function mountMaintenance(app, deps) {
   maintenanceRouter.use("/calendar", calendarRouter);
   maintenanceRouter.use("/compliance", complianceRouter);
   maintenanceRouter.use("/dashboard", dashboardRouter);
+  maintenanceRouter.use("/spare-parts", sparePartsRouter);
+  maintenanceRouter.use("/inventory", inventoryRouter);
+  maintenanceRouter.use("/failure-codes", failureCodesRouter);
+  maintenanceRouter.use("/indicators", indicatorsRouter);
+  maintenanceRouter.use("/notifications", notificationsRouter);
 
   maintenanceRouter.get("/assignable-users", async (req, res) => {
     try {
