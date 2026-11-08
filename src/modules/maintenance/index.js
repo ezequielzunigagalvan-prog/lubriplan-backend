@@ -5,6 +5,10 @@ import { requireMaintenanceAccess } from "./access.js";
 import assetsRouter from "./assets/router.js";
 import workOrdersRouter from "./workOrders/router.js";
 import dashboardRouter from "./dashboard/router.js";
+import plansRouter from "./plans/router.js";
+import metersRouter from "./meters/router.js";
+import calendarRouter from "./calendar/router.js";
+import complianceRouter from "./compliance/router.js";
 
 export function mountMaintenance(app, deps) {
   const { prisma } = deps;
@@ -35,6 +39,10 @@ export function mountMaintenance(app, deps) {
 
   maintenanceRouter.use("/assets", assetsRouter);
   maintenanceRouter.use("/work-orders", workOrdersRouter);
+  maintenanceRouter.use("/plans", plansRouter);
+  maintenanceRouter.use("/meters", metersRouter);
+  maintenanceRouter.use("/calendar", calendarRouter);
+  maintenanceRouter.use("/compliance", complianceRouter);
   maintenanceRouter.use("/dashboard", dashboardRouter);
 
   maintenanceRouter.get("/assignable-users", async (req, res) => {

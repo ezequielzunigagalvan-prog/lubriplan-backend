@@ -143,11 +143,13 @@ export function buildCycleKey(plan, dueAt, triggerType = "TIME") {
 }
 
 export function getStartOfDayUTC(date = new Date(), tz = TIMEZONE) {
-  const parts = getLocalDateParts(date, tz);
-  return localDateToUTC(parts.year, parts.month, parts.day, 0, 0, 0, tz);
+  const d = new Date(date);
+  d.setUTCHours(0, 0, 0, 0);
+  return d;
 }
 
 export function getEndOfDayUTC(date = new Date(), tz = TIMEZONE) {
-  const parts = getLocalDateParts(date, tz);
-  return new Date(localDateToUTC(parts.year, parts.month, parts.day, 23, 59, 59, tz));
+  const d = new Date(date);
+  d.setUTCHours(23, 59, 59, 999);
+  return d;
 }

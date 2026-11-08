@@ -261,6 +261,13 @@ router.post("/:id/transition", async (req, res) => {
       where: { id: woId },
     });
 
+    if (parsed.to === "FINISHED" && wo.planId) {
+      await prisma.mtPlan.update({
+        where: { id: wo.planId },
+        data: { lastCompletedAt: new Date() },
+      });
+    }
+
     await prisma.mtWorkOrderEvent.create({
       data: {
         workOrderId: woId,
@@ -402,6 +409,76 @@ router.delete("/:id/photos/:photoId", async (req, res) => {
   } catch (err) {
     logger.error("[workOrders/:id/photos/:photoId DELETE]", err);
     return res.status(500).json({ error: "Error deleting photo" });
+  }
+});
+
+router.patch("/:id/tasks/:taskId", async (req, res) => {
+  try {
+    const plantId = req.currentPlantId;
+    const woId = parseInt(req.params.id);
+    const taskId = parseInt(req.params.taskId);
+
+    const wo = await prisma.mtWorkOrder.findFirst({
+      where: { id: woId, plantId },
+    });
+
+    if (!wo) {
+      return res.status(404).json({ error: "Work order not found" });
+    }
+
+    if (wo.status !== "IN_PROGRESS") {
+      return res.status(409).json({ error: "Only IN_PROGRESS work orders can have tasks updated" });
+    }
+
+    if (wo.assignedTo !== req.user.id && !["ADMIN", "SUPERVISOR"].includes(req.user.role)) {
+      return res.status(403).json({ error: "Only assigned technician can update task results" });
+    }
+
+    const task = await prisma.mtWorkOrderTask.findFirst({
+      where: { id: taskId, workOrderId: woId, plantId },
+    });
+
+    if (!task) {
+      return res.status(404).json({ error: "Task not found" });
+    }
+
+    const updateData = {
+      doneAt: new Date(),
+      doneBy: req.user.id,
+    };
+
+    if ("result" in req.body) {
+      updateData.result = req.body.result;
+    } else if (task.kind === "MEASURE" && Number.isFinite(req.body.valueNumber)) {
+      if (
+        (task.minValue != null && req.body.valueNumber < task.minValue) ||
+        (task.maxValue != null && req.body.valueNumber > task.maxValue)
+      ) {
+        updateData.result = "NOT_OK";
+      } else {
+        updateData.result = "OK";
+      }
+    }
+
+    if ("valueNumber" in req.body) {
+      updateData.valueNumber = req.body.valueNumber;
+    }
+    if ("valueText" in req.body) {
+      updateData.valueText = req.body.valueText;
+    }
+    if ("note" in req.body) {
+      updateData.note = req.body.note;
+    }
+
+    const updated = await prisma.mtWorkOrderTask.update({
+      where: { id: taskId },
+      data: updateData,
+    });
+
+    return res.json(updated);
+  } catch (err) {
+    logger.error("[workOrders/:id/tasks/:taskId PATCH]", err);
+    return res.status(500).json({ error: "Error updating task" });
   }
 });
 
