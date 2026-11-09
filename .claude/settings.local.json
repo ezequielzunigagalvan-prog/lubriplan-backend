@@ -123,7 +123,8 @@
       "Bash(grep -n 'prisma.$transaction\\\\|execution.*update\\\\|status.*COMPLETED' /c/Users/ferga/Documents/lubriplan-backend/src/index.js)",
       "PowerShell(Write-Host $summary)",
       "PowerShell(grep *)",
-      "Bash(grep -v \"^$\")"
+      "Bash(grep -v \"^$\")",
+      "Bash(npx tsx *)"
     ]
   }
 }

@@ -95,13 +95,16 @@ model Technician {
   plantId Int
   plant   Plant @relation(fields: [plantId], references: [id], onDelete: Cascade)
 
-  name      String
-  code      String
-  specialty String
-  status    String    @default("Activo")
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @default(now()) @updatedAt
-  deletedAt DateTime?
+  name          String
+  code          String
+  email         String?
+  phone         String?
+  specialty     String
+  certifications String? // JSON array as string
+  status        String    @default("Activo")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @default(now()) @updatedAt
+  deletedAt     DateTime?
 
   executions                    Execution[]
   routes                        Route[]

@@ -141,13 +141,20 @@ export async function createTechnician(req, res) {
     }
 
     const name = String(req.body?.name || "").trim();
-    const code = String(req.body?.code || "").trim().toUpperCase();
-    const specialty = String(req.body?.specialty || "").trim();
+    // Generate code from name if not provided (format: 3 letters from name + ID)
+    const code = String(req.body?.code || "").trim().toUpperCase() ||
+                 `TECH-${Date.now()}`.substring(0, 10);
+    const email = String(req.body?.email || "").trim() || null;
+    const phone = String(req.body?.phone || "").trim() || null;
+    const speciality = String(req.body?.speciality || req.body?.specialty || "").trim();
     const status = String(req.body?.status || "Activo").trim();
+    const certifications = Array.isArray(req.body?.certifications)
+      ? JSON.stringify(req.body.certifications)
+      : null;
 
-    if (!name || !code || !specialty) {
+    if (!name || !speciality) {
       return res.status(400).json({
-        error: "Nombre, código y especialidad son obligatorios",
+        error: "Nombre y especialidad son obligatorios",
       });
     }
 
@@ -156,7 +163,10 @@ export async function createTechnician(req, res) {
         plantId,
         name,
         code,
-        specialty,
+        email,
+        phone,
+        specialty: speciality,
+        certifications,
         status,
         deletedAt: null,
       },
@@ -166,6 +176,7 @@ export async function createTechnician(req, res) {
       ok: true,
       item: {
         ...created,
+        certifications: certifications ? JSON.parse(certifications) : [],
         lastActivityAt: null,
       },
     });

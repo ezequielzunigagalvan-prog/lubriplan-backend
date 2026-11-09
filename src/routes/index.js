@@ -45,6 +45,9 @@ import { toStartOfDaySafe } from "../utils/dates.js";
 
 // ✅ IMPORT REAL (tu archivo)
 import { getPredictiveMetrics } from "../dashboard/predictiveMetrics.js";
+import workOrdersRoutes from "./workOrders.routes.js";
+import assetExpedientRoutes from "./assetExpedient.routes.js";
+import assetHierarchyRoutes from "./assetHierarchy.routes.js";
 
 // ========================
 // MOUNT ROUTES
@@ -60,6 +63,9 @@ export function mountRoutes(app, { prisma }) {
   // ========================
   app.use("/api/users", requireAuth, usersRouter);
   app.use("/api/technicians", requireAuth, techniciansRoutes);
+  app.use("/api/maintenance/work-orders", requireAuth, workOrdersRoutes({ prisma, auth: requireAuth, requireRole }));
+  app.use("/api/maintenance/assets", requireAuth, assetExpedientRoutes({ prisma, auth: requireAuth }));
+  app.use("/api/maintenance/assets", requireAuth, assetHierarchyRoutes({ prisma, auth: requireAuth }));
 
   app.use("/api", emergencyActivities({ prisma, auth: requireAuth }));
   app.use("/api", conditionReportsRoutes({ prisma, auth: requireAuth }));
