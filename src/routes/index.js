@@ -48,6 +48,8 @@ import { getPredictiveMetrics } from "../dashboard/predictiveMetrics.js";
 import workOrdersRoutes from "./workOrders.routes.js";
 import assetExpedientRoutes from "./assetExpedient.routes.js";
 import assetHierarchyRoutes from "./assetHierarchy.routes.js";
+import preventiveOrdersRoutes from "./preventiveOrders.routes.js";
+import assetHistoryRoutes from "./assetHistory.routes.js";
 
 // ========================
 // MOUNT ROUTES
@@ -66,6 +68,8 @@ export function mountRoutes(app, { prisma }) {
   app.use("/api/maintenance/work-orders", requireAuth, workOrdersRoutes({ prisma, auth: requireAuth, requireRole }));
   app.use("/api/maintenance/assets", requireAuth, assetExpedientRoutes({ prisma, auth: requireAuth }));
   app.use("/api/maintenance/assets", requireAuth, assetHierarchyRoutes({ prisma, auth: requireAuth }));
+  app.use("/api/maintenance/assets", requireAuth, assetHistoryRoutes({ prisma, auth: requireAuth }));
+  app.use("/api/maintenance/preventive-orders", requireAuth, preventiveOrdersRoutes({ prisma, auth: requireAuth }));
 
   app.use("/api", emergencyActivities({ prisma, auth: requireAuth }));
   app.use("/api", conditionReportsRoutes({ prisma, auth: requireAuth }));
