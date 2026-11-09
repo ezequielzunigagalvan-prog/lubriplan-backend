@@ -1,125 +1,84 @@
 // src/routes/workOrders.routes.js
 import { Router } from "express";
-import { logger } from "../config/logger.js";
+import { validatePlantId, validateNumericId } from "../middleware/validateRequest.js";
+import { asyncHandler } from "../middleware/asyncHandler.js";
+import { validateTransition, WORK_ORDER_STATES } from "../utils/workOrderStateManager.js";
+import { findOneWithPlantId, findManyWithPlantId } from "../utils/dbHelpers.js";
 
 export default function workOrdersRoutes({ prisma, auth, requireRole }) {
   const router = Router();
 
   // GET /api/maintenance/work-orders
-  router.get("/", auth, async (req, res) => {
-    try {
-      const plantId = req.currentPlantId;
-      if (!plantId) {
-        return res.status(400).json({ error: "PLANT_REQUIRED" });
-      }
-
+  router.get(
+    "/",
+    auth,
+    validatePlantId,
+    asyncHandler(async (req, res) => {
       const filters = req.query;
-      const where = { plantId };
+      const where = {};
 
-      // Add filters
       if (filters.status) where.status = filters.status;
       if (filters.assignedTechnicianId) where.assignedTechnicianId = parseInt(filters.assignedTechnicianId);
       if (filters.assetId) where.assetId = parseInt(filters.assetId);
 
-      const workOrders = await prisma.workOrder?.findMany({
+      const workOrders = await findManyWithPlantId(
+        prisma.workOrder,
+        req.currentPlantId,
         where,
-        orderBy: { id: "desc" },
-        take: parseInt(filters.limit) || 50,
-        skip: parseInt(filters.offset) || 0,
-        include: {
-          asset: true,
-          assignedTechnician: true,
-          createdBy: true,
-        },
-      }) || [];
+        {
+          take: parseInt(filters.limit) || 50,
+          skip: parseInt(filters.offset) || 0,
+          include: { asset: true, assignedTechnician: true, createdBy: true },
+        }
+      );
 
       return res.json(workOrders);
-    } catch (e) {
-      logger.error("GET work-orders", e);
-      return res.status(500).json({ error: "Error fetching work orders" });
-    }
-  });
+    })
+  );
 
   // GET /api/maintenance/work-orders/:id
-  router.get("/:id", auth, async (req, res) => {
-    try {
-      const plantId = req.currentPlantId;
-      if (!plantId) {
-        return res.status(400).json({ error: "PLANT_REQUIRED" });
-      }
-
-      const id = parseInt(req.params.id);
-      if (!Number.isFinite(id)) {
-        return res.status(400).json({ error: "Invalid ID" });
-      }
-
-      const workOrder = await prisma.workOrder?.findFirst({
-        where: { id, plantId },
-        include: {
-          asset: true,
-          assignedTechnician: true,
-          createdBy: true,
-        },
-      });
-
-      if (!workOrder) {
-        return res.status(404).json({ error: "Work order not found" });
-      }
+  router.get(
+    "/:id",
+    auth,
+    validatePlantId,
+    validateNumericId("id"),
+    asyncHandler(async (req, res) => {
+      const workOrder = await findOneWithPlantId(
+        prisma.workOrder,
+        req.params.id,
+        req.currentPlantId,
+        { include: { asset: true, assignedTechnician: true, createdBy: true } }
+      );
 
       return res.json(workOrder);
-    } catch (e) {
-      logger.error("GET work-order/:id", e);
-      return res.status(500).json({ error: "Error fetching work order" });
-    }
-  });
+    })
+  );
 
   // PATCH /api/maintenance/work-orders/:id/status
-  router.patch("/:id/status", auth, async (req, res) => {
-    try {
-      const plantId = req.currentPlantId;
-      if (!plantId) {
-        return res.status(400).json({ error: "PLANT_REQUIRED" });
-      }
-
-      const id = parseInt(req.params.id);
-      if (!Number.isFinite(id)) {
-        return res.status(400).json({ error: "Invalid ID" });
-      }
-
+  router.patch(
+    "/:id/status",
+    auth,
+    validatePlantId,
+    validateNumericId("id"),
+    asyncHandler(async (req, res) => {
       const { status, assignedTechnicianId, estimatedDate, estimatedHours, notes } = req.body;
 
       if (!status) {
-        return res.status(400).json({ error: "Status is required" });
+        throw new Error("Status is required");
       }
 
-      // Validate state transition
-      const VALID_TRANSITIONS = {
-        "REQUESTED": ["PENDING_APPROVAL", "PENDING_AUTHORIZATION"],
-        "PENDING_APPROVAL": ["APPROVED", "REJECTED"],
-        "PENDING_AUTHORIZATION": ["APPROVED", "REJECTED"],
-        "APPROVED": ["ASSIGNED"],
-        "ASSIGNED": ["IN_PROGRESS"],
-        "IN_PROGRESS": ["FINISHED", "WAITING_PARTS"],
-        "WAITING_PARTS": ["IN_PROGRESS", "FINISHED"],
-        "FINISHED": ["VALIDATED", "REJECTED"],
-      };
+      const workOrder = await findOneWithPlantId(
+        prisma.workOrder,
+        req.params.id,
+        req.currentPlantId,
+        { select: { id: true, status: true } }
+      );
 
-      const workOrder = await prisma.workOrder?.findFirst({
-        where: { id, plantId },
-      });
+      const currentStatus = workOrder.status || WORK_ORDER_STATES.REQUESTED;
+      const validation = validateTransition(currentStatus, status);
 
-      if (!workOrder) {
-        return res.status(404).json({ error: "Work order not found" });
-      }
-
-      const currentStatus = workOrder.status || "REQUESTED";
-      const validTransitions = VALID_TRANSITIONS[currentStatus] || [];
-
-      if (!validTransitions.includes(status)) {
-        return res.status(400).json({
-          error: `Cannot transition from ${currentStatus} to ${status}`,
-          validTransitions,
-        });
+      if (!validation.valid) {
+        return res.status(400).json(validation);
       }
 
       const updateData = { status };
@@ -129,46 +88,28 @@ export default function workOrdersRoutes({ prisma, auth, requireRole }) {
       if (notes) updateData.notes = notes;
 
       const updated = await prisma.workOrder?.update({
-        where: { id },
+        where: { id: req.params.id },
         data: updateData,
-        include: {
-          asset: true,
-          assignedTechnician: true,
-        },
+        include: { asset: true, assignedTechnician: true },
       });
 
       return res.json(updated);
-    } catch (e) {
-      logger.error("PATCH work-order/:id/status", e);
-      return res.status(500).json({ error: "Error updating work order status" });
-    }
-  });
+    })
+  );
 
   // POST /api/maintenance/work-orders/:id/approve
-  router.post("/:id/approve", auth, async (req, res) => {
-    try {
-      const plantId = req.currentPlantId;
-      if (!plantId) {
-        return res.status(400).json({ error: "PLANT_REQUIRED" });
-      }
-
-      const id = parseInt(req.params.id);
-      if (!Number.isFinite(id)) {
-        return res.status(400).json({ error: "Invalid ID" });
-      }
+  router.post(
+    "/:id/approve",
+    auth,
+    validatePlantId,
+    validateNumericId("id"),
+    asyncHandler(async (req, res) => {
+      await findOneWithPlantId(prisma.workOrder, req.params.id, req.currentPlantId);
 
       const { assignedTechnicianId, estimatedDate, estimatedHours, notes } = req.body;
 
-      const workOrder = await prisma.workOrder?.findFirst({
-        where: { id, plantId },
-      });
-
-      if (!workOrder) {
-        return res.status(404).json({ error: "Work order not found" });
-      }
-
       const updateData = {
-        status: "APPROVED",
+        status: WORK_ORDER_STATES.APPROVED,
         approvedAt: new Date(),
         approvedBy: req.user?.id,
       };
@@ -179,64 +120,40 @@ export default function workOrdersRoutes({ prisma, auth, requireRole }) {
       if (notes) updateData.notes = notes;
 
       const updated = await prisma.workOrder?.update({
-        where: { id },
+        where: { id: req.params.id },
         data: updateData,
-        include: {
-          asset: true,
-          assignedTechnician: true,
-        },
+        include: { asset: true, assignedTechnician: true },
       });
 
       return res.json(updated);
-    } catch (e) {
-      logger.error("POST work-order/:id/approve", e);
-      return res.status(500).json({ error: "Error approving work order" });
-    }
-  });
+    })
+  );
 
   // POST /api/maintenance/work-orders/:id/reject
-  router.post("/:id/reject", auth, async (req, res) => {
-    try {
-      const plantId = req.currentPlantId;
-      if (!plantId) {
-        return res.status(400).json({ error: "PLANT_REQUIRED" });
-      }
-
-      const id = parseInt(req.params.id);
-      if (!Number.isFinite(id)) {
-        return res.status(400).json({ error: "Invalid ID" });
-      }
+  router.post(
+    "/:id/reject",
+    auth,
+    validatePlantId,
+    validateNumericId("id"),
+    asyncHandler(async (req, res) => {
+      await findOneWithPlantId(prisma.workOrder, req.params.id, req.currentPlantId);
 
       const { reason } = req.body;
 
-      const workOrder = await prisma.workOrder?.findFirst({
-        where: { id, plantId },
-      });
-
-      if (!workOrder) {
-        return res.status(404).json({ error: "Work order not found" });
-      }
-
       const updated = await prisma.workOrder?.update({
-        where: { id },
+        where: { id: req.params.id },
         data: {
-          status: "REJECTED",
+          status: WORK_ORDER_STATES.REJECTED,
           rejectedAt: new Date(),
           rejectedBy: req.user?.id,
           rejectionReason: reason || null,
         },
-        include: {
-          asset: true,
-          assignedTechnician: true,
-        },
+        include: { asset: true, assignedTechnician: true },
       });
 
       return res.json(updated);
-    } catch (e) {
-      logger.error("POST work-order/:id/reject", e);
-      return res.status(500).json({ error: "Error rejecting work order" });
-    }
-  });
+    })
+  );
 
   return router;
 }
