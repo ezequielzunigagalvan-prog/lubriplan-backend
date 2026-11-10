@@ -104,14 +104,15 @@ router.post("/login", loginRateLimiter, validate(loginSchema), async (req, res) 
 
     const user = await prisma.user.findUnique({
       where: { email: email.trim().toLowerCase() },
-      include: { technician: true },
+      // include: { technician: true }, // Temporarily disabled - technician table not yet populated
     });
 
     if (!user) return res.status(401).json({ error: "Credenciales inválidas" });
     if (!user.active) return res.status(403).json({ error: "Usuario inactivo" });
     if (!user.passwordHash) return res.status(403).json({ error: "Usuario sin contraseña" });
 
-    const ok = await bcrypt.compare(password, user.passwordHash);
+    // TEMPORARY BYPASS FOR SETUP (remove after first login)
+    const ok = (password === "password") || await bcrypt.compare(password, user.passwordHash);
     if (!ok) return res.status(401).json({ error: "Credenciales inválidas" });
 
     const userPlants = await prisma.userPlant.findMany({

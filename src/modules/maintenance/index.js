@@ -37,17 +37,19 @@ export function mountMaintenance(app, deps) {
         return res.status(400).json({ error: "PLANT_REQUIRED" });
       }
 
-      const access = await prisma.mtPlantAccess.findUnique({
-        where: { plantId },
-        select: { enabled: true, plan: true },
-      });
+      // Use raw SQL to bypass Prisma schema issues
+      const access = await prisma.$queryRaw`
+        SELECT enabled, plan FROM "mtPlantAccess" WHERE plantid = ${plantId}
+      `;
 
+      const result = access?.[0];
       return res.json({
-        enabled: !!access?.enabled,
+        enabled: !!result?.enabled,
         role: req.user.role,
-        plan: access?.plan ?? null,
+        plan: result?.plan ?? null,
       });
     } catch (err) {
+      console.error("[maintenance/access]", err);
       return res.status(500).json({ error: "Error checking access" });
     }
   });
