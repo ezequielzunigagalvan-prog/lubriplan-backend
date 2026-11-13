@@ -179,8 +179,6 @@ router.patch("/:id", async (req, res) => {
       return res.status(404).json({ error: "Asset not found" });
     }
 
-    console.log(`[UPDATE ASSET ${assetId}] Datos recibidos:`, JSON.stringify(req.body, null, 2));
-
     const updateData = {};
     const allowedFields = ["name", "location", "manufacturer", "model", "serialNumber", "criticality", "status", "notes"];
 
@@ -194,10 +192,7 @@ router.patch("/:id", async (req, res) => {
       updateData.installedAt = req.body.installedAt ? new Date(req.body.installedAt) : null;
     }
 
-    console.log(`[UPDATE ASSET ${assetId}] Datos a actualizar:`, JSON.stringify(updateData, null, 2));
-
     if (Object.keys(updateData).length === 0) {
-      console.log(`[UPDATE ASSET ${assetId}] Sin cambios, retornando asset actual`);
       return res.json(asset);
     }
 
@@ -205,8 +200,6 @@ router.patch("/:id", async (req, res) => {
       where: { id: assetId },
       data: updateData,
     });
-
-    console.log(`[UPDATE ASSET ${assetId}] Actualización exitosa:`, JSON.stringify(updated, null, 2));
 
     return res.json(updated);
   } catch (err) {
