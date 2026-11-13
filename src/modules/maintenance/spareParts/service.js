@@ -103,24 +103,48 @@ export async function updateSparePart(sparePartId, plantId, data) {
     return null;
   }
 
-  return await prisma.mtSparePart.update({
+  const updateData = {
+    // NO actualizar code - es identificador único y debe ser inmutable
+    ...(data.name !== undefined && { name: data.name || null }),
+    ...(data.description !== undefined && { description: data.description || null }),
+    ...(data.category !== undefined && { category: data.category || null }),
+    ...(data.brand !== undefined && { brand: data.brand || null }),
+    ...(data.partNumber !== undefined && { partNumber: data.partNumber || null }),
+    ...(data.unit !== undefined && { unit: data.unit || 'piece' }),
+    ...(data.minStock !== undefined && { minStock: parseInt(data.minStock) || 0 }),
+    ...(data.maxStock !== undefined && { maxStock: parseInt(data.maxStock) || 0 }),
+    ...(data.location !== undefined && { location: data.location || null }),
+    ...(data.costPerUnit !== undefined && { costPerUnit: parseFloat(data.costPerUnit) || 0 }),
+    ...(data.status !== undefined && { status: data.status || 'ACTIVE' }),
+    version: { increment: 1 },
+  };
+
+  console.log(`[UPDATE SPARE PART ${sparePartId}] Datos recibidos:`, JSON.stringify(data, null, 2));
+  console.log(`[UPDATE SPARE PART ${sparePartId}] Datos a actualizar:`, JSON.stringify(updateData, null, 2));
+  console.log(`[UPDATE SPARE PART ${sparePartId}] Datos actuales:`, JSON.stringify({
+    name: sparePart.name,
+    category: sparePart.category,
+    brand: sparePart.brand,
+    minStock: sparePart.minStock,
+    maxStock: sparePart.maxStock,
+    costPerUnit: sparePart.costPerUnit,
+  }, null, 2));
+
+  const result = await prisma.mtSparePart.update({
     where: { id: sparePartId },
-    data: {
-      // NO actualizar code - es identificador único y debe ser inmutable
-      ...(data.name !== undefined && { name: data.name || null }),
-      ...(data.description !== undefined && { description: data.description || null }),
-      ...(data.category !== undefined && { category: data.category || null }),
-      ...(data.brand !== undefined && { brand: data.brand || null }),
-      ...(data.partNumber !== undefined && { partNumber: data.partNumber || null }),
-      ...(data.unit !== undefined && { unit: data.unit || 'piece' }),
-      ...(data.minStock !== undefined && { minStock: parseInt(data.minStock) || 0 }),
-      ...(data.maxStock !== undefined && { maxStock: parseInt(data.maxStock) || 0 }),
-      ...(data.location !== undefined && { location: data.location || null }),
-      ...(data.costPerUnit !== undefined && { costPerUnit: parseFloat(data.costPerUnit) || 0 }),
-      ...(data.status !== undefined && { status: data.status || 'ACTIVE' }),
-      version: { increment: 1 },
-    },
+    data: updateData,
   });
+
+  console.log(`[UPDATE SPARE PART ${sparePartId}] Datos después actualización:`, JSON.stringify({
+    name: result.name,
+    category: result.category,
+    brand: result.brand,
+    minStock: result.minStock,
+    maxStock: result.maxStock,
+    costPerUnit: result.costPerUnit,
+  }, null, 2));
+
+  return result;
 }
 
 // Link spare part to asset
