@@ -137,6 +137,15 @@ export async function listStockByWarehouse(warehouseId, plantId) {
       },
     },
     orderBy: { sparePart: { code: "asc" } },
+    select: {
+      id: true,
+      warehouseId: true,
+      sparePartId: true,
+      quantity: true,
+      createdAt: true,
+      updatedAt: true,
+      sparePart: true,
+    },
   });
 }
 
