@@ -180,12 +180,6 @@ router.patch("/:id", async (req, res) => {
     const plantId = req.currentPlantId;
     const assetId = parseInt(req.params.id);
 
-    console.log(`[ASSETS PATCH] Request received for asset ${assetId}`, {
-      plantId,
-      body: req.body,
-      bodyKeys: Object.keys(req.body)
-    });
-
     const asset = await prisma.mtAsset.findFirst({
       where: {
         id: assetId,
@@ -195,60 +189,55 @@ router.patch("/:id", async (req, res) => {
     });
 
     if (!asset) {
-      console.log(`[ASSETS PATCH] Asset ${assetId} not found`);
       return res.status(404).json({ error: "Asset not found" });
     }
-
-    console.log(`[ASSETS PATCH] Found asset:`, {
-      id: asset.id,
-      code: asset.code,
-      name: asset.name,
-      status: asset.status
-    });
 
     const updateData = {};
     const allowedFields = ["code", "name", "location", "manufacturer", "model", "serialNumber", "criticality", "status", "notes"];
 
     for (const field of allowedFields) {
       if (field in req.body) {
+        // Si es el código y está siendo cambiado, validar que no exista otro activo con ese código
+        if (field === 'code' && req.body[field] !== asset.code) {
+          const existingCode = await prisma.mtAsset.findFirst({
+            where: {
+              plantId,
+              code: req.body[field],
+              id: { not: assetId }, // Excluir el activo actual
+            },
+          });
+
+          if (existingCode) {
+            return res.status(409).json({ error: `El código '${req.body[field]}' ya existe en esta planta` });
+          }
+        }
+
         updateData[field] = req.body[field];
-        console.log(`[ASSETS PATCH] Adding field ${field} = ${JSON.stringify(req.body[field])}`);
       }
     }
 
     if ("installedAt" in req.body) {
       updateData.installedAt = req.body.installedAt ? new Date(req.body.installedAt) : null;
-      console.log(`[ASSETS PATCH] Adding installedAt`);
     }
-
-    console.log(`[ASSETS PATCH] Update data:`, updateData);
-    console.log(`[ASSETS PATCH] Update data keys count:`, Object.keys(updateData).length);
 
     if (Object.keys(updateData).length === 0) {
-      console.log(`[ASSETS PATCH] No fields to update, returning current asset`);
       return res.json(asset);
     }
-
-    console.log(`[ASSETS PATCH] Calling Prisma update with:`, updateData);
 
     const updated = await prisma.mtAsset.update({
       where: { id: assetId },
       data: updateData,
     });
 
-    console.log(`[ASSETS PATCH] Update successful - datos devueltos:`, JSON.stringify(updated, null, 2));
-
-    // Verificar que los datos fueron guardados en la BD
-    const verify = await prisma.mtAsset.findUnique({
-      where: { id: assetId },
-    });
-
-    console.log(`[ASSETS PATCH] Verificación en BD:`, JSON.stringify(verify, null, 2));
-
     return res.json(updated);
   } catch (err) {
-    console.error(`[ASSETS PATCH] Error occurred:`, err);
     logger.error("[assets PATCH]", err);
+
+    // Validar si es un error de constraint único
+    if (err.code === 'P2002') {
+      return res.status(409).json({ error: "El código del activo ya existe en esta planta" });
+    }
+
     return res.status(500).json({ error: "Error updating asset", details: err.message });
   }
 });
