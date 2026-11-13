@@ -120,7 +120,7 @@ export async function listStockByWarehouse(warehouseId, plantId) {
     return null;
   }
 
-  return await prisma.mtStock.findMany({
+  const result = await prisma.mtStock.findMany({
     where: { warehouseId },
     include: {
       sparePart: {
@@ -138,6 +138,16 @@ export async function listStockByWarehouse(warehouseId, plantId) {
     },
     orderBy: { sparePart: { code: "asc" } },
   });
+
+  if (result.length > 0) {
+    console.log('[listStockByWarehouse] Primer stock con fechas:', {
+      id: result[0].id,
+      createdAt: result[0].createdAt,
+      updatedAt: result[0].updatedAt,
+    });
+  }
+
+  return result;
 }
 
 // ============================================================
