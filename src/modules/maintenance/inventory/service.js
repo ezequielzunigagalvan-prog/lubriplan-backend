@@ -270,10 +270,10 @@ export async function recordSparePartConsumption(workOrderId, sparePartId, quant
 export async function getStockMovementHistory(stockId, plantId, limit = 50) {
   const stock = await prisma.mtStock.findUnique({
     where: { id: stockId },
-    select: { warehouse: { select: { plantId: true } } },
+    include: { warehouse: { select: { plantId: true } } },
   });
 
-  if (!stock || stock.warehouse.plantId !== plantId) {
+  if (!stock || !stock.warehouse || stock.warehouse.plantId !== plantId) {
     return null;
   }
 
