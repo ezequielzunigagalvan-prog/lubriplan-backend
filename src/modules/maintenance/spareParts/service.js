@@ -106,16 +106,17 @@ export async function updateSparePart(sparePartId, plantId, data) {
   return await prisma.mtSparePart.update({
     where: { id: sparePartId },
     data: {
+      // NO actualizar code - es identificador único y debe ser inmutable
       ...(data.name && { name: data.name }),
       ...(data.description !== undefined && { description: data.description }),
       ...(data.category && { category: data.category }),
       ...(data.brand && { brand: data.brand }),
       ...(data.partNumber && { partNumber: data.partNumber }),
       ...(data.unit && { unit: data.unit }),
-      ...(data.minStock !== undefined && { minStock: data.minStock }),
-      ...(data.maxStock !== undefined && { maxStock: data.maxStock }),
+      ...(data.minStock !== undefined && { minStock: parseInt(data.minStock) || 0 }),
+      ...(data.maxStock !== undefined && { maxStock: parseInt(data.maxStock) || 0 }),
       ...(data.location !== undefined && { location: data.location }),
-      ...(data.costPerUnit !== undefined && { costPerUnit: data.costPerUnit }),
+      ...(data.costPerUnit !== undefined && { costPerUnit: parseFloat(data.costPerUnit) || 0 }),
       ...(data.status && { status: data.status }),
       version: { increment: 1 },
     },
