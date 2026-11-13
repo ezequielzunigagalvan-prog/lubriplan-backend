@@ -207,7 +207,7 @@ router.patch("/:id", async (req, res) => {
     });
 
     const updateData = {};
-    const allowedFields = ["name", "location", "manufacturer", "model", "serialNumber", "criticality", "status", "notes"];
+    const allowedFields = ["code", "name", "location", "manufacturer", "model", "serialNumber", "criticality", "status", "notes"];
 
     for (const field of allowedFields) {
       if (field in req.body) {
