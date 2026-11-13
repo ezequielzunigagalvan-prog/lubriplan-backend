@@ -236,11 +236,14 @@ router.patch("/:id", async (req, res) => {
       data: updateData,
     });
 
-    console.log(`[ASSETS PATCH] Update successful:`, {
-      id: updated.id,
-      name: updated.name,
-      status: updated.status
+    console.log(`[ASSETS PATCH] Update successful - datos devueltos:`, JSON.stringify(updated, null, 2));
+
+    // Verificar que los datos fueron guardados en la BD
+    const verify = await prisma.mtAsset.findUnique({
+      where: { id: assetId },
     });
+
+    console.log(`[ASSETS PATCH] Verificación en BD:`, JSON.stringify(verify, null, 2));
 
     return res.json(updated);
   } catch (err) {
