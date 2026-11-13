@@ -1,4 +1,5 @@
 import prisma from "../../../prisma.js";
+import { Prisma } from "@prisma/client";
 import { logger } from "../../../config/logger.js";
 
 // Create spare part
@@ -111,10 +112,10 @@ export async function updateSparePart(sparePartId, plantId, data) {
     ...(data.brand !== undefined && { brand: data.brand || null }),
     ...(data.partNumber !== undefined && { partNumber: data.partNumber || null }),
     ...(data.unit !== undefined && { unit: data.unit || 'piece' }),
-    ...(data.minStock !== undefined && { minStock: parseInt(data.minStock) || 0 }),
-    ...(data.maxStock !== undefined && { maxStock: parseInt(data.maxStock) || 0 }),
+    ...(data.minStock !== undefined && { minStock: new Prisma.Decimal(Number(data.minStock) || 0) }),
+    ...(data.maxStock !== undefined && { maxStock: new Prisma.Decimal(Number(data.maxStock) || 0) }),
     ...(data.location !== undefined && { location: data.location || null }),
-    ...(data.costPerUnit !== undefined && { costPerUnit: parseFloat(data.costPerUnit) || 0 }),
+    ...(data.costPerUnit !== undefined && { costPerUnit: new Prisma.Decimal(Number(data.costPerUnit) || 0) }),
     ...(data.status !== undefined && { status: data.status || 'ACTIVE' }),
     version: { increment: 1 },
   };
