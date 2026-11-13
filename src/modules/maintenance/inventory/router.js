@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { requireRole } from "../../../middleware/requireRole.js";
 import { logger } from "../../../config/logger.js";
+import prisma from "../../../prisma.js";
 import {
   createWarehouse,
   listWarehouses,
@@ -123,6 +124,37 @@ router.get("/warehouses/:warehouseId/stock", async (req, res) => {
   } catch (error) {
     logger.error("[GET /warehouses/:warehouseId/stock]", error);
     res.status(500).json({ error: "Error listing stock" });
+  }
+});
+
+// PATCH /api/maintenance/inventory/stock/:id - Update stock quantity
+router.patch("/stock/:id", requireRole(["ADMIN", "SUPERVISOR"]), async (req, res) => {
+  try {
+    const plantId = req.currentPlantId;
+    const { quantity } = req.body;
+
+    if (quantity === undefined || quantity === null) {
+      return res.status(422).json({ error: "Missing required field: quantity" });
+    }
+
+    const stockId = parseInt(req.params.id);
+    const stock = await getStock(stockId, plantId);
+
+    if (!stock) {
+      return res.status(404).json({ error: "Stock not found" });
+    }
+
+    // Actualizar cantidad directamente
+    const updated = await prisma.mtStock.update({
+      where: { id: stockId },
+      data: { quantity: Math.max(0, parseFloat(quantity)) },
+      include: { sparePart: true },
+    });
+
+    res.json(updated);
+  } catch (error) {
+    logger.error("[PATCH /stock/:id]", error);
+    res.status(500).json({ error: "Error updating stock" });
   }
 });
 
