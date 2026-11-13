@@ -1,4 +1,5 @@
 import express from "express";
+import { Prisma } from "@prisma/client";
 import prisma from "../../../prisma.js";
 import { logger } from "../../../config/logger.js";
 
@@ -12,86 +13,92 @@ router.get("/summary", async (req, res) => {
     const thirtyDaysAgo = new Date(today);
     thirtyDaysAgo.setDate(today.getDate() - 30);
 
-    const [
-      statusCounts,
-      overdue,
-      createdLast30,
-      closedLast30,
-      topAssets,
-    ] = await Promise.all([
-      prisma.mtWorkOrder.groupBy({
-        by: ["status"],
-        where: { plantId },
-        _count: true,
-      }),
+    // Contar órdenes por estado
+    const statusCounts = await prisma.$queryRaw`
+      SELECT status, COUNT(*) as count FROM "MtWorkOrder"
+      WHERE "plantId" = ${plantId}
+      GROUP BY status
+    `;
 
-      prisma.mtWorkOrder.count({
-        where: {
-          plantId,
-          scheduledAt: { lt: today },
-          status: { notIn: ["VALIDATED", "REJECTED", "CANCELLED"] },
-        },
-      }),
+    // Contar órdenes vencidas
+    const overdueResult = await prisma.$queryRaw`
+      SELECT COUNT(*) as total FROM "MtWorkOrder"
+      WHERE "plantId" = ${plantId}
+      AND "scheduledAt" < ${today}
+      AND status NOT IN ('VALIDATED', 'REJECTED', 'CANCELLED')
+    `;
 
-      prisma.mtWorkOrder.count({
-        where: {
-          plantId,
-          createdAt: { gte: thirtyDaysAgo },
-        },
-      }),
+    // Contar creadas en últimos 30 días
+    const createdResult = await prisma.$queryRaw`
+      SELECT COUNT(*) as total FROM "MtWorkOrder"
+      WHERE "plantId" = ${plantId}
+      AND "createdAt" >= ${thirtyDaysAgo}
+    `;
 
-      prisma.mtWorkOrder.count({
-        where: {
-          plantId,
-          finishedAt: { gte: thirtyDaysAgo },
-          status: { in: ["VALIDATED", "REJECTED", "CANCELLED"] },
-        },
-      }),
+    // Contar cerradas en últimos 30 días
+    const closedResult = await prisma.$queryRaw`
+      SELECT COUNT(*) as total FROM "MtWorkOrder"
+      WHERE "plantId" = ${plantId}
+      AND "finishedAt" >= ${thirtyDaysAgo}
+      AND status IN ('VALIDATED', 'REJECTED', 'CANCELLED')
+    `;
 
-      prisma.mtWorkOrder.groupBy({
-        by: ["assetId"],
-        where: { plantId, type: "CORRECTIVE" },
-        _count: true,
-        orderBy: { _count: { id: "desc" } },
-        take: 5,
-      }),
-    ]);
+    // Top 5 activos con más fallas correctivas
+    const topAssets = await prisma.$queryRaw(
+      Prisma.sql`
+        SELECT "assetId", COUNT(*) as count FROM "MtWorkOrder"
+        WHERE "plantId" = ${plantId}
+        AND type = 'CORRECTIVE'
+        AND "assetId" IS NOT NULL
+        GROUP BY "assetId"
+        ORDER BY count DESC
+        LIMIT 5
+      `
+    );
 
+    // Construir resumen por estado
     const statusSummary = {};
-    statusCounts.forEach(({ status, _count }) => {
-      statusSummary[status] = _count;
+    statusCounts.forEach(({ status, count }) => {
+      statusSummary[status] = parseInt(count);
     });
 
-    const assetIds = topAssets
-      .filter((a) => a.assetId)
-      .map((a) => a.assetId);
-
+    // Obtener nombres de activos
     let topAssetsWithNames = [];
-    if (assetIds.length > 0) {
-      topAssetsWithNames = await prisma.mtAsset.findMany({
-        where: { id: { in: assetIds }, plantId },
-        select: { id: true, code: true, name: true },
-      });
+    if (topAssets.length > 0) {
+      const assetIds = topAssets.map(a => a.assetId);
+      const assetNames = await prisma.$queryRaw(
+        Prisma.sql`
+          SELECT id, code, name FROM "MtAsset"
+          WHERE id IN (${Prisma.join(assetIds)})
+          AND "plantId" = ${plantId}
+        `
+      );
 
-      topAssetsWithNames = topAssets
-        .filter((a) => a.assetId)
-        .map((ta) => {
-          const asset = topAssetsWithNames.find((a) => a.id === ta.assetId);
-          return {
-            assetId: ta.assetId,
-            assetCode: asset?.code,
-            assetName: asset?.name,
-            correctiveCount: ta._count,
-          };
-        });
+      topAssetsWithNames = topAssets.map((ta) => {
+        const asset = assetNames.find((a) => a.id === ta.assetId);
+        return {
+          assetId: ta.assetId,
+          assetCode: asset?.code || 'N/A',
+          assetName: asset?.name || 'Sin nombre',
+          correctiveCount: parseInt(ta.count),
+        };
+      });
     }
 
     return res.json({
-      byStatus: statusSummary,
-      overdueCount: overdue,
-      createdLast30Days: createdLast30,
-      closedLast30Days: closedLast30,
-      topCorrectedAssets: topAssetsWithNames,
+      data: {
+        byStatus: statusSummary,
+        openedCount: parseInt(statusSummary.OPEN || 0),
+        overdueCount: parseInt(overdueResult[0]?.total || 0),
+        waitingCount: parseInt(statusSummary.WAITING || 0),
+        closed30DaysCount: parseInt(closedResult[0]?.total || 0),
+        topAssets: topAssetsWithNames.map(ta => ({
+          id: ta.assetId,
+          name: ta.assetName,
+          code: ta.assetCode,
+          correctiveCount: ta.correctiveCount,
+        })),
+      },
     });
   } catch (err) {
     logger.error("[dashboard/summary GET]", err);

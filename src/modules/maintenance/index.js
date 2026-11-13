@@ -2,6 +2,7 @@ import express from "express";
 import { requireAuth } from "../../middleware/requireAuth.js";
 import { requireRole } from "../../middleware/requireRole.js";
 import { requireMaintenanceAccess } from "./access.js";
+import { getNextWorkOrderNumber, formatWorkOrderNumber } from "./utils/numeracion.js";
 import assetsRouter from "./assets/router.js";
 import workOrdersRouter from "./workOrders/router.js";
 import dashboardRouter from "./dashboard/router.js";
@@ -17,6 +18,7 @@ import notificationsRouter from "./notifications/router.js";
 import schedulerRouter from "./scheduler/router.js";
 import analyticsRouter from "./analytics/analyticsRouter.js";
 import reportsRouter from "./reports/reportsRouter.js";
+import techniciansRouter from "./technicians/router.js";
 
 export function mountMaintenance(app, deps) {
   const { prisma } = deps;
@@ -37,16 +39,15 @@ export function mountMaintenance(app, deps) {
         return res.status(400).json({ error: "PLANT_REQUIRED" });
       }
 
-      // Use raw SQL to bypass Prisma schema issues
-      const access = await prisma.$queryRaw`
-        SELECT enabled, plan FROM "mtPlantAccess" WHERE plantid = ${plantId}
-      `;
+      // Check if plant has maintenance access enabled
+      const access = await prisma.mtPlantAccess.findUnique({
+        where: { plantId },
+      });
 
-      const result = access?.[0];
       return res.json({
-        enabled: !!result?.enabled,
+        enabled: !!access?.enabled,
         role: req.user.role,
-        plan: result?.plan ?? null,
+        plan: access?.plan ?? null,
       });
     } catch (err) {
       console.error("[maintenance/access]", err);
@@ -60,6 +61,7 @@ export function mountMaintenance(app, deps) {
   maintenanceRouter.use("/assets", assetsRouter);
   maintenanceRouter.use("/work-orders", workOrdersRouter);
   maintenanceRouter.use("/plans", plansRouter);
+  maintenanceRouter.use("/technicians", techniciansRouter);
   maintenanceRouter.use("/meters", metersRouter);
   maintenanceRouter.use("/calendar", calendarRouter);
   maintenanceRouter.use("/compliance", complianceRouter);
@@ -91,6 +93,48 @@ export function mountMaintenance(app, deps) {
       return res.json(technicians);
     } catch (err) {
       return res.status(500).json({ error: "Error fetching technicians" });
+    }
+  });
+
+  maintenanceRouter.post("/reportar-falla", async (req, res) => {
+    try {
+      const plantId = req.currentPlantId;
+      const { assetId, title, description, priority = "HIGH" } = req.body;
+
+      if (!title || !assetId) {
+        return res.status(400).json({ error: "title and assetId are required" });
+      }
+
+      const number = await getNextWorkOrderNumber(plantId);
+
+      const wo = await prisma.mtWorkOrder.create({
+        data: {
+          plantId,
+          number,
+          type: "CORRECTIVE",
+          priority,
+          assetId: parseInt(assetId),
+          title,
+          description: description || "",
+          requestedBy: req.user.id,
+          status: "REQUESTED",
+        },
+        select: {
+          id: true,
+          number: true,
+          status: true,
+          createdAt: true,
+        },
+      });
+
+      return res.status(201).json({
+        ...wo,
+        number: formatWorkOrderNumber(wo.number),
+        message: "Falla reportada exitosamente"
+      });
+    } catch (err) {
+      console.error("[maintenance/reportar-falla POST]", err);
+      return res.status(500).json({ error: "Error reporting failure" });
     }
   });
 

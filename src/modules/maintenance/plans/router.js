@@ -3,6 +3,8 @@ import { z } from "zod";
 import prisma from "../../../prisma.js";
 import { logger } from "../../../config/logger.js";
 import { getNextWorkOrderNumber, formatWorkOrderNumber } from "../utils/numeracion.js";
+import { executePlan, completePlanExecution, getPlanHistory, getPlanRoadmap } from "./planExecution.js";
+import { getOverduePlans, getUpcomingPlans } from "./planScheduler.js";
 
 const router = express.Router();
 
@@ -393,6 +395,285 @@ router.get("/:id/history", async (req, res) => {
   } catch (err) {
     logger.error("[plans/:id/history GET]", err);
     return res.status(500).json({ error: "Error fetching plan history" });
+  }
+});
+
+// ============================================================
+// NUEVOS ENDPOINTS
+// ============================================================
+
+// GET /plans/search/assets - Buscador de activos
+router.get("/search/assets", async (req, res) => {
+  try {
+    const plantId = req.currentPlantId;
+    const { q, limit = 20 } = req.query;
+
+    let where = { plantId, deletedAt: null };
+
+    if (q) {
+      where.OR = [
+        { code: { contains: q, mode: "insensitive" } },
+        { name: { contains: q, mode: "insensitive" } },
+      ];
+    }
+
+    const assets = await prisma.mtAsset.findMany({
+      where,
+      select: {
+        id: true,
+        code: true,
+        name: true,
+        location: true,
+        level: true,
+      },
+      take: parseInt(limit),
+    });
+
+    return res.json(assets);
+  } catch (err) {
+    logger.error("[plans/search/assets GET]", err);
+    return res.status(500).json({ error: "Error searching assets" });
+  }
+});
+
+// GET /plans/search/technicians - Buscador de técnicos
+router.get("/search/technicians", async (req, res) => {
+  try {
+    const plantId = req.currentPlantId;
+    const { q, limit = 20 } = req.query;
+
+    let where = { plantId };
+
+    if (q) {
+      where.OR = [
+        { name: { contains: q, mode: "insensitive" } },
+        { code: { contains: q, mode: "insensitive" } },
+      ];
+    }
+
+    const technicians = await prisma.technician.findMany({
+      where,
+      select: {
+        id: true,
+        name: true,
+        code: true,
+        email: true,
+      },
+      take: parseInt(limit),
+    });
+
+    return res.json(technicians);
+  } catch (err) {
+    logger.error("[plans/search/technicians GET]", err);
+    return res.status(500).json({ error: "Error searching technicians" });
+  }
+});
+
+// GET /plans/search/spareparts - Buscador de refacciones
+router.get("/search/spareparts", async (req, res) => {
+  try {
+    const plantId = req.currentPlantId;
+    const { q, limit = 20 } = req.query;
+
+    let where = { plantId, status: "ACTIVE" };
+
+    if (q) {
+      where.OR = [
+        { code: { contains: q, mode: "insensitive" } },
+        { name: { contains: q, mode: "insensitive" } },
+      ];
+    }
+
+    const spares = await prisma.mtSparePart.findMany({
+      where,
+      select: {
+        id: true,
+        code: true,
+        name: true,
+        costPerUnit: true,
+      },
+      take: parseInt(limit),
+    });
+
+    return res.json(spares);
+  } catch (err) {
+    logger.error("[plans/search/spareparts GET]", err);
+    return res.status(500).json({ error: "Error searching spare parts" });
+  }
+});
+
+// GET /plans/overdue - Planes vencidos
+router.get("/list/overdue", async (req, res) => {
+  try {
+    const plantId = req.currentPlantId;
+    const plans = await getOverduePlans(plantId);
+    return res.json(plans);
+  } catch (err) {
+    logger.error("[plans/overdue GET]", err);
+    return res.status(500).json({ error: "Error fetching overdue plans" });
+  }
+});
+
+// GET /plans/upcoming - Planes próximos
+router.get("/list/upcoming", async (req, res) => {
+  try {
+    const plantId = req.currentPlantId;
+    const { days = 7 } = req.query;
+    const plans = await getUpcomingPlans(plantId, parseInt(days));
+    return res.json(plans);
+  } catch (err) {
+    logger.error("[plans/upcoming GET]", err);
+    return res.status(500).json({ error: "Error fetching upcoming plans" });
+  }
+});
+
+// GET /:id/roadmap - Hoja de ruta del plan
+router.get("/:id/roadmap", async (req, res) => {
+  try {
+    const plantId = req.currentPlantId;
+    const planId = parseInt(req.params.id);
+
+    const plan = await prisma.mtPlan.findFirst({
+      where: { id: planId, plantId, deletedAt: null },
+    });
+
+    if (!plan) {
+      return res.status(404).json({ error: "Plan not found" });
+    }
+
+    const roadmap = await getPlanRoadmap(planId, plantId);
+    return res.json(roadmap);
+  } catch (err) {
+    logger.error("[plans/:id/roadmap GET]", err);
+    return res.status(500).json({ error: "Error fetching plan roadmap" });
+  }
+});
+
+// POST /:id/execute - Ejecutar plan
+router.post("/:id/execute", async (req, res) => {
+  try {
+    const plantId = req.currentPlantId;
+    const planId = parseInt(req.params.id);
+    const user = req.user;
+
+    const plan = await prisma.mtPlan.findFirst({
+      where: { id: planId, plantId, deletedAt: null },
+    });
+
+    if (!plan) {
+      return res.status(404).json({ error: "Plan not found" });
+    }
+
+    const result = await executePlan(planId, plantId, user.id, req.body);
+    return res.status(201).json(result);
+  } catch (err) {
+    logger.error("[plans/:id/execute POST]", err);
+    return res.status(500).json({ error: err.message || "Error executing plan" });
+  }
+});
+
+// POST /execution/:id/complete - Completar ejecución
+router.post("/execution/:id/complete", async (req, res) => {
+  try {
+    const plantId = req.currentPlantId;
+    const executionId = parseInt(req.params.id);
+
+    const execution = await completePlanExecution(executionId, plantId, req.body);
+    return res.json(execution);
+  } catch (err) {
+    logger.error("[plans/execution/:id/complete POST]", err);
+    return res.status(500).json({ error: "Error completing plan execution" });
+  }
+});
+
+// POST /:id/technicians - Asignar técnico a plan
+router.post("/:id/technicians", async (req, res) => {
+  try {
+    const plantId = req.currentPlantId;
+    const planId = parseInt(req.params.id);
+    const { technicianId, role = "EXECUTOR" } = req.body;
+
+    if (!technicianId) {
+      return res.status(400).json({ error: "technicianId is required" });
+    }
+
+    const assignment = await prisma.mtPlanTechnician.create({
+      data: {
+        planId,
+        technicianId,
+        role,
+      },
+      include: { technician: true },
+    });
+
+    return res.status(201).json(assignment);
+  } catch (err) {
+    logger.error("[plans/:id/technicians POST]", err);
+    return res.status(500).json({ error: "Error assigning technician" });
+  }
+});
+
+// DELETE /:id/technicians/:technicianId - Remover técnico
+router.delete("/:id/technicians/:technicianId", async (req, res) => {
+  try {
+    const planId = parseInt(req.params.id);
+    const technicianId = parseInt(req.params.technicianId);
+
+    await prisma.mtPlanTechnician.delete({
+      where: {
+        planId_technicianId: { planId, technicianId },
+      },
+    });
+
+    return res.json({ message: "Technician removed" });
+  } catch (err) {
+    logger.error("[plans/:id/technicians/:technicianId DELETE]", err);
+    return res.status(500).json({ error: "Error removing technician" });
+  }
+});
+
+// POST /:id/spareparts - Asignar refacción a plan
+router.post("/:id/spareparts", async (req, res) => {
+  try {
+    const planId = parseInt(req.params.id);
+    const { sparePartId, quantityRequired = 1 } = req.body;
+
+    if (!sparePartId) {
+      return res.status(400).json({ error: "sparePartId is required" });
+    }
+
+    const assignment = await prisma.mtPlanSparePart.create({
+      data: {
+        planId,
+        sparePartId,
+        quantityRequired: parseFloat(quantityRequired),
+      },
+      include: { sparePart: true },
+    });
+
+    return res.status(201).json(assignment);
+  } catch (err) {
+    logger.error("[plans/:id/spareparts POST]", err);
+    return res.status(500).json({ error: "Error assigning spare part" });
+  }
+});
+
+// DELETE /:id/spareparts/:sparePartId - Remover refacción
+router.delete("/:id/spareparts/:sparePartId", async (req, res) => {
+  try {
+    const planId = parseInt(req.params.id);
+    const sparePartId = parseInt(req.params.sparePartId);
+
+    await prisma.mtPlanSparePart.delete({
+      where: {
+        planId_sparePartId: { planId, sparePartId },
+      },
+    });
+
+    return res.json({ message: "Spare part removed" });
+  } catch (err) {
+    logger.error("[plans/:id/spareparts/:sparePartId DELETE]", err);
+    return res.status(500).json({ error: "Error removing spare part" });
   }
 });
 

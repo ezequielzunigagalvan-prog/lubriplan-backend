@@ -385,6 +385,48 @@ router.post("/:id/photos", upload.single("image"), async (req, res) => {
   }
 });
 
+router.post("/report-failure", async (req, res) => {
+  try {
+    const plantId = req.currentPlantId;
+    const { assetId, title, description, severity = "HIGH" } = req.body;
+
+    if (!title || !assetId) {
+      return res.status(400).json({ error: "title and assetId are required" });
+    }
+
+    const number = await getNextWorkOrderNumber(plantId);
+
+    const wo = await prisma.mtWorkOrder.create({
+      data: {
+        plantId,
+        number,
+        type: "CORRECTIVE",
+        priority: severity,
+        assetId: parseInt(assetId),
+        title,
+        description: description || "",
+        requestedBy: req.user.id,
+        status: "REQUESTED",
+      },
+      select: {
+        id: true,
+        number: true,
+        status: true,
+        createdAt: true,
+      },
+    });
+
+    return res.status(201).json({
+      ...wo,
+      number: formatWorkOrderNumber(wo.number),
+      message: "Falla reportada exitosamente"
+    });
+  } catch (err) {
+    logger.error("[workOrders/report-failure POST]", err);
+    return res.status(500).json({ error: "Error reporting failure" });
+  }
+});
+
 router.delete("/:id/photos/:photoId", async (req, res) => {
   try {
     const plantId = req.currentPlantId;

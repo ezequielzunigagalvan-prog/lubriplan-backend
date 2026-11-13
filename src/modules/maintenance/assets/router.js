@@ -31,30 +31,46 @@ router.get("/", async (req, res) => {
     const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 50));
     const skip = (pageNum - 1) * limitNum;
 
-    let whereClause = `WHERE "plantid" = ${plantId} AND "deletedat" IS NULL`;
-    if (parentId) whereClause += ` AND "parentid" = ${parseInt(parentId)}`;
-    if (status) whereClause += ` AND "status" = '${status}'`;
-    if (search) {
-      const searchTerm = search.replace(/'/g, "''");
-      whereClause += ` AND ("code" ILIKE '%${searchTerm}%' OR "name" ILIKE '%${searchTerm}%')`;
-    }
+    const where = {
+      plantId,
+      deletedAt: null,
+    };
+    if (parentId) where.parentId = parseInt(parentId);
+    if (status) where.status = status;
 
-    const assets = await prisma.$queryRawUnsafe(`
-      SELECT "id", "code", "name", "level", "status", "criticality", "parentid", "createdat"
-      FROM "MtAsset"
-      ${whereClause}
-      ORDER BY "createdat" DESC
-      LIMIT ${limitNum} OFFSET ${skip}
-    `);
+    const assets = await prisma.mtAsset.findMany({
+      where,
+      select: {
+        id: true,
+        code: true,
+        name: true,
+        level: true,
+        status: true,
+        criticality: true,
+        parentId: true,
+        location: true,
+        manufacturer: true,
+        model: true,
+        serialNumber: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: "desc" },
+      skip,
+      take: limitNum,
+    });
 
-    const countResult = await prisma.$queryRawUnsafe(`
-      SELECT COUNT(*) as total FROM "MtAsset" ${whereClause}
-    `);
+    // Filter by search term if provided
+    const filtered = search
+      ? assets.filter(a =>
+          a.code?.toLowerCase().includes(search.toLowerCase()) ||
+          a.name?.toLowerCase().includes(search.toLowerCase())
+        )
+      : assets;
 
-    const total = parseInt(countResult[0]?.total || 0);
+    const total = await prisma.mtAsset.count({ where });
 
     return res.json({
-      data: assets,
+      data: filtered,
       total,
       page: pageNum,
       totalPages: Math.ceil(total / limitNum),
@@ -70,25 +86,36 @@ router.get("/:id", async (req, res) => {
     const plantId = req.currentPlantId;
     const assetId = parseInt(req.params.id);
 
-    const assets = await prisma.$queryRaw`
-      SELECT * FROM "MtAsset"
-      WHERE id = ${assetId} AND "plantid" = ${plantId} AND "deletedat" IS NULL
-    `;
+    const asset = await prisma.mtAsset.findFirst({
+      where: {
+        id: assetId,
+        plantId,
+        deletedAt: null,
+      },
+    });
 
-    const asset = assets?.[0];
     if (!asset) {
       return res.status(404).json({ error: "Asset not found" });
     }
 
-    const recentWOs = await prisma.$queryRaw`
-      SELECT id, number, status, type, title, "createdat"
-      FROM "MtWorkOrder"
-      WHERE "assetid" = ${assetId} AND "plantid" = ${plantId}
-      ORDER BY "createdat" DESC
-      LIMIT 10
-    `;
+    const recentWorkOrders = await prisma.mtWorkOrder.findMany({
+      where: {
+        assetId,
+        plantId,
+      },
+      select: {
+        id: true,
+        number: true,
+        status: true,
+        type: true,
+        title: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: "desc" },
+      take: 10,
+    });
 
-    return res.json({ asset, recentWorkOrders: recentWOs });
+    return res.json({ asset, recentWorkOrders });
   } catch (err) {
     logger.error("[assets/:id GET]", err);
     return res.status(500).json({ error: "Error fetching asset" });
@@ -104,23 +131,25 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ error: "Invalid installedAt date" });
     }
 
-    const result = await prisma.$queryRaw`
-      INSERT INTO "MtAsset" (
-        "plantid", "parentid", "level", "code", "name", "location",
-        "manufacturer", "model", "serialnumber", "installedat",
-        "criticality", "status", "notes", "createdat", "updatedat"
-      ) VALUES (
-        ${plantId}, ${parsed.parentId || null}, ${parsed.level}, ${parsed.code},
-        ${parsed.name}, ${parsed.location || null}, ${parsed.manufacturer || null},
-        ${parsed.model || null}, ${parsed.serialNumber || null},
-        ${parsed.installedAt ? new Date(parsed.installedAt) : null},
-        ${parsed.criticality || null}, ${parsed.status}, ${parsed.notes || null},
-        NOW(), NOW()
-      )
-      RETURNING *
-    `;
+    const result = await prisma.mtAsset.create({
+      data: {
+        plantId,
+        parentId: parsed.parentId || null,
+        level: parsed.level,
+        code: parsed.code,
+        name: parsed.name,
+        location: parsed.location || null,
+        manufacturer: parsed.manufacturer || null,
+        model: parsed.model || null,
+        serialNumber: parsed.serialNumber || null,
+        installedAt: parsed.installedAt ? new Date(parsed.installedAt) : null,
+        criticality: parsed.criticality || null,
+        status: parsed.status,
+        notes: parsed.notes || null,
+      },
+    });
 
-    return res.status(201).json(result[0] || {});
+    return res.status(201).json(result);
   } catch (err) {
     if (err instanceof z.ZodError) {
       return res.status(400).json({ error: err.errors[0]?.message });
@@ -138,50 +167,48 @@ router.patch("/:id", async (req, res) => {
     const plantId = req.currentPlantId;
     const assetId = parseInt(req.params.id);
 
-    const assets = await prisma.$queryRaw`
-      SELECT * FROM "MtAsset"
-      WHERE id = ${assetId} AND "plantid" = ${plantId} AND "deletedat" IS NULL
-    `;
+    const asset = await prisma.mtAsset.findFirst({
+      where: {
+        id: assetId,
+        plantId,
+        deletedAt: null,
+      },
+    });
 
-    if (!assets?.[0]) {
+    if (!asset) {
       return res.status(404).json({ error: "Asset not found" });
     }
 
-    const updates = [];
-    const allowedFields = {
-      name: "name",
-      location: "location",
-      manufacturer: "manufacturer",
-      model: "model",
-      serialNumber: "serialnumber",
-      criticality: "criticality",
-      status: "status",
-      notes: "notes"
-    };
+    console.log(`[UPDATE ASSET ${assetId}] Datos recibidos:`, JSON.stringify(req.body, null, 2));
 
-    for (const [key, dbCol] of Object.entries(allowedFields)) {
-      if (key in req.body) {
-        updates.push(`"${dbCol}" = ${req.body[key] === null ? "NULL" : `'${String(req.body[key]).replace(/'/g, "''")}'`}`);
+    const updateData = {};
+    const allowedFields = ["name", "location", "manufacturer", "model", "serialNumber", "criticality", "status", "notes"];
+
+    for (const field of allowedFields) {
+      if (field in req.body) {
+        updateData[field] = req.body[field];
       }
     }
 
     if ("installedAt" in req.body) {
-      const date = req.body.installedAt ? `'${new Date(req.body.installedAt).toISOString()}'` : "NULL";
-      updates.push(`"installedat" = ${date}`);
+      updateData.installedAt = req.body.installedAt ? new Date(req.body.installedAt) : null;
     }
 
-    if (updates.length === 0) {
-      return res.json(assets[0]);
+    console.log(`[UPDATE ASSET ${assetId}] Datos a actualizar:`, JSON.stringify(updateData, null, 2));
+
+    if (Object.keys(updateData).length === 0) {
+      console.log(`[UPDATE ASSET ${assetId}] Sin cambios, retornando asset actual`);
+      return res.json(asset);
     }
 
-    const updated = await prisma.$queryRawUnsafe(`
-      UPDATE "MtAsset"
-      SET ${updates.join(", ")}, "updatedat" = NOW()
-      WHERE id = ${assetId}
-      RETURNING *
-    `);
+    const updated = await prisma.mtAsset.update({
+      where: { id: assetId },
+      data: updateData,
+    });
 
-    return res.json(updated[0] || {});
+    console.log(`[UPDATE ASSET ${assetId}] Actualización exitosa:`, JSON.stringify(updated, null, 2));
+
+    return res.json(updated);
   } catch (err) {
     logger.error("[assets PATCH]", err);
     return res.status(500).json({ error: "Error updating asset" });
@@ -197,33 +224,40 @@ router.delete("/:id", async (req, res) => {
     const plantId = req.currentPlantId;
     const assetId = parseInt(req.params.id);
 
-    const assets = await prisma.$queryRaw`
-      SELECT * FROM "MtAsset"
-      WHERE id = ${assetId} AND "plantid" = ${plantId} AND "deletedat" IS NULL
-    `;
+    const asset = await prisma.mtAsset.findFirst({
+      where: {
+        id: assetId,
+        plantId,
+        deletedAt: null,
+      },
+    });
 
-    if (!assets?.[0]) {
+    if (!asset) {
       return res.status(404).json({ error: "Asset not found" });
     }
 
-    const woCount = await prisma.$queryRaw`
-      SELECT COUNT(*) as total FROM "MtWorkOrder"
-      WHERE "assetid" = ${assetId} AND "plantid" = ${plantId}
-      AND status NOT IN ('VALIDATED', 'REJECTED', 'CANCELLED')
-    `;
+    const woCount = await prisma.mtWorkOrder.count({
+      where: {
+        assetId,
+        plantId,
+        status: {
+          notIn: ["VALIDATED", "REJECTED", "CANCELLED"],
+        },
+      },
+    });
 
-    if (parseInt(woCount[0]?.total || 0) > 0) {
+    if (woCount > 0) {
       return res.status(409).json({ error: "Cannot delete asset with open work orders" });
     }
 
-    const deleted = await prisma.$queryRaw`
-      UPDATE "MtAsset"
-      SET "deletedat" = NOW(), "updatedat" = NOW()
-      WHERE id = ${assetId}
-      RETURNING *
-    `;
+    const deleted = await prisma.mtAsset.update({
+      where: { id: assetId },
+      data: {
+        deletedAt: new Date(),
+      },
+    });
 
-    return res.json({ message: "Asset soft-deleted", asset: deleted[0] || {} });
+    return res.json({ message: "Asset soft-deleted", asset: deleted });
   } catch (err) {
     logger.error("[assets DELETE]", err);
     return res.status(500).json({ error: "Error deleting asset" });

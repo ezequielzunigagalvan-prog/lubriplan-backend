@@ -110,6 +110,7 @@ model Technician {
   routes                        Route[]
   assignedPreventiveOrders      PreventiveOrder[]
   completedPreventiveOrderItems PreventiveOrderItem[] @relation("PreventiveOrderItemCompletedBy")
+  planAssignments               MtPlanTechnician[]
 
   user User? @relation("UserTechnician")
 
@@ -1279,6 +1280,9 @@ model MtPlan {
 
   tasks         MtPlanTask[]
   runs          MtPlanRun[]
+  technicians   MtPlanTechnician[]
+  spareParts    MtPlanSparePart[]
+  executions    MtPlanExecutionHistory[]
 
   @@unique([plantId, code])
   @@index([plantId])
@@ -1377,6 +1381,77 @@ model MtPlanRun {
   @@index([plantId])
 }
 
+// ======================================================================
+// NUEVOS MODELOS PARA MEJORA DE PLANES
+// ======================================================================
+
+model MtPlanTechnician {
+  id          Int @id @default(autoincrement())
+  planId      Int
+  plan        MtPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  technicianId Int
+  technician  Technician @relation(fields: [technicianId], references: [id], onDelete: Cascade)
+
+  role        String @default("EXECUTOR") // EXECUTOR, REVIEWER, INSPECTOR
+  notes       String?
+
+  createdAt   DateTime @default(now())
+
+  @@unique([planId, technicianId])
+  @@index([planId])
+  @@index([technicianId])
+}
+
+model MtPlanSparePart {
+  id          Int @id @default(autoincrement())
+  planId      Int
+  plan        MtPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  sparePartId Int
+  sparePart   MtSparePart @relation(fields: [sparePartId], references: [id], onDelete: Cascade)
+
+  quantityRequired Decimal @default(1)
+  comments   String?
+
+  createdAt   DateTime @default(now())
+
+  @@unique([planId, sparePartId])
+  @@index([planId])
+  @@index([sparePartId])
+}
+
+model MtPlanExecutionHistory {
+  id              Int @id @default(autoincrement())
+  planId          Int
+  plan            MtPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  workOrderId     Int?
+  executionDate   DateTime @default(now())
+  executedBy      Int
+
+  status          String // COMPLETED, PENDING, POSTPONED, CANCELLED
+  techniciansAssigned Json? // Array de técnicos que ejecutaron
+  sparesUsed      Json?  // Array de refacciones usadas
+  tasksCompleted  Int @default(0)
+  tasksTotal      Int @default(0)
+  checklist       Json?  // Resultado del checklist
+
+  notes           String?
+  duration        Int?   // Minutos
+  nextScheduleAt  DateTime?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([planId])
+  @@index([executionDate])
+  @@index([status])
+}
+
+// Agregar relaciones a MtPlan
+// (Se deben agregar a la definición existente de MtPlan):
+
 // =========================
 // MAINTENANCE PHASE 3A
 // Spare Parts & Inventory
@@ -1410,6 +1485,7 @@ model MtSparePart {
   assets          MtSparePartAsset[]
   stocks          MtStock[]
   workOrderParts  MtWorkOrderPart[]
+  planAssignments MtPlanSparePart[]
 
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt

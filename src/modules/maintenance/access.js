@@ -7,17 +7,16 @@ export async function requireMaintenanceAccess(req, res, next) {
       return res.status(400).json({ error: "PLANT_REQUIRED" });
     }
 
-    // Use raw SQL to bypass Prisma schema issues
-    const access = await prisma.$queryRaw`
-      SELECT enabled, plan FROM "mtPlantAccess" WHERE plantid = ${req.currentPlantId}
-    `;
+    // Check maintenance access using Prisma
+    const access = await prisma.mtPlantAccess.findUnique({
+      where: { plantId: req.currentPlantId },
+    });
 
-    const result = access?.[0];
-    if (!result?.enabled) {
+    if (!access?.enabled) {
       return res.status(403).json({ error: "MAINTENANCE_NOT_ENABLED" });
     }
 
-    req.mtPlan = result.plan;
+    req.mtPlan = access.plan;
     return next();
   } catch (err) {
     logger.error("[requireMaintenanceAccess]", err);
