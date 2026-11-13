@@ -38,6 +38,9 @@ router.get("/", async (req, res) => {
     if (parentId) where.parentId = parseInt(parentId);
     if (status) where.status = status;
 
+    console.log(`[ASSETS GET] Query params:`, { search, parentId, status, page, limit });
+    console.log(`[ASSETS GET] Where clause:`, where);
+
     const assets = await prisma.mtAsset.findMany({
       where,
       select: {
@@ -59,6 +62,11 @@ router.get("/", async (req, res) => {
       take: limitNum,
     });
 
+    console.log(`[ASSETS GET] Assets found:`, assets.length);
+    if (assets.length > 0) {
+      console.log(`[ASSETS GET] First asset:`, JSON.stringify(assets[0], null, 2));
+    }
+
     // Filter by search term if provided
     const filtered = search
       ? assets.filter(a =>
@@ -66,6 +74,11 @@ router.get("/", async (req, res) => {
           a.name?.toLowerCase().includes(search.toLowerCase())
         )
       : assets;
+
+    console.log(`[ASSETS GET] After filter:`, filtered.length);
+    if (filtered.length > 0) {
+      console.log(`[ASSETS GET] First filtered asset:`, JSON.stringify(filtered[0], null, 2));
+    }
 
     const total = await prisma.mtAsset.count({ where });
 
