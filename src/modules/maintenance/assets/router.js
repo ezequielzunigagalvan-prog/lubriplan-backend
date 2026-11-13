@@ -195,8 +195,16 @@ router.patch("/:id", async (req, res) => {
     const updateData = {};
     const allowedFields = ["code", "name", "location", "manufacturer", "model", "serialNumber", "criticality", "status", "notes"];
 
+    console.log('[PATCH] Code valor en req.body:', req.body.code);
+    console.log('[PATCH] Code valor en asset:', asset.code);
+    console.log('[PATCH] AllowedFields:', allowedFields);
+
     for (const field of allowedFields) {
       if (field in req.body) {
+        if (field === 'code') {
+          console.log(`[PATCH] Procesando CODE - valor: ${req.body[field]}`);
+        }
+
         // Si es el código y está siendo cambiado, validar que no exista otro activo con ese código
         if (field === 'code' && req.body[field] !== asset.code) {
           const existingCode = await prisma.mtAsset.findFirst({
@@ -208,13 +216,19 @@ router.patch("/:id", async (req, res) => {
           });
 
           if (existingCode) {
+            console.log(`[PATCH] ERROR: Code duplicado`);
             return res.status(409).json({ error: `El código '${req.body[field]}' ya existe en esta planta` });
           }
         }
 
         updateData[field] = req.body[field];
+        if (field === 'code') {
+          console.log(`[PATCH] CODE agregado a updateData:`, updateData.code);
+        }
       }
     }
+
+    console.log('[PATCH] updateData final:', updateData);
 
     if ("installedAt" in req.body) {
       updateData.installedAt = req.body.installedAt ? new Date(req.body.installedAt) : null;
