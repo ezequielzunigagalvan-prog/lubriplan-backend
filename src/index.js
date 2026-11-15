@@ -934,21 +934,22 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
 
   logger.info("[STARTUP] Backend cargado");
 
-  startMonthlyExecutiveReportScheduler({
-    prisma,
-    buildDashboardSummary,
-    toStartOfDaySafe,
-    baseUrl: process.env.APP_BASE_URL || "http://localhost:5173",
-  });
+  // Temporalmente deshabilitados para debugging - causaban bloqueos
+  // startMonthlyExecutiveReportScheduler({
+  //   prisma,
+  //   buildDashboardSummary,
+  //   toStartOfDaySafe,
+  //   baseUrl: process.env.APP_BASE_URL || "http://localhost:5173",
+  // });
 
-  startOverdueSummaryScheduler({
-    prisma,
-    baseUrl: process.env.APP_BASE_URL || "http://localhost:5173",
-  });
+  // startOverdueSummaryScheduler({
+  //   prisma,
+  //   baseUrl: process.env.APP_BASE_URL || "http://localhost:5173",
+  // });
 
-  startMonthlyTechSummaryScheduler({ prisma });
+  // startMonthlyTechSummaryScheduler({ prisma });
 
-  startMaintenanceScheduler();
+  // startMaintenanceScheduler();
 
     /* ========= PROTECCION GLOBAL ========= */
     // Sentry debe capturar excepciones antes del logger
