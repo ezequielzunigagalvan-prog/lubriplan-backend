@@ -179,10 +179,12 @@ router.post("/", async (req, res) => {
     return res.status(201).json(plan);
   } catch (err) {
     if (err instanceof z.ZodError) {
-      return res.status(400).json({ error: err.errors[0]?.message });
+      console.error("[ZODE ERROR] Validation failed:", JSON.stringify(err.errors, null, 2));
+      return res.status(400).json({ error: err.errors[0]?.message, details: err.errors });
     }
+    console.error("[PLAN CREATE ERROR]", err.message);
     logger.error("[plans POST]", err);
-    return res.status(500).json({ error: "Error creating plan" });
+    return res.status(500).json({ error: "Error creating plan", details: err.message });
   }
 });
 
