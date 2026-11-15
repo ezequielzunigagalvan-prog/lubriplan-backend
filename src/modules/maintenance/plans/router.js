@@ -146,6 +146,12 @@ router.post("/", async (req, res) => {
 
     const planCode = `PM-${String(await getNextWorkOrderNumber(plantId)).padStart(5, "0")}`;
 
+    console.log("[DEBUG] Creating plan with parsed data:", {
+      title: parsed.title,
+      assetId: parsed.assetId,
+      tasksCount: parsed.tasks?.length,
+    });
+
     const plan = await prisma.mtPlan.create({
       data: {
         plantId,
@@ -169,12 +175,20 @@ router.post("/", async (req, res) => {
         meterIntervalHours: parsed.meterIntervalHours,
         active: true,
         createdBy: user.id,
-        tasks: {
-          create: parsed.tasks,
-        },
+        ...(parsed.tasks && parsed.tasks.length > 0 && {
+          tasks: {
+            create: parsed.tasks.map(task => ({
+              ...task,
+              minValue: task.minValue ? parseFloat(task.minValue) : null,
+              maxValue: task.maxValue ? parseFloat(task.maxValue) : null,
+            })),
+          },
+        }),
       },
       include: { tasks: true },
     });
+
+    console.log("[DEBUG] Plan created successfully:", plan.id);
 
     return res.status(201).json(plan);
   } catch (err) {
