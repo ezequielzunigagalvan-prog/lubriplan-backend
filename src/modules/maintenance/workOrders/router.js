@@ -189,6 +189,41 @@ router.post("/", async (req, res) => {
   }
 });
 
+router.patch("/:id/status", async (req, res) => {
+  try {
+    const plantId = req.currentPlantId;
+    const woId = parseInt(req.params.id);
+    const { status } = req.body;
+
+    if (!status) {
+      return res.status(400).json({ error: "status is required" });
+    }
+
+    const wo = await prisma.mtWorkOrder.findFirst({
+      where: { id: woId, plantId },
+    });
+
+    if (!wo) {
+      return res.status(404).json({ error: "Work order not found" });
+    }
+
+    const updated = await prisma.mtWorkOrder.update({
+      where: { id: woId },
+      data: { status },
+      include: {
+        asset: true,
+        events: true,
+      },
+    });
+
+    console.log("[workOrders PATCH /status] Updated WO", woId, "to status", status);
+    return res.json(updated);
+  } catch (err) {
+    logger.error("[workOrders PATCH /status]", err);
+    return res.status(500).json({ error: "Error updating work order status" });
+  }
+});
+
 router.post("/:id/transition", async (req, res) => {
   try {
     const plantId = req.currentPlantId;
