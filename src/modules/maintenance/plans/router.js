@@ -10,7 +10,7 @@ const router = express.Router();
 
 const createPlanSchema = z.object({
   assetId: z.number().int().positive(),
-  code: z.string().min(1),
+  code: z.string().optional(),
   title: z.string().min(1),
   description: z.string().optional(),
   type: z.enum(["PREVENTIVE", "INSPECTION"]).default("PREVENTIVE"),
@@ -208,8 +208,10 @@ router.post("/", async (req, res) => {
     return res.status(201).json(plan);
   } catch (err) {
     if (err instanceof z.ZodError) {
-      console.error("[PLAN POST] ❌ ZODE ERROR - Validation failed:", JSON.stringify(err.errors, null, 2));
-      return res.status(400).json({ error: err.errors[0]?.message, details: err.errors });
+      console.error("[PLAN POST] ❌ ZODE ERROR - Validation failed:", err.errors);
+      const errorMessage = err.errors.map(e => `${e.path.join('.')}: ${e.message}`).join('; ');
+      console.error("[PLAN POST] Error details:", errorMessage);
+      return res.status(400).json({ error: errorMessage, details: err.errors });
     }
     console.error("[PLAN POST] ❌ ERROR:", {
       message: err.message,
