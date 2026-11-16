@@ -206,8 +206,6 @@ router.post("/", async (req, res) => {
       data: planData,
       include: {
         tasks: true,
-        planTechnicians: true,
-        planSpareParts: true,
       },
     });
 
