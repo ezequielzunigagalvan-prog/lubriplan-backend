@@ -151,7 +151,11 @@ router.post("/", async (req, res) => {
       data: {
         plantId,
         number,
-        ...parsed,
+        type: parsed.type,
+        assetId: parsed.assetId,
+        title: parsed.title,
+        description: parsed.description,
+        priority: parsed.priority,
         requestedBy: req.user.id,
         status: parsed.autoApprove && ["ADMIN", "SUPERVISOR"].includes(req.user.role) ? "APPROVED" : "REQUESTED",
       },
