@@ -267,11 +267,28 @@ router.patch("/:id", async (req, res) => {
       updateData.anchorDate = new Date(req.body.anchorDate);
     }
 
-    if ("tasks" in req.body && Array.isArray(req.body.tasks) && req.body.tasks.length <= 50) {
+    if ("tasks" in req.body && Array.isArray(req.body.tasks)) {
+      console.log("[PLAN PATCH] Updating tasks, count:", req.body.tasks.length);
+
+      // Delete old tasks
       await prisma.mtPlanTask.deleteMany({ where: { planId } });
-      updateData.tasks = {
-        create: req.body.tasks,
-      };
+
+      // Create new tasks with cleaned data
+      if (req.body.tasks.length > 0) {
+        const cleanedTasks = req.body.tasks.map(task => ({
+          planId,
+          position: task.position,
+          description: task.description,
+          kind: task.kind,
+          unit: task.unit || null,
+          minValue: task.minValue ? parseFloat(task.minValue) : null,
+          maxValue: task.maxValue ? parseFloat(task.maxValue) : null,
+          required: task.required !== undefined ? task.required : true,
+          createsCorrectiveOnFail: task.createsCorrectiveOnFail !== undefined ? task.createsCorrectiveOnFail : false,
+        }));
+        await prisma.mtPlanTask.createMany({ data: cleanedTasks });
+        console.log("[PLAN PATCH] Tasks created:", cleanedTasks.length);
+      }
     }
 
     const updated = await prisma.mtPlan.update({
@@ -280,6 +297,7 @@ router.patch("/:id", async (req, res) => {
       include: { tasks: true },
     });
 
+    console.log("[PLAN PATCH] ✅ Plan updated successfully:", planId);
     return res.json(updated);
   } catch (err) {
     logger.error("[plans PATCH]", err);
