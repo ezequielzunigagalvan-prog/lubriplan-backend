@@ -175,16 +175,15 @@ router.post("/", async (req, res) => {
         meterIntervalHours: parsed.meterIntervalHours,
         active: true,
         createdBy: user.id,
-        // Temporalmente deshabilitado para debugging
-        // ...(parsed.tasks && parsed.tasks.length > 0 && {
-        //   tasks: {
-        //     create: parsed.tasks.map(task => ({
-        //       ...task,
-        //       minValue: task.minValue ? parseFloat(task.minValue) : null,
-        //       maxValue: task.maxValue ? parseFloat(task.maxValue) : null,
-        //     })),
-        //   },
-        // }),
+        ...(parsed.tasks && parsed.tasks.length > 0 && {
+          tasks: {
+            create: parsed.tasks.map(task => ({
+              ...task,
+              minValue: task.minValue ? parseFloat(task.minValue) : null,
+              maxValue: task.maxValue ? parseFloat(task.maxValue) : null,
+            })),
+          },
+        }),
       },
       include: { tasks: true },
     });
