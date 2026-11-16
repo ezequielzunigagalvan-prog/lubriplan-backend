@@ -29,7 +29,9 @@ const createWOSchema = z.object({
   description: z.string().optional(),
   priority: z.enum(["CRITICAL", "HIGH", "MEDIUM", "LOW"]).default("MEDIUM"),
   autoApprove: z.boolean().default(false),
-});
+  status: z.string().optional(), // Ignore status from frontend
+  comments: z.string().optional(), // Store comments separately if needed
+}).strict(false);
 
 const transitionSchema = z.object({
   to: z.enum(["REQUESTED", "REJECTED", "APPROVED", "ASSIGNED", "IN_PROGRESS", "WAITING_PARTS", "WAITING_PRODUCTION", "FINISHED", "VALIDATED", "CANCELLED"]),
