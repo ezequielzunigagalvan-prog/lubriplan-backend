@@ -193,7 +193,7 @@ router.patch("/:id/status", async (req, res) => {
   try {
     const plantId = req.currentPlantId;
     const woId = parseInt(req.params.id);
-    const { status } = req.body;
+    const { status, assignedTechnicianId, estimatedDate, estimatedHours, notes } = req.body;
 
     if (!status) {
       return res.status(400).json({ error: "status is required" });
@@ -207,9 +207,13 @@ router.patch("/:id/status", async (req, res) => {
       return res.status(404).json({ error: "Work order not found" });
     }
 
+    const updateData = { status };
+    if (assignedTechnicianId) updateData.assignedTo = parseInt(assignedTechnicianId);
+    if (estimatedDate) updateData.scheduledAt = new Date(estimatedDate);
+
     const updated = await prisma.mtWorkOrder.update({
       where: { id: woId },
-      data: { status },
+      data: updateData,
       include: {
         asset: true,
         events: true,
