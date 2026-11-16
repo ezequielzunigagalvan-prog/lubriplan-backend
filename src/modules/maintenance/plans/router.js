@@ -113,7 +113,11 @@ router.get("/:id", async (req, res) => {
 
     const plan = await prisma.mtPlan.findFirst({
       where: { id: planId, plantId, deletedAt: null },
-      include: { tasks: { orderBy: { position: "asc" } } },
+      include: {
+        tasks: { orderBy: { position: "asc" } },
+        planTechnicians: true,
+        planSpareParts: true,
+      },
     });
 
     if (!plan) {
@@ -200,7 +204,11 @@ router.post("/", async (req, res) => {
     console.log("[PLAN POST] About to create plan with Prisma...");
     const plan = await prisma.mtPlan.create({
       data: planData,
-      include: { tasks: true },
+      include: {
+        tasks: true,
+        planTechnicians: true,
+        planSpareParts: true,
+      },
     });
 
     console.log("[PLAN POST] ✅ Plan created successfully:", plan.id);
@@ -294,7 +302,11 @@ router.patch("/:id", async (req, res) => {
     const updated = await prisma.mtPlan.update({
       where: { id: planId },
       data: updateData,
-      include: { tasks: true },
+      include: {
+        tasks: true,
+        planTechnicians: true,
+        planSpareParts: true,
+      },
     });
 
     console.log("[PLAN PATCH] ✅ Plan updated successfully:", planId);
