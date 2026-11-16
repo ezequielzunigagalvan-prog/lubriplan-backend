@@ -178,9 +178,14 @@ router.post("/", async (req, res) => {
         ...(parsed.tasks && parsed.tasks.length > 0 && {
           tasks: {
             create: parsed.tasks.map(task => ({
-              ...task,
+              position: task.position,
+              description: task.description,
+              kind: task.kind,
+              unit: task.unit || null,
               minValue: task.minValue ? parseFloat(task.minValue) : null,
               maxValue: task.maxValue ? parseFloat(task.maxValue) : null,
+              required: task.required !== undefined ? task.required : true,
+              createsCorrectiveOnFail: task.createsCorrectiveOnFail !== undefined ? task.createsCorrectiveOnFail : false,
             })),
           },
         }),
