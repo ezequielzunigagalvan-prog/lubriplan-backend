@@ -18,7 +18,10 @@ const createPlanSchema = z.object({
   frequencyUnit: z.enum(["DAY", "WEEK", "MONTH", "YEAR"]).optional(),
   frequencyEvery: z.number().int().min(1).max(365).optional(),
   scheduleMode: z.enum(["FIXED", "FLOATING"]).default("FIXED"),
-  anchorDate: z.string().datetime(),
+  anchorDate: z.string().refine(val => {
+    const isoRegex = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d{3})?Z)?$/;
+    return isoRegex.test(val);
+  }, "Must be YYYY-MM-DD or ISO datetime"),
   leadDays: z.number().int().min(0).max(60).default(0),
   graceDays: z.number().int().min(0).max(60).default(0),
   priority: z.enum(["CRITICAL", "HIGH", "MEDIUM", "LOW"]).default("MEDIUM"),
