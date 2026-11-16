@@ -132,11 +132,15 @@ router.post("/", async (req, res) => {
     const plantId = req.currentPlantId;
     const user = req.user;
 
+    console.log("[PLAN POST] Received request body:", JSON.stringify(req.body, null, 2));
+
     if (!["ADMIN", "SUPERVISOR"].includes(user.role)) {
       return res.status(403).json({ error: "Only ADMIN/SUPERVISOR can create plans" });
     }
 
+    console.log("[PLAN POST] Parsing with Zod schema...");
     const parsed = createPlanSchema.parse(req.body);
+    console.log("[PLAN POST] Parsed successfully:", { title: parsed.title, tasksCount: parsed.tasks?.length });
 
     const asset = await prisma.mtAsset.findFirst({
       where: { id: parsed.assetId, plantId, deletedAt: null },
@@ -149,62 +153,70 @@ router.post("/", async (req, res) => {
 
     const planCode = `PM-${String(await getNextWorkOrderNumber(plantId)).padStart(5, "0")}`;
 
-    console.log("[DEBUG] Creating plan with parsed data:", {
-      title: parsed.title,
-      assetId: parsed.assetId,
-      tasksCount: parsed.tasks?.length,
-    });
+    console.log("[PLAN POST] Plan code generated:", planCode);
+    console.log("[PLAN POST] Creating plan data object...");
 
+    const planData = {
+      plantId,
+      code: planCode,
+      assetId: parsed.assetId,
+      title: parsed.title,
+      description: parsed.description,
+      type: parsed.type,
+      triggerType: parsed.triggerType,
+      frequencyUnit: parsed.frequencyUnit,
+      frequencyEvery: parsed.frequencyEvery,
+      scheduleMode: parsed.scheduleMode,
+      anchorDate: new Date(parsed.anchorDate),
+      leadDays: parsed.leadDays,
+      graceDays: parsed.graceDays,
+      priority: parsed.priority,
+      defaultAssigneeId: parsed.defaultAssigneeId,
+      estimatedMinutes: parsed.estimatedMinutes,
+      skipIfOpen: parsed.skipIfOpen,
+      meterBaseline: parsed.meterBaseline,
+      meterIntervalHours: parsed.meterIntervalHours,
+      active: true,
+      createdBy: user.id,
+    };
+
+    if (parsed.tasks && parsed.tasks.length > 0) {
+      console.log("[PLAN POST] Adding tasks to plan data:", parsed.tasks.length);
+      planData.tasks = {
+        create: parsed.tasks.map(task => ({
+          position: task.position,
+          description: task.description,
+          kind: task.kind,
+          unit: task.unit || null,
+          minValue: task.minValue ? parseFloat(task.minValue) : null,
+          maxValue: task.maxValue ? parseFloat(task.maxValue) : null,
+          required: task.required !== undefined ? task.required : true,
+          createsCorrectiveOnFail: task.createsCorrectiveOnFail !== undefined ? task.createsCorrectiveOnFail : false,
+        })),
+      };
+      console.log("[PLAN POST] Task data prepared:", JSON.stringify(planData.tasks, null, 2));
+    }
+
+    console.log("[PLAN POST] About to create plan with Prisma...");
     const plan = await prisma.mtPlan.create({
-      data: {
-        plantId,
-        code: planCode,
-        assetId: parsed.assetId,
-        title: parsed.title,
-        description: parsed.description,
-        type: parsed.type,
-        triggerType: parsed.triggerType,
-        frequencyUnit: parsed.frequencyUnit,
-        frequencyEvery: parsed.frequencyEvery,
-        scheduleMode: parsed.scheduleMode,
-        anchorDate: new Date(parsed.anchorDate),
-        leadDays: parsed.leadDays,
-        graceDays: parsed.graceDays,
-        priority: parsed.priority,
-        defaultAssigneeId: parsed.defaultAssigneeId,
-        estimatedMinutes: parsed.estimatedMinutes,
-        skipIfOpen: parsed.skipIfOpen,
-        meterBaseline: parsed.meterBaseline,
-        meterIntervalHours: parsed.meterIntervalHours,
-        active: true,
-        createdBy: user.id,
-        ...(parsed.tasks && parsed.tasks.length > 0 && {
-          tasks: {
-            create: parsed.tasks.map(task => ({
-              position: task.position,
-              description: task.description,
-              kind: task.kind,
-              unit: task.unit || null,
-              minValue: task.minValue ? parseFloat(task.minValue) : null,
-              maxValue: task.maxValue ? parseFloat(task.maxValue) : null,
-              required: task.required !== undefined ? task.required : true,
-              createsCorrectiveOnFail: task.createsCorrectiveOnFail !== undefined ? task.createsCorrectiveOnFail : false,
-            })),
-          },
-        }),
-      },
+      data: planData,
       include: { tasks: true },
     });
 
-    console.log("[DEBUG] Plan created successfully:", plan.id);
+    console.log("[PLAN POST] ✅ Plan created successfully:", plan.id);
 
     return res.status(201).json(plan);
   } catch (err) {
     if (err instanceof z.ZodError) {
-      console.error("[ZODE ERROR] Validation failed:", JSON.stringify(err.errors, null, 2));
+      console.error("[PLAN POST] ❌ ZODE ERROR - Validation failed:", JSON.stringify(err.errors, null, 2));
       return res.status(400).json({ error: err.errors[0]?.message, details: err.errors });
     }
-    console.error("[PLAN CREATE ERROR]", err.message);
+    console.error("[PLAN POST] ❌ ERROR:", {
+      message: err.message,
+      code: err.code,
+      meta: err.meta,
+      stack: err.stack,
+    });
     logger.error("[plans POST]", err);
     return res.status(500).json({ error: "Error creating plan", details: err.message });
   }
