@@ -80,7 +80,7 @@ export function mountMaintenance(app, deps) {
       const plantId = req.currentPlantId;
 
       const technicians = await prisma.technician.findMany({
-        where: { plantId },
+        where: { plantId, deletedAt: null },
         select: {
           id: true,
           name: true,

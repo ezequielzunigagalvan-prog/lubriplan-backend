@@ -1,5 +1,5 @@
-﻿import { describe, it, expect } from "vitest";
-import { canTransition, STATES } from "../../../src/modules/maintenance/workOrders/stateMachine.js";
+import { describe, it, expect } from "vitest";
+import { canTransition, availableTransitions, getRequiredFieldsForTransition, STATES } from "../../../src/modules/maintenance/workOrders/stateMachine.js";
 
 describe("State Machine", () => {
   describe("Transition Permissions", () => {
@@ -33,8 +33,9 @@ describe("State Machine", () => {
 
     it("Only assigned technician can move ASSIGNED to IN_PROGRESS", () => {
       const order = { status: STATES.ASSIGNED, assignedTo: 5, requestedBy: 1 };
-      const assignedUser = { id: 5, role: "TECHNICIAN" };
-      const otherUser = { id: 2, role: "TECHNICIAN" };
+      // assignedTo es el id del técnico; el usuario lo tiene en technicianId
+      const assignedUser = { id: 50, role: "TECHNICIAN", technicianId: 5 };
+      const otherUser = { id: 5, role: "TECHNICIAN", technicianId: 2 };
 
       const assignedResult = canTransition(order, STATES.IN_PROGRESS, assignedUser);
       const otherResult = canTransition(order, STATES.IN_PROGRESS, otherUser);
@@ -45,7 +46,7 @@ describe("State Machine", () => {
 
     it("Assigned technician can move IN_PROGRESS to FINISHED", () => {
       const order = { status: STATES.IN_PROGRESS, assignedTo: 5, requestedBy: 1 };
-      const user = { id: 5, role: "TECHNICIAN" };
+      const user = { id: 50, role: "TECHNICIAN", technicianId: 5 };
       const result = canTransition(order, STATES.FINISHED, user);
       expect(result.allowed).toBe(true);
     });
@@ -80,7 +81,7 @@ describe("State Machine", () => {
 
     it("Both assigned and SUPERVISOR can move WAITING_PARTS to IN_PROGRESS", () => {
       const order = { status: STATES.WAITING_PARTS, assignedTo: 5, requestedBy: 1 };
-      const assignedUser = { id: 5, role: "TECHNICIAN" };
+      const assignedUser = { id: 50, role: "TECHNICIAN", technicianId: 5 };
       const supervisorUser = { id: 1, role: "SUPERVISOR" };
 
       const assignedResult = canTransition(order, STATES.IN_PROGRESS, assignedUser);
@@ -123,5 +124,34 @@ describe("State Machine", () => {
       const result = canTransition(order, STATES.FINISHED, user);
       expect(result.allowed).toBe(false);
     });
+  });
+});
+
+describe("State Machine — assignment and supervisors", () => {
+  it("a user without technician profile is never the assignee", () => {
+    const order = { status: STATES.ASSIGNED, assignedTo: 5 };
+    expect(canTransition(order, STATES.IN_PROGRESS, { id: 5, role: "TECHNICIAN", technicianId: null }).allowed).toBe(false);
+  });
+
+  it("supervisor can start and finish on behalf of the technician", () => {
+    const sup = { id: 1, role: "SUPERVISOR" };
+    expect(canTransition({ status: STATES.ASSIGNED, assignedTo: 5 }, STATES.IN_PROGRESS, sup).allowed).toBe(true);
+    expect(canTransition({ status: STATES.IN_PROGRESS, assignedTo: 5 }, STATES.FINISHED, sup).allowed).toBe(true);
+  });
+
+  it("admin can reassign an ASSIGNED order", () => {
+    expect(canTransition({ status: STATES.ASSIGNED, assignedTo: 5 }, STATES.ASSIGNED, { id: 1, role: "ADMIN" }).allowed).toBe(true);
+  });
+
+  it("availableTransitions lists only what the user may do", () => {
+    const tech = { id: 50, role: "TECHNICIAN", technicianId: 5 };
+    expect(availableTransitions({ status: STATES.IN_PROGRESS, assignedTo: 5 }, tech).sort()).toEqual(
+      [STATES.FINISHED, STATES.WAITING_PARTS, STATES.WAITING_PRODUCTION].sort()
+    );
+  });
+
+  it("reject and cancel require a reason", () => {
+    expect(getRequiredFieldsForTransition(STATES.REQUESTED, STATES.REJECTED)).toHaveProperty("comment");
+    expect(getRequiredFieldsForTransition(STATES.APPROVED, STATES.CANCELLED)).toHaveProperty("comment");
   });
 });

@@ -11,8 +11,23 @@ export const STATES = {
   CANCELLED: "CANCELLED",
 };
 
-const TERMINAL_STATES = new Set([STATES.VALIDATED, STATES.REJECTED, STATES.CANCELLED]);
+export const TERMINAL_STATES = new Set([STATES.VALIDATED, STATES.REJECTED, STATES.CANCELLED]);
+export const CLOSED_STATES = [STATES.FINISHED, STATES.VALIDATED, STATES.REJECTED, STATES.CANCELLED];
 
+export const isManager = (user) => ["ADMIN", "SUPERVISOR"].includes(user?.role);
+
+/**
+ * `assignedTo` guarda el id del TÉCNICO (Technician.id), no del usuario.
+ * Un usuario es "el asignado" si su ficha de técnico vinculada coincide.
+ */
+export function isAssignedTechnician(order, user) {
+  return order.assignedTo != null && user?.technicianId != null && order.assignedTo === user.technicianId;
+}
+
+/**
+ * Reglas de transición. Los supervisores/admin también pueden ejecutar los pasos del técnico
+ * (iniciar, terminar) para registrar trabajos hechos por personal sin usuario en el sistema.
+ */
 export function canTransition(order, toState, user) {
   const currentState = order.status;
 
@@ -20,9 +35,8 @@ export function canTransition(order, toState, user) {
     return { allowed: false, reason: `Cannot transition from terminal state ${currentState}` };
   }
 
-  const isAdmin = ["ADMIN", "SUPERVISOR"].includes(user.role);
-  const isTechnician = user.role === "TECHNICIAN";
-  const isAssigned = order.assignedTo === user.id;
+  const isAdmin = isManager(user);
+  const isAssigned = isAssignedTechnician(order, user);
 
   const transitions = {
     [STATES.REQUESTED]: {
@@ -35,26 +49,27 @@ export function canTransition(order, toState, user) {
       [STATES.CANCELLED]: () => isAdmin,
     },
     [STATES.ASSIGNED]: {
-      [STATES.IN_PROGRESS]: () => isAssigned,
+      [STATES.ASSIGNED]: () => isAdmin, // reasignar
+      [STATES.IN_PROGRESS]: () => isAssigned || isAdmin,
       [STATES.CANCELLED]: () => isAdmin,
     },
     [STATES.IN_PROGRESS]: {
       [STATES.WAITING_PARTS]: () => isAssigned || isAdmin,
       [STATES.WAITING_PRODUCTION]: () => isAssigned || isAdmin,
-      [STATES.FINISHED]: () => isAssigned,
+      [STATES.FINISHED]: () => isAssigned || isAdmin,
       [STATES.CANCELLED]: () => isAdmin,
     },
     [STATES.WAITING_PARTS]: {
-      [STATES.IN_PROGRESS]: () => true,
+      [STATES.IN_PROGRESS]: () => isAssigned || isAdmin,
       [STATES.CANCELLED]: () => isAdmin,
     },
     [STATES.WAITING_PRODUCTION]: {
-      [STATES.IN_PROGRESS]: () => true,
+      [STATES.IN_PROGRESS]: () => isAssigned || isAdmin,
       [STATES.CANCELLED]: () => isAdmin,
     },
     [STATES.FINISHED]: {
       [STATES.VALIDATED]: () => isAdmin,
-      [STATES.IN_PROGRESS]: () => isAdmin,
+      [STATES.IN_PROGRESS]: () => isAdmin, // reabrir
       [STATES.CANCELLED]: () => isAdmin,
     },
   };
@@ -64,14 +79,16 @@ export function canTransition(order, toState, user) {
     return { allowed: false, reason: `Transition ${currentState} → ${toState} not allowed` };
   }
 
-  const checkFn = allowedTransitions[toState];
-  const allowed = checkFn();
-
-  if (!allowed) {
+  if (!allowedTransitions[toState]()) {
     return { allowed: false, reason: `Insufficient permissions for ${currentState} → ${toState}` };
   }
 
   return { allowed: true };
+}
+
+/** Estados a los que el usuario puede mover la OT desde su estado actual. */
+export function availableTransitions(order, user) {
+  return Object.values(STATES).filter((to) => canTransition(order, to, user).allowed);
 }
 
 export function getRequiredFieldsForTransition(fromState, toState) {
@@ -85,8 +102,8 @@ export function getRequiredFieldsForTransition(fromState, toState) {
     required.workDone = "workDone is required when moving to FINISHED";
   }
 
-  if (toState === STATES.IN_PROGRESS && fromState === STATES.ASSIGNED) {
-    // Only the first time we transition to IN_PROGRESS do we set startedAt
+  if (toState === STATES.REJECTED || toState === STATES.CANCELLED) {
+    required.comment = "A reason (comment) is required to reject or cancel";
   }
 
   return required;
