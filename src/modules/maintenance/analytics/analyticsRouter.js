@@ -1,8 +1,21 @@
 import { Router } from "express";
 import { logger } from "../../../config/logger.js";
 import { predictEquipmentDegradation, getRiskAssessment } from "./predictiveService.js";
+import { getEquipmentAnalytics } from "./equipmentService.js";
 
 const router = Router();
+
+// GET /api/maintenance/analytics/equipment?days=90 — KPIs de planta y métricas por equipo
+router.get("/equipment", async (req, res) => {
+  try {
+    const days = Math.min(365, Math.max(7, parseInt(req.query.days, 10) || 90));
+    const data = await getEquipmentAnalytics(req.currentPlantId, { days });
+    res.json({ data });
+  } catch (error) {
+    logger.error("[GET /analytics/equipment]", error);
+    res.status(500).json({ error: "Error generating equipment analytics" });
+  }
+});
 
 // GET /api/maintenance/analytics/risk-assessment
 router.get("/risk-assessment", async (req, res) => {
