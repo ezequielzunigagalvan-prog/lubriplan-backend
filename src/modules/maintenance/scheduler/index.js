@@ -1,6 +1,6 @@
 import prisma from "../../../prisma.js";
 import { logger } from "../../../config/logger.js";
-import { generateForPlan } from "./generator.js";
+import { generateForPlant } from "./generator.js";
 
 let schedulerInterval = null;
 let isRunning = false;
@@ -36,89 +36,38 @@ export async function runMaintenanceScheduler() {
   isRunning = true;
 
   try {
-    const lockKey = 9999;
-    let hasLock = false;
-
-    try {
-      const result = await prisma.$queryRaw`
-        SELECT pg_try_advisory_lock(${lockKey}) as locked
-      `;
-      hasLock = result[0]?.locked || false;
-    } catch {
-      logger.warn("[Maintenance Scheduler] Could not acquire advisory lock, proceeding anyway");
-      hasLock = true;
-    }
-
-    if (!hasLock) {
-      logger.debug("[Maintenance Scheduler] Lock held by another instance, skipping");
-      return;
-    }
-
+    // No se usa un lock global de sesión (con el pool de Prisma el unlock puede caer en otra
+    // conexión y dejar el lock tomado). Cada plan se procesa con pg_advisory_xact_lock dentro
+    // de su transacción y la generación es idempotente por cycleKey, así que dos instancias
+    // corriendo a la vez no duplican OTs.
     const now = new Date();
-
-    const plants = await prisma.plant.findMany({
-      where: { active: true },
-      select: { id: true, name: true },
+    const access = await prisma.mtPlantAccess.findMany({ where: { enabled: true }, select: { plantId: true } });
+    const activePlants = await prisma.plant.findMany({
+      where: { id: { in: access.map((a) => a.plantId) }, active: true },
+      select: { id: true },
     });
+    const enabledPlants = activePlants.map((p) => ({ plantId: p.id }));
 
-    const results = [];
+    const totals = { plants: enabledPlants.length, plans: 0, generated: 0, skipped: 0, errors: 0 };
 
-    for (const plant of plants) {
-      const access = await prisma.mtPlantAccess.findUnique({
-        where: { plantId: plant.id },
-        select: { enabled: true },
-      });
+    for (const { plantId } of enabledPlants) {
+      const summary = await generateForPlant(plantId, { now, trigger: "SCHEDULER" });
+      totals.plans += summary.total;
+      totals.generated += summary.generated;
+      totals.skipped += summary.skipped;
+      totals.errors += summary.errors;
 
-      if (!access?.enabled) {
-        continue;
-      }
-
-      const plans = await prisma.mtPlan.findMany({
-        where: {
-          plantId: plant.id,
-          active: true,
-          deletedAt: null,
-          triggerType: "TIME",
-        },
-        include: { tasks: true },
-      });
-
-      for (const plan of plans) {
-        try {
-          const result = await generateForPlan(plan, {
-            now,
-            dryRun: false,
-            trigger: "SCHEDULER",
+      for (const r of summary.results) {
+        if (r.decision === "GENERATED") {
+          logger.info(`[Maintenance Scheduler] Generated WO for plan ${r.planCode}`, {
+            workOrderId: r.workOrderId,
+            cycleKey: r.cycleKey,
           });
-          results.push(result);
-
-          if (result.decision === "GENERATED") {
-            logger.info(`[Maintenance Scheduler] Generated WO for plan ${plan.code}`, {
-              workOrderId: result.workOrderId,
-              cycleKey: result.cycleKey,
-            });
-          }
-        } catch (err) {
-          logger.error(`[Maintenance Scheduler] Error processing plan ${plan.id}`, err);
         }
       }
     }
 
-    const summary = {
-      timestamp: now.toISOString(),
-      totalResults: results.length,
-      generated: results.filter((r) => r.decision === "GENERATED").length,
-      skipped: results.filter((r) => r.decision.startsWith("SKIPPED")).length,
-      errors: results.filter((r) => r.decision === "ERROR").length,
-    };
-
-    logger.info("[Maintenance Scheduler] Cycle completed", summary);
-
-    try {
-      await prisma.$queryRaw`
-        SELECT pg_advisory_unlock(${lockKey})
-      `;
-    } catch {}
+    logger.info("[Maintenance Scheduler] Cycle completed", { timestamp: now.toISOString(), ...totals });
   } catch (err) {
     logger.error("[Maintenance Scheduler] Unexpected error", err);
   } finally {

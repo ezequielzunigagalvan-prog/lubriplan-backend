@@ -1,168 +1,132 @@
 import prisma from "../../../prisma.js";
 import { logger } from "../../../config/logger.js";
-import { generateNextPlan } from "./planScheduler.js";
 import { getNextWorkOrderNumber, formatWorkOrderNumber } from "../utils/numeracion.js";
 
 /**
- * Ejecuta un plan y genera:
- * 1. Work Order asociada
- * 2. Historial de ejecución
- * 3. Próximo plan automáticamente
+ * Genera manualmente ("Generar OT ahora") una orden de trabajo a partir de un plan.
+ * No altera la programación del plan: la próxima fecha se mantiene y, al terminar la OT,
+ * se registra la realización igual que con las OTs generadas por el scheduler.
  */
 export async function executePlan(planId, plantId, userId, executionData = {}) {
-  const session = await prisma.$transaction(async (tx) => {
-    try {
-      // 1. Obtener plan
-      const plan = await tx.mtPlan.findUnique({
-        where: { id: planId },
-        include: {
-          tasks: { orderBy: { position: "asc" } },
-          technicians: { include: { technician: true } },
-          spareParts: { include: { sparePart: true } },
-          asset: true,
-        },
-      });
-
-      if (!plan) {
-        throw new Error("Plan no encontrado");
-      }
-
-      if (!plan.active) {
-        throw new Error("El plan no está activo");
-      }
-
-      // 2. Crear Work Order
-      const workOrderNumber = await getNextWorkOrderNumber(plantId);
-      const workOrder = await tx.mtWorkOrder.create({
-        data: {
-          plantId,
-          number: workOrderNumber,
-          type: plan.type,
-          status: "REQUESTED",
-          priority: plan.priority,
-          assetId: plan.assetId,
-          title: plan.title,
-          description: plan.description,
-          requestedBy: userId,
-          scheduledAt: new Date(),
-          planId: planId,
-          cycleKey: `${plan.code}-${new Date().getTime()}`,
-        },
-      });
-
-      // 3. Crear tareas de la work order (desde el plan)
-      if (plan.tasks && plan.tasks.length > 0) {
-        await tx.mtWorkOrderTask.createMany({
-          data: plan.tasks.map((task) => ({
-            workOrderId: workOrder.id,
-            plantId,
-            position: task.position,
-            kind: task.kind,
-            description: task.description,
-            unit: task.unit,
-            minValue: task.minValue,
-            maxValue: task.maxValue,
-            required: task.required,
-            createsCorrectiveOnFail: task.createsCorrectiveOnFail,
-          })),
-        });
-      }
-
-      // 4. Guardar historial de ejecución
-      const execution = await tx.mtPlanExecutionHistory.create({
-        data: {
-          planId,
-          workOrderId: workOrder.id,
-          executionDate: new Date(),
-          executedBy: userId,
-          status: "PENDING",
-          techniciansAssigned: executionData.technicians
-            ? plan.technicians
-                .filter((t) => executionData.technicians.includes(t.technicianId))
-                .map((t) => ({
-                  id: t.technicianId,
-                  name: t.technician.name,
-                  role: t.role,
-                }))
-            : null,
-          sparesUsed: plan.spareParts
-            ? plan.spareParts.map((sp) => ({
-                id: sp.sparePartId,
-                name: sp.sparePart.name,
-                quantityRequired: sp.quantityRequired,
-              }))
-            : null,
-          tasksTotal: plan.tasks.length,
-          checklist: plan.tasks.map((task) => ({
-            id: task.id,
-            description: task.description,
-            completed: false,
-            result: null,
-          })),
-          notes: executionData.notes || null,
-        },
-      });
-
-      // 5. Generar próximo plan automáticamente
-      const nextSchedule = await generateNextPlan(planId, plantId, new Date());
-
-      logger.info(`[planExecution] Plan ${planId} ejecutado exitosamente`, {
-        workOrderId: workOrder.id,
-        executionId: execution.id,
-        nextDue: nextSchedule?.nextDueDate,
-      });
-
-      return {
-        success: true,
-        workOrder: {
-          id: workOrder.id,
-          number: formatWorkOrderNumber(workOrder.number),
-        },
-        execution: {
-          id: execution.id,
-          status: execution.status,
-          technicians: execution.techniciansAssigned,
-          spares: execution.sparesUsed,
-        },
-        nextSchedule,
-      };
-    } catch (error) {
-      logger.error("[planExecution] Error ejecutando plan:", error);
-      throw error;
-    }
-  });
-
-  return session;
-}
-
-/**
- * Completa un plan (marcar como completado)
- */
-export async function completePlanExecution(executionId, plantId, completionData = {}) {
-  try {
-    const execution = await prisma.mtPlanExecutionHistory.update({
-      where: { id: executionId },
-      data: {
-        status: "COMPLETED",
-        tasksCompleted: completionData.tasksCompleted || 0,
-        duration: completionData.duration || null,
-        checklist: completionData.checklist || null,
-        notes: completionData.notes || null,
-        updatedAt: new Date(),
-      },
+  return prisma.$transaction(async (tx) => {
+    const plan = await tx.mtPlan.findFirst({
+      where: { id: planId, plantId, deletedAt: null },
       include: {
-        plan: true,
-        workOrder: true,
+        tasks: { orderBy: { position: "asc" } },
+        technicians: { include: { technician: true } },
+        spareParts: { include: { sparePart: true } },
       },
     });
 
-    logger.info(`[planExecution] Ejecución completada: ${executionId}`);
+    if (!plan) throw Object.assign(new Error("Plan no encontrado"), { status: 404 });
+    if (!plan.active) throw Object.assign(new Error("El plan está pausado"), { status: 409 });
 
-    return execution;
-  } catch (error) {
-    logger.error("[planExecution] Error completando ejecución:", error);
-    throw error;
-  }
+    const now = new Date();
+    const number = await getNextWorkOrderNumber(plantId, tx);
+    const status = plan.defaultAssigneeId ? "ASSIGNED" : "APPROVED";
+
+    const workOrder = await tx.mtWorkOrder.create({
+      data: {
+        plantId,
+        number,
+        type: plan.type,
+        status,
+        priority: plan.priority,
+        assetId: plan.assetId,
+        title: `[${plan.code}] ${plan.title}`,
+        description: plan.description,
+        requestedBy: userId,
+        assignedTo: plan.defaultAssigneeId || null,
+        scheduledAt: now,
+        dueAt: now,
+        planId,
+        cycleKey: `MANUAL:${now.toISOString()}`,
+      },
+    });
+
+    await tx.mtWorkOrderEvent.create({
+      data: {
+        workOrderId: workOrder.id,
+        plantId,
+        toStatus: status,
+        userId,
+        comment: `Generada manualmente desde el plan ${plan.code}`,
+        metadata: { source: "MANUAL", planCode: plan.code },
+      },
+    });
+
+    if (plan.tasks.length > 0) {
+      await tx.mtWorkOrderTask.createMany({
+        data: plan.tasks.map((task) => ({
+          workOrderId: workOrder.id,
+          plantId,
+          position: task.position,
+          kind: task.kind,
+          description: task.description,
+          unit: task.unit,
+          minValue: task.minValue,
+          maxValue: task.maxValue,
+          required: task.required,
+          createsCorrectiveOnFail: task.createsCorrectiveOnFail,
+        })),
+      });
+    }
+
+    const execution = await tx.mtPlanExecutionHistory.create({
+      data: {
+        planId,
+        workOrderId: workOrder.id,
+        executionDate: now,
+        executedBy: userId,
+        status: "PENDING",
+        techniciansAssigned: plan.technicians.map((t) => ({ id: t.technicianId, name: t.technician?.name, role: t.role })),
+        sparesUsed: plan.spareParts.map((sp) => ({
+          id: sp.sparePartId,
+          name: sp.sparePart?.name,
+          quantityRequired: Number(sp.quantityRequired),
+        })),
+        tasksTotal: plan.tasks.length,
+        checklist: plan.tasks.map((task) => ({ id: task.id, description: task.description, completed: false, result: null })),
+        notes: executionData.notes || null,
+      },
+    });
+
+    await tx.mtPlan.update({ where: { id: planId }, data: { lastGeneratedAt: now } });
+
+    logger.info(`[planExecution] OT manual generada para plan ${plan.code}`, { workOrderId: workOrder.id });
+
+    return {
+      success: true,
+      workOrder: { id: workOrder.id, number: workOrder.number, formatted: formatWorkOrderNumber(workOrder.number) },
+      execution: { id: execution.id, status: execution.status },
+    };
+  });
+}
+
+/**
+ * Completa un registro de ejecución (solo si pertenece a un plan de la planta).
+ */
+export async function completePlanExecution(executionId, plantId, completionData = {}) {
+  const existing = await prisma.mtPlanExecutionHistory.findFirst({
+    where: { id: executionId, plan: { plantId } },
+    select: { id: true },
+  });
+  if (!existing) return null;
+
+  const execution = await prisma.mtPlanExecutionHistory.update({
+    where: { id: executionId },
+    data: {
+      status: "COMPLETED",
+      tasksCompleted: completionData.tasksCompleted || 0,
+      duration: completionData.duration || null,
+      checklist: completionData.checklist || undefined,
+      notes: completionData.notes || null,
+    },
+    include: { plan: { select: { id: true, code: true, title: true } } },
+  });
+
+  logger.info(`[planExecution] Ejecución completada: ${executionId}`);
+  return execution;
 }
 
 /**
@@ -173,16 +137,6 @@ export async function getPlanHistory(planId, plantId, limit = 50) {
     const executions = await prisma.mtPlanExecutionHistory.findMany({
       where: {
         planId,
-      },
-      include: {
-        workOrder: {
-          select: {
-            id: true,
-            number: true,
-            status: true,
-            finishedAt: true,
-          },
-        },
       },
       orderBy: { executionDate: "desc" },
       take: limit,

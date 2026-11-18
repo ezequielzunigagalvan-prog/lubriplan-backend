@@ -153,3 +153,9 @@ export function getEndOfDayUTC(date = new Date(), tz = TIMEZONE) {
   d.setUTCHours(23, 59, 59, 999);
   return d;
 }
+
+/** Medianoche (hora local de la planta) del día de `date`, expresada en UTC. */
+export function startOfLocalDay(date = new Date(), tz = TIMEZONE) {
+  const { year, month, day } = getLocalDateParts(new Date(date), tz);
+  return localDateToUTC(year, month, day, 0, 0, 0, tz);
+}

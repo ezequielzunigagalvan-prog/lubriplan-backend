@@ -3,6 +3,7 @@ import { z } from "zod";
 import multer from "multer";
 import prisma from "../../../prisma.js";
 import { logger } from "../../../config/logger.js";
+import { onPlanWorkOrderFinished } from "../plans/schedule.js";
 import { uploadBufferToCloudinary, destroyCloudinaryImage } from "../../../lib/cloudinary.js";
 import { canTransition, getRequiredFieldsForTransition } from "./stateMachine.js";
 import { getNextWorkOrderNumber, formatWorkOrderNumber } from "../utils/numeracion.js";
@@ -307,10 +308,8 @@ router.post("/:id/transition", async (req, res) => {
     });
 
     if (parsed.to === "FINISHED" && wo.planId) {
-      await prisma.mtPlan.update({
-        where: { id: wo.planId },
-        data: { lastCompletedAt: new Date() },
-      });
+      // Registra la realización y, en planes FLOATING, reprograma desde la fecha real de término
+      await onPlanWorkOrderFinished(wo.planId, updatedWO?.finishedAt || new Date());
     }
 
     await prisma.mtWorkOrderEvent.create({

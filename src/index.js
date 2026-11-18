@@ -949,7 +949,8 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
 
   // startMonthlyTechSummaryScheduler({ prisma });
 
-  // startMaintenanceScheduler();
+  // Scheduler de preventivos de Maintenance: solo arranca si MAINTENANCE_SCHEDULER_ENABLED=true
+  startMaintenanceScheduler();
 
     /* ========= PROTECCION GLOBAL ========= */
     // Sentry debe capturar excepciones antes del logger
