@@ -2,6 +2,7 @@ import express from "express";
 import { Prisma } from "@prisma/client";
 import prisma from "../../../prisma.js";
 import { logger } from "../../../config/logger.js";
+import { getExecutiveDashboard } from "./executiveService.js";
 
 const router = express.Router();
 
@@ -103,6 +104,22 @@ router.get("/summary", async (req, res) => {
   } catch (err) {
     logger.error("[dashboard/summary GET]", err);
     return res.status(500).json({ error: "Error fetching dashboard summary" });
+  }
+});
+
+// GET /api/maintenance/dashboard/executive?days=30
+router.get("/executive", async (req, res) => {
+  try {
+    const days = Math.min(Math.max(parseInt(req.query.days, 10) || 30, 7), 365);
+    const data = await getExecutiveDashboard({
+      plantId: req.currentPlantId,
+      userId: req.user?.id,
+      days,
+    });
+    return res.json({ data });
+  } catch (err) {
+    logger.error("[dashboard/executive GET]", err);
+    return res.status(500).json({ error: "Error fetching executive dashboard" });
   }
 });
 
