@@ -76,58 +76,6 @@ export function addInterval(date, unit, every, tz = TIMEZONE) {
   return date;
 }
 
-export function listDueCycles(plan, now, leadDays = 0, tz = TIMEZONE) {
-  const { anchorDate, frequencyUnit, frequencyEvery, scheduleMode, lastCompletedAt } = plan;
-
-  if (!anchorDate || !frequencyUnit || !frequencyEvery) {
-    return [];
-  }
-
-  const cycles = [];
-  let current = new Date(anchorDate);
-  const nowPlus = new Date(now);
-  nowPlus.setDate(nowPlus.getDate() + leadDays);
-
-  const maxIterations = 365;
-  let iterations = 0;
-
-  while (current <= nowPlus && iterations < maxIterations) {
-    iterations++;
-    const cycleDueAt = new Date(current);
-    cycleDueAt.setHours(0, 0, 0, 0);
-
-    if (cycleDueAt <= nowPlus) {
-      cycles.push({
-        dueAt: cycleDueAt,
-      });
-    }
-
-    current = addInterval(current, frequencyUnit, frequencyEvery, tz);
-  }
-
-  return cycles;
-}
-
-export function computeNextDue(plan, { lastDueAt, lastCompletedAt }, now, tz = TIMEZONE) {
-  const { anchorDate, scheduleMode, frequencyUnit, frequencyEvery } = plan;
-
-  if (!frequencyUnit || !frequencyEvery) {
-    return null;
-  }
-
-  if (scheduleMode === "FIXED") {
-    let nextDue = new Date(anchorDate);
-    while (nextDue < now) {
-      nextDue = addInterval(nextDue, frequencyUnit, frequencyEvery, tz);
-    }
-    return nextDue;
-  } else if (scheduleMode === "FLOATING" && lastCompletedAt) {
-    return addInterval(lastCompletedAt, frequencyUnit, frequencyEvery, tz);
-  }
-
-  return null;
-}
-
 export function buildCycleKey(plan, dueAt, triggerType = "TIME") {
   if (triggerType === "TIME") {
     const year = dueAt.getUTCFullYear();

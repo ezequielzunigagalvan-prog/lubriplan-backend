@@ -4,6 +4,7 @@ import multer from "multer";
 import prisma from "../../../prisma.js";
 import { logger } from "../../../config/logger.js";
 import { onPlanWorkOrderFinished } from "../plans/schedule.js";
+import { startOfLocalDay } from "../scheduler/dates.js";
 import { uploadBufferToCloudinary, destroyCloudinaryImage } from "../../../lib/cloudinary.js";
 import {
   STATES,
@@ -87,6 +88,12 @@ const taskUpdateSchema = z.object({
   valueText: z.string().max(2000).nullable().optional(),
   note: z.string().max(2000).nullable().optional(),
 });
+
+/** "YYYY-MM-DD" -> medianoche de ese día en la zona de la planta (no UTC); ISO completo se respeta. */
+function parseLocalDate(value) {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return startOfLocalDay(new Date(`${value}T12:00:00.000Z`));
+  return new Date(value);
+}
 
 function parseId(value) {
   const id = Number.parseInt(value, 10);
@@ -484,7 +491,7 @@ router.post("/:id/transition", async (req, res) => {
       updateData.assignedTo = technician.id;
       metadata.assignedTo = technician.id;
       metadata.assignedToName = technician.name;
-      if (parsed.scheduledAt) updateData.scheduledAt = new Date(parsed.scheduledAt);
+      if (parsed.scheduledAt) updateData.scheduledAt = parseLocalDate(parsed.scheduledAt);
     }
 
     if (parsed.to === STATES.IN_PROGRESS && !wo.startedAt) {
