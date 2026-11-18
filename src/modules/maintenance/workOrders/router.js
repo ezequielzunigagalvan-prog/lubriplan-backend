@@ -216,6 +216,95 @@ router.get("/", async (req, res) => {
   }
 });
 
+const PRIORITY_RANK = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
+
+// GET /api/maintenance/work-orders/technician-dashboard[?technicianId=]
+// Tablero del técnico: sus órdenes abiertas, lo terminado recientemente y sus indicadores.
+// Un técnico ve el suyo; supervisores/admin pueden elegir qué técnico ver.
+router.get("/technician-dashboard", async (req, res) => {
+  try {
+    const plantId = req.currentPlantId;
+    const requested = parseId(req.query.technicianId);
+    let technicianId = req.user.technicianId ?? null;
+    if (requested && requested !== technicianId) {
+      if (!isManager(req.user)) return res.status(403).json({ error: "Only supervisors can view other technicians" });
+      technicianId = requested;
+    }
+
+    const technicians = isManager(req.user)
+      ? await prisma.technician.findMany({
+          where: { plantId, deletedAt: null },
+          select: { id: true, name: true, specialty: true },
+          orderBy: { name: "asc" },
+        })
+      : [];
+
+    if (!technicianId) {
+      return res.json({ data: { technician: null, technicians, openOrders: [], recentCompleted: [], stats: null } });
+    }
+
+    const technician = await prisma.technician.findFirst({
+      where: { id: technicianId, plantId, deletedAt: null },
+      select: { id: true, name: true, code: true, specialty: true, phone: true, email: true, status: true },
+    });
+    if (!technician) return res.status(404).json({ error: "Technician not found" });
+
+    const now = new Date();
+    const since30 = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const startOfToday = new Date(now);
+    startOfToday.setHours(0, 0, 0, 0);
+
+    const select = {
+      id: true, number: true, type: true, status: true, priority: true, title: true,
+      scheduledAt: true, dueAt: true, startedAt: true, finishedAt: true, createdAt: true, downtimeMinutes: true,
+      asset: { select: { id: true, code: true, name: true, location: true } },
+      _count: { select: { tasks: true } },
+    };
+
+    const [open, completed] = await Promise.all([
+      prisma.mtWorkOrder.findMany({
+        where: { plantId, assignedTo: technicianId, status: { in: [STATES.ASSIGNED, ...EXECUTION_STATES] } },
+        select,
+      }),
+      prisma.mtWorkOrder.findMany({
+        where: { plantId, assignedTo: technicianId, status: { in: [STATES.FINISHED, STATES.VALIDATED] }, finishedAt: { gte: since30 } },
+        select,
+        orderBy: { finishedAt: "desc" },
+      }),
+    ]);
+
+    // Primero lo que ya está en curso, luego por prioridad y por fecha compromiso
+    const statusRank = (s) => (s === STATES.IN_PROGRESS ? 0 : s.startsWith("WAITING") ? 1 : 2);
+    const dueOf = (w) => new Date(w.dueAt || w.scheduledAt || w.createdAt).getTime();
+    open.sort((a, b) => statusRank(a.status) - statusRank(b.status) || PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] || dueOf(a) - dueOf(b));
+
+    const hoursOf = (w) => (w.startedAt && w.finishedAt ? Math.max(0, (w.finishedAt - w.startedAt) / 3600000) : 0);
+    const round1 = (n) => Number(n.toFixed(1));
+    const withHours = (w) => ({ ...w, hours: round1(hoursOf(w)) });
+
+    return res.json({
+      data: {
+        technician,
+        technicians,
+        openOrders: open.map((w) => ({ ...w, overdue: Boolean((w.dueAt || w.scheduledAt) && dueOf(w) < startOfToday.getTime()) })),
+        recentCompleted: completed.slice(0, 10).map(withHours),
+        stats: {
+          assigned: open.filter((w) => w.status === STATES.ASSIGNED).length,
+          inProgress: open.filter((w) => w.status === STATES.IN_PROGRESS).length,
+          waiting: open.filter((w) => w.status.startsWith("WAITING")).length,
+          overdue: open.filter((w) => (w.dueAt || w.scheduledAt) && dueOf(w) < startOfToday.getTime()).length,
+          completed30d: completed.length,
+          hoursToday: round1(completed.filter((w) => w.finishedAt >= startOfToday).reduce((s, w) => s + hoursOf(w), 0)),
+          hours30d: round1(completed.reduce((s, w) => s + hoursOf(w), 0)),
+        },
+      },
+    });
+  } catch (err) {
+    logger.error("[workOrders/technician-dashboard GET]", err);
+    return res.status(500).json({ error: "Error fetching technician dashboard" });
+  }
+});
+
 router.get("/:id", async (req, res) => {
   try {
     const plantId = req.currentPlantId;
