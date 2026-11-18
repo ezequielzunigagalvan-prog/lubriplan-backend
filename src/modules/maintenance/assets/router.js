@@ -4,86 +4,141 @@ import prisma from "../../../prisma.js";
 import { logger } from "../../../config/logger.js";
 import { canDeleteAsset } from "../permissions.js";
 import historyRouter from "./historyRouter.js";
+import { getAssetExpedient, getAssetHierarchy } from "./expedientService.js";
 
 const router = express.Router();
 
-const createAssetSchema = z.object({
-  parentId: z.number().nullable().optional(),
-  level: z.enum(["AREA", "LINE", "EQUIPMENT", "SUBASSEMBLY", "COMPONENT"]),
-  code: z.string().min(1),
-  name: z.string().min(1),
-  location: z.string().optional(),
-  manufacturer: z.string().optional(),
-  model: z.string().optional(),
-  serialNumber: z.string().optional(),
-  installedAt: z.string().datetime().optional(),
-  criticality: z.enum(["A", "B", "C"]).optional(),
-  status: z.enum(["OPERATING", "STOPPED", "OUT_OF_SERVICE"]).default("OPERATING"),
-  notes: z.string().optional(),
-});
+const LEVELS = ["AREA", "LINE", "EQUIPMENT", "SUBASSEMBLY", "COMPONENT"];
+const CRITICALITIES = ["A", "B", "C"];
+const STATUSES = ["OPERATING", "STOPPED", "OUT_OF_SERVICE"];
+const OPEN_WO_EXCLUDED = ["FINISHED", "VALIDATED", "REJECTED", "CANCELLED"];
 
+// Texto opcional: "" o null se guardan como null
+const optionalText = z
+  .string()
+  .trim()
+  .max(500)
+  .nullable()
+  .optional()
+  .transform((v) => (v ? v : v === undefined ? undefined : null));
+
+// Fecha opcional: acepta "YYYY-MM-DD" o ISO completo; "" o null la borran
+const optionalDate = z
+  .union([z.string(), z.null()])
+  .optional()
+  .refine((v) => v == null || v === "" || !Number.isNaN(Date.parse(v)), { message: "Fecha de instalación inválida" })
+  .transform((v) => (v === undefined ? undefined : v ? new Date(v) : null));
+
+const assetFields = {
+  parentId: z.coerce.number().int().positive().nullable().optional(),
+  level: z.enum(LEVELS),
+  code: z.string().trim().min(1, "El código es requerido").max(50),
+  name: z.string().trim().min(1, "El nombre es requerido").max(200),
+  location: optionalText,
+  manufacturer: optionalText,
+  model: optionalText,
+  serialNumber: optionalText,
+  installedAt: optionalDate,
+  criticality: z.enum(CRITICALITIES).nullable().optional(),
+  status: z.enum(STATUSES),
+  notes: z.string().trim().max(2000).nullable().optional().transform((v) => (v === undefined ? undefined : v || null)),
+};
+
+const createAssetSchema = z.object({ ...assetFields, status: assetFields.status.default("OPERATING") });
+const updateAssetSchema = z.object(assetFields).partial();
+
+const assetSelect = {
+  id: true,
+  code: true,
+  name: true,
+  level: true,
+  status: true,
+  criticality: true,
+  parentId: true,
+  location: true,
+  manufacturer: true,
+  model: true,
+  serialNumber: true,
+  installedAt: true,
+  notes: true,
+  createdAt: true,
+  updatedAt: true,
+  parent: { select: { id: true, code: true, name: true } },
+};
+
+function zodMessage(err) {
+  const issue = err.issues?.[0];
+  if (!issue) return "Datos inválidos";
+  const field = issue.path?.join(".");
+  return field ? `${field}: ${issue.message}` : issue.message;
+}
+
+function parseId(value) {
+  const id = Number.parseInt(value, 10);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+/**
+ * Valida que el padre exista en la misma planta y que no se forme un ciclo
+ * (un activo no puede colgar de sí mismo ni de uno de sus descendientes).
+ * Devuelve un mensaje de error o null si es válido.
+ */
+async function validateParent(plantId, parentId, assetId = null) {
+  if (parentId == null) return null;
+  if (assetId && parentId === assetId) return "Un activo no puede ser su propio padre";
+
+  let currentId = parentId;
+  const seen = new Set();
+  while (currentId && !seen.has(currentId)) {
+    seen.add(currentId);
+    const node = await prisma.mtAsset.findFirst({
+      where: { id: currentId, plantId, deletedAt: null },
+      select: { id: true, parentId: true },
+    });
+    if (!node) return currentId === parentId ? "El activo padre no existe en esta planta" : null;
+    if (assetId && node.parentId === assetId) return "No se puede mover un activo debajo de uno de sus descendientes";
+    currentId = node.parentId;
+  }
+  return null;
+}
+
+// GET /api/maintenance/assets?search=&status=&criticality=&level=&parentId=&page=&limit=
 router.get("/", async (req, res) => {
   try {
     const plantId = req.currentPlantId;
-    const { search, parentId, status, page = 1, limit = 50 } = req.query;
+    const { search, parentId, status, criticality, level, page = 1, limit = 50 } = req.query;
 
-    const pageNum = Math.max(1, parseInt(page) || 1);
-    const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 50));
-    const skip = (pageNum - 1) * limitNum;
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.min(500, Math.max(1, parseInt(limit, 10) || 50));
 
-    const where = {
-      plantId,
-      deletedAt: null,
-    };
-    if (parentId) where.parentId = parseInt(parentId);
-    if (status) where.status = status;
-
-    console.log(`[ASSETS GET] Query params:`, { search, parentId, status, page, limit });
-    console.log(`[ASSETS GET] Where clause:`, where);
-
-    const assets = await prisma.mtAsset.findMany({
-      where,
-      select: {
-        id: true,
-        code: true,
-        name: true,
-        level: true,
-        status: true,
-        criticality: true,
-        parentId: true,
-        location: true,
-        manufacturer: true,
-        model: true,
-        serialNumber: true,
-        createdAt: true,
-      },
-      orderBy: { createdAt: "desc" },
-      skip,
-      take: limitNum,
-    });
-
-    console.log(`[ASSETS GET] Assets found:`, assets.length);
-    if (assets.length > 0) {
-      console.log(`[ASSETS GET] First asset:`, JSON.stringify(assets[0], null, 2));
+    const where = { plantId, deletedAt: null };
+    if (parentId === "null") where.parentId = null;
+    else if (parentId) where.parentId = parseId(parentId) ?? -1;
+    if (STATUSES.includes(status)) where.status = status;
+    if (CRITICALITIES.includes(criticality)) where.criticality = criticality;
+    if (LEVELS.includes(level)) where.level = level;
+    if (search?.trim()) {
+      const term = search.trim();
+      where.OR = [
+        { code: { contains: term, mode: "insensitive" } },
+        { name: { contains: term, mode: "insensitive" } },
+        { location: { contains: term, mode: "insensitive" } },
+      ];
     }
 
-    // Filter by search term if provided
-    const filtered = search
-      ? assets.filter(a =>
-          a.code?.toLowerCase().includes(search.toLowerCase()) ||
-          a.name?.toLowerCase().includes(search.toLowerCase())
-        )
-      : assets;
-
-    console.log(`[ASSETS GET] After filter:`, filtered.length);
-    if (filtered.length > 0) {
-      console.log(`[ASSETS GET] First filtered asset:`, JSON.stringify(filtered[0], null, 2));
-    }
-
-    const total = await prisma.mtAsset.count({ where });
+    const [assets, total] = await Promise.all([
+      prisma.mtAsset.findMany({
+        where,
+        select: assetSelect,
+        orderBy: { createdAt: "desc" },
+        skip: (pageNum - 1) * limitNum,
+        take: limitNum,
+      }),
+      prisma.mtAsset.count({ where }),
+    ]);
 
     return res.json({
-      data: filtered,
+      data: assets,
       total,
       page: pageNum,
       totalPages: Math.ceil(total / limitNum),
@@ -94,17 +149,70 @@ router.get("/", async (req, res) => {
   }
 });
 
+// GET /api/maintenance/assets/stats — conteos por estado y criticidad (sin límite de paginación)
+router.get("/stats", async (req, res) => {
+  try {
+    const plantId = req.currentPlantId;
+    const where = { plantId, deletedAt: null };
+    const [byStatus, byCriticality, total] = await Promise.all([
+      prisma.mtAsset.groupBy({ by: ["status"], where, _count: { _all: true } }),
+      prisma.mtAsset.groupBy({ by: ["criticality"], where, _count: { _all: true } }),
+      prisma.mtAsset.count({ where }),
+    ]);
+    const countOf = (rows, key, value) => rows.find((r) => r[key] === value)?._count._all || 0;
+
+    return res.json({
+      data: {
+        total,
+        operating: countOf(byStatus, "status", "OPERATING"),
+        stopped: countOf(byStatus, "status", "STOPPED"),
+        outOfService: countOf(byStatus, "status", "OUT_OF_SERVICE"),
+        criticalA: countOf(byCriticality, "criticality", "A"),
+        criticalB: countOf(byCriticality, "criticality", "B"),
+        criticalC: countOf(byCriticality, "criticality", "C"),
+        noCriticality: countOf(byCriticality, "criticality", null),
+      },
+    });
+  } catch (err) {
+    logger.error("[assets/stats GET]", err);
+    return res.status(500).json({ error: "Error fetching asset stats" });
+  }
+});
+
+// GET /api/maintenance/assets/hierarchy — árbol completo de la planta
+router.get("/hierarchy", async (req, res) => {
+  try {
+    const data = await getAssetHierarchy(req.currentPlantId);
+    return res.json({ data });
+  } catch (err) {
+    logger.error("[assets/hierarchy GET]", err);
+    return res.status(500).json({ error: "Error fetching asset hierarchy" });
+  }
+});
+
+router.get("/:id/expedient", async (req, res) => {
+  try {
+    const assetId = parseId(req.params.id);
+    if (!assetId) return res.status(400).json({ error: "Invalid asset id" });
+
+    const data = await getAssetExpedient(assetId, req.currentPlantId);
+    if (!data) return res.status(404).json({ error: "Asset not found" });
+    return res.json({ data });
+  } catch (err) {
+    logger.error("[assets/:id/expedient GET]", err);
+    return res.status(500).json({ error: "Error fetching asset expedient" });
+  }
+});
+
 router.get("/:id", async (req, res) => {
   try {
     const plantId = req.currentPlantId;
-    const assetId = parseInt(req.params.id);
+    const assetId = parseId(req.params.id);
+    if (!assetId) return res.status(400).json({ error: "Invalid asset id" });
 
     const asset = await prisma.mtAsset.findFirst({
-      where: {
-        id: assetId,
-        plantId,
-        deletedAt: null,
-      },
+      where: { id: assetId, plantId, deletedAt: null },
+      select: assetSelect,
     });
 
     if (!asset) {
@@ -112,18 +220,8 @@ router.get("/:id", async (req, res) => {
     }
 
     const recentWorkOrders = await prisma.mtWorkOrder.findMany({
-      where: {
-        assetId,
-        plantId,
-      },
-      select: {
-        id: true,
-        number: true,
-        status: true,
-        type: true,
-        title: true,
-        createdAt: true,
-      },
+      where: { assetId, plantId },
+      select: { id: true, number: true, status: true, type: true, title: true, createdAt: true },
       orderBy: { createdAt: "desc" },
       take: 10,
     });
@@ -140,35 +238,35 @@ router.post("/", async (req, res) => {
     const plantId = req.currentPlantId;
     const parsed = createAssetSchema.parse(req.body);
 
-    if (parsed.installedAt && isNaN(Date.parse(parsed.installedAt))) {
-      return res.status(400).json({ error: "Invalid installedAt date" });
-    }
+    const parentError = await validateParent(plantId, parsed.parentId ?? null);
+    if (parentError) return res.status(400).json({ error: parentError });
 
     const result = await prisma.mtAsset.create({
       data: {
         plantId,
-        parentId: parsed.parentId || null,
+        parentId: parsed.parentId ?? null,
         level: parsed.level,
         code: parsed.code,
         name: parsed.name,
-        location: parsed.location || null,
-        manufacturer: parsed.manufacturer || null,
-        model: parsed.model || null,
-        serialNumber: parsed.serialNumber || null,
-        installedAt: parsed.installedAt ? new Date(parsed.installedAt) : null,
-        criticality: parsed.criticality || null,
+        location: parsed.location ?? null,
+        manufacturer: parsed.manufacturer ?? null,
+        model: parsed.model ?? null,
+        serialNumber: parsed.serialNumber ?? null,
+        installedAt: parsed.installedAt ?? null,
+        criticality: parsed.criticality ?? null,
         status: parsed.status,
-        notes: parsed.notes || null,
+        notes: parsed.notes ?? null,
       },
+      select: assetSelect,
     });
 
     return res.status(201).json(result);
   } catch (err) {
     if (err instanceof z.ZodError) {
-      return res.status(400).json({ error: err.errors[0]?.message });
+      return res.status(400).json({ error: zodMessage(err) });
     }
-    if (err.message?.includes("duplicate")) {
-      return res.status(409).json({ error: "Asset code already exists in this plant" });
+    if (err.code === "P2002") {
+      return res.status(409).json({ error: "El código del activo ya existe en esta planta" });
     }
     logger.error("[assets POST]", err);
     return res.status(500).json({ error: "Error creating asset" });
@@ -178,81 +276,56 @@ router.post("/", async (req, res) => {
 router.patch("/:id", async (req, res) => {
   try {
     const plantId = req.currentPlantId;
-    const assetId = parseInt(req.params.id);
+    const assetId = parseId(req.params.id);
+    if (!assetId) return res.status(400).json({ error: "Invalid asset id" });
 
     const asset = await prisma.mtAsset.findFirst({
-      where: {
-        id: assetId,
-        plantId,
-        deletedAt: null,
-      },
+      where: { id: assetId, plantId, deletedAt: null },
     });
 
     if (!asset) {
       return res.status(404).json({ error: "Asset not found" });
     }
 
-    const updateData = {};
-    const allowedFields = ["code", "name", "location", "manufacturer", "model", "serialNumber", "criticality", "status", "notes"];
+    const parsed = updateAssetSchema.parse(req.body);
+    const updateData = Object.fromEntries(Object.entries(parsed).filter(([, v]) => v !== undefined));
 
-    console.log('[PATCH] Code valor en req.body:', req.body.code);
-    console.log('[PATCH] Code valor en asset:', asset.code);
-    console.log('[PATCH] AllowedFields:', allowedFields);
+    if ("parentId" in updateData && updateData.parentId !== asset.parentId) {
+      const parentError = await validateParent(plantId, updateData.parentId, assetId);
+      if (parentError) return res.status(400).json({ error: parentError });
+    }
 
-    for (const field of allowedFields) {
-      if (field in req.body) {
-        if (field === 'code') {
-          console.log(`[PATCH] Procesando CODE - valor: ${req.body[field]}`);
-        }
-
-        // Si es el código y está siendo cambiado, validar que no exista otro activo con ese código
-        if (field === 'code' && req.body[field] !== asset.code) {
-          const existingCode = await prisma.mtAsset.findFirst({
-            where: {
-              plantId,
-              code: req.body[field],
-              id: { not: assetId }, // Excluir el activo actual
-            },
-          });
-
-          if (existingCode) {
-            console.log(`[PATCH] ERROR: Code duplicado`);
-            return res.status(409).json({ error: `El código '${req.body[field]}' ya existe en esta planta` });
-          }
-        }
-
-        updateData[field] = req.body[field];
-        if (field === 'code') {
-          console.log(`[PATCH] CODE agregado a updateData:`, updateData.code);
-        }
+    if (updateData.code && updateData.code !== asset.code) {
+      const existingCode = await prisma.mtAsset.findFirst({
+        where: { plantId, code: updateData.code, id: { not: assetId } },
+        select: { id: true },
+      });
+      if (existingCode) {
+        return res.status(409).json({ error: `El código '${updateData.code}' ya existe en esta planta` });
       }
     }
 
-    console.log('[PATCH] updateData final:', updateData);
-
-    if ("installedAt" in req.body) {
-      updateData.installedAt = req.body.installedAt ? new Date(req.body.installedAt) : null;
-    }
-
     if (Object.keys(updateData).length === 0) {
-      return res.json(asset);
+      const current = await prisma.mtAsset.findUnique({ where: { id: assetId }, select: assetSelect });
+      return res.json(current);
     }
 
     const updated = await prisma.mtAsset.update({
       where: { id: assetId },
       data: updateData,
+      select: assetSelect,
     });
 
     return res.json(updated);
   } catch (err) {
-    logger.error("[assets PATCH]", err);
-
-    // Validar si es un error de constraint único
-    if (err.code === 'P2002') {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ error: zodMessage(err) });
+    }
+    if (err.code === "P2002") {
       return res.status(409).json({ error: "El código del activo ya existe en esta planta" });
     }
-
-    return res.status(500).json({ error: "Error updating asset", details: err.message });
+    logger.error("[assets PATCH]", err);
+    return res.status(500).json({ error: "Error updating asset" });
   }
 });
 
@@ -263,39 +336,35 @@ router.delete("/:id", async (req, res) => {
     }
 
     const plantId = req.currentPlantId;
-    const assetId = parseInt(req.params.id);
+    const assetId = parseId(req.params.id);
+    if (!assetId) return res.status(400).json({ error: "Invalid asset id" });
 
     const asset = await prisma.mtAsset.findFirst({
-      where: {
-        id: assetId,
-        plantId,
-        deletedAt: null,
-      },
+      where: { id: assetId, plantId, deletedAt: null },
     });
 
     if (!asset) {
       return res.status(404).json({ error: "Asset not found" });
     }
 
-    const woCount = await prisma.mtWorkOrder.count({
-      where: {
-        assetId,
-        plantId,
-        status: {
-          notIn: ["VALIDATED", "REJECTED", "CANCELLED"],
-        },
-      },
-    });
+    const [woCount, childCount] = await Promise.all([
+      prisma.mtWorkOrder.count({
+        where: { assetId, plantId, status: { notIn: OPEN_WO_EXCLUDED } },
+      }),
+      prisma.mtAsset.count({ where: { parentId: assetId, plantId, deletedAt: null } }),
+    ]);
 
     if (woCount > 0) {
-      return res.status(409).json({ error: "Cannot delete asset with open work orders" });
+      return res.status(409).json({ error: `No se puede eliminar: tiene ${woCount} orden(es) de trabajo abierta(s)` });
+    }
+    if (childCount > 0) {
+      return res.status(409).json({ error: `No se puede eliminar: tiene ${childCount} activo(s) hijo(s). Muévelos o elimínalos primero` });
     }
 
     const deleted = await prisma.mtAsset.update({
       where: { id: assetId },
-      data: {
-        deletedAt: new Date(),
-      },
+      data: { deletedAt: new Date() },
+      select: { id: true, code: true, name: true, deletedAt: true },
     });
 
     return res.json({ message: "Asset soft-deleted", asset: deleted });
