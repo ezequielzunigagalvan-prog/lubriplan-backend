@@ -1,335 +1,358 @@
 import prisma from "../../../prisma.js";
 import { logger } from "../../../config/logger.js";
+import { getLowStockAlerts } from "../inventory/service.js";
+
+const DAY = 24 * 60 * 60 * 1000;
+const RETENTION_DAYS = 30;
+const OPEN_WO = ["APPROVED", "ASSIGNED", "IN_PROGRESS", "WAITING_PARTS", "WAITING_PRODUCTION"];
+export const OVERLOAD_THRESHOLD = 5; // órdenes abiertas por técnico
+
+/** Tipo de notificación -> campo de preferencia que la habilita (los que no aparecen siempre se envían). */
+const TYPE_PREFERENCE = {
+  LOW_STOCK: "lowStockEnabled",
+  OVERDUE_WO: "overdueWoEnabled",
+  TECHNICIAN_OVERLOAD: "technicianOverloadEnabled",
+  PREVENTIVE_SOON: "preventiveSoonEnabled",
+  CRITICAL_FAILURE: "criticalFailureEnabled",
+};
+export const PREFERENCE_FIELDS = [...Object.values(TYPE_PREFERENCE), "inAppEnabled", "emailEnabled"];
+
+const woNumber = (n) => `OT-${String(n).padStart(5, "0")}`;
 
 // ============================================================
-// NOTIFICATION CREATION & MANAGEMENT
+// DESTINATARIOS
 // ============================================================
 
-export async function createNotification(plantId, data) {
-  const {
-    userId,
-    type,
-    title,
-    message,
-    severity = "INFO",
-    referenceId,
-    referenceType,
-    actionUrl,
-    actionLabel,
-  } = data;
-
-  return await prisma.mtNotification.create({
-    data: {
-      plantId,
-      userId,
-      type,
-      title,
-      message,
-      severity,
-      referenceId,
-      referenceType,
-      actionUrl,
-      actionLabel,
-      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
-    },
+/** Usuarios ADMIN/SUPERVISOR activos de la planta. */
+export async function managerUserIds(plantId) {
+  const rows = await prisma.userPlant.findMany({
+    where: { plantId, active: true, user: { active: true, role: { in: ["ADMIN", "SUPERVISOR"] } } },
+    select: { userId: true },
   });
+  return rows.map((r) => r.userId);
 }
 
-export async function getUserNotifications(plantId, userId, limit = 50) {
-  try {
-    const notifications = await prisma.mtNotification.findMany({
+/** Usuario vinculado a un técnico (o null). */
+async function technicianUserId(technicianId) {
+  if (!technicianId) return null;
+  const user = await prisma.user.findFirst({ where: { technicianId, active: true }, select: { id: true } });
+  return user?.id ?? null;
+}
+
+// ============================================================
+// CREACIÓN
+// ============================================================
+
+/**
+ * Crea una notificación por destinatario (cada uno la lee por separado), respetando sus preferencias
+ * y sin repetir el mismo aviso (tipo + referencia + usuario) dentro de `dedupeHours`.
+ */
+export async function notifyUsers(plantId, userIds, data, { dedupeHours = 24 } = {}) {
+  const recipients = [...new Set(userIds.filter(Boolean))];
+  if (recipients.length === 0) return [];
+
+  const prefField = TYPE_PREFERENCE[data.type];
+  const prefs = await prisma.mtNotificationPreference.findMany({
+    where: { userId: { in: recipients } },
+  });
+  const prefOf = new Map(prefs.map((p) => [p.userId, p]));
+  const allowed = recipients.filter((id) => {
+    const p = prefOf.get(id);
+    if (!p) return true; // sin preferencias guardadas = todo habilitado
+    return p.inAppEnabled !== false && (!prefField || p[prefField] !== false);
+  });
+  if (allowed.length === 0) return [];
+
+  let targets = allowed;
+  if (dedupeHours > 0 && data.referenceId != null) {
+    const recent = await prisma.mtNotification.findMany({
       where: {
         plantId,
-        OR: [{ userId }, { userId: null }],
-        expiresAt: { gt: new Date() },
+        type: data.type,
+        referenceId: data.referenceId,
+        userId: { in: allowed },
+        createdAt: { gte: new Date(Date.now() - dedupeHours * 3600000) },
       },
-      orderBy: { createdAt: "desc" },
-      take: limit,
+      select: { userId: true },
     });
-    return notifications || [];
-  } catch (error) {
-    logger.error("[getUserNotifications]", error);
-    return [];
+    const already = new Set(recent.map((r) => r.userId));
+    targets = allowed.filter((id) => !already.has(id));
   }
+  if (targets.length === 0) return [];
+
+  const expiresAt = new Date(Date.now() + RETENTION_DAYS * DAY);
+  await prisma.mtNotification.createMany({
+    data: targets.map((userId) => ({
+      plantId,
+      userId,
+      type: data.type,
+      title: data.title,
+      message: data.message,
+      severity: data.severity || "INFO",
+      referenceId: data.referenceId ?? null,
+      referenceType: data.referenceType ?? null,
+      actionUrl: data.actionUrl ?? null,
+      actionLabel: data.actionLabel ?? null,
+      expiresAt,
+    })),
+  });
+  return targets;
 }
 
-export async function markNotificationAsRead(notificationId, plantId) {
-  const notif = await prisma.mtNotification.findUnique({
-    where: { id: notificationId },
-  });
+/** Compatibilidad: notificación individual. */
+export async function createNotification(plantId, data) {
+  return notifyUsers(plantId, [data.userId], data, { dedupeHours: 0 });
+}
 
-  if (!notif || notif.plantId !== plantId) {
-    return null;
-  }
+// ============================================================
+// CONSULTA Y LECTURA
+// ============================================================
 
-  return await prisma.mtNotification.update({
-    where: { id: notificationId },
-    data: {
-      isRead: true,
-      readAt: new Date(),
+/** Visibles para el usuario: las suyas y las antiguas de difusión (userId null). */
+function visibleWhere(plantId, userId) {
+  return { plantId, OR: [{ userId }, { userId: null }], expiresAt: { gt: new Date() } };
+}
+
+/** Tipos que el usuario desactivó en sus preferencias (no se muestran). */
+async function disabledTypes(userId) {
+  const prefs = await prisma.mtNotificationPreference.findUnique({ where: { userId } });
+  if (!prefs) return [];
+  return Object.entries(TYPE_PREFERENCE).filter(([, field]) => prefs[field] === false).map(([type]) => type);
+}
+
+export async function getUserNotifications(plantId, userId, { limit = 50, unreadOnly = false, type } = {}) {
+  const hidden = await disabledTypes(userId);
+  return prisma.mtNotification.findMany({
+    where: {
+      ...visibleWhere(plantId, userId),
+      ...(unreadOnly ? { isRead: false } : {}),
+      ...(type ? { type } : hidden.length ? { type: { notIn: hidden } } : {}),
     },
+    orderBy: { createdAt: "desc" },
+    take: limit,
   });
 }
 
 export async function getUnreadCount(plantId, userId) {
-  try {
-    const count = await prisma.mtNotification.count({
-      where: {
-        plantId,
-        OR: [{ userId }, { userId: null }],
-        isRead: false,
-        expiresAt: { gt: new Date() },
-      },
-    });
-    return count || 0;
-  } catch (error) {
-    logger.error("[getUnreadCount]", error);
-    return 0;
-  }
+  const hidden = await disabledTypes(userId);
+  return prisma.mtNotification.count({
+    where: { ...visibleWhere(plantId, userId), isRead: false, ...(hidden.length ? { type: { notIn: hidden } } : {}) },
+  });
+}
+
+/** Marca como leída solo si la notificación es del usuario (o de difusión). */
+export async function markNotificationAsRead(notificationId, plantId, userId) {
+  const notif = await prisma.mtNotification.findFirst({ where: { id: notificationId, ...visibleWhere(plantId, userId) } });
+  if (!notif) return null;
+  if (notif.isRead) return notif;
+  return prisma.mtNotification.update({ where: { id: notificationId }, data: { isRead: true, readAt: new Date() } });
+}
+
+export async function markAllAsRead(plantId, userId) {
+  const { count } = await prisma.mtNotification.updateMany({
+    where: { plantId, userId, isRead: false },
+    data: { isRead: true, readAt: new Date() },
+  });
+  return count;
 }
 
 // ============================================================
-// ALERT DETECTION & TRIGGER
+// ALERTAS PERIÓDICAS (deduplicadas por día)
 // ============================================================
 
-export async function checkLowStockAlerts(plantId) {
-  const lowStockItems = await prisma.mtStock.findMany({
-    where: {
-      warehouse: { plantId },
-      sparePart: { status: "ACTIVE" },
-    },
-    select: {
-      id: true,
-      quantity: true,
-      sparePart: {
-        select: { id: true, code: true, name: true, minStock: true },
-      },
-    },
-  });
-
-  const alerts = [];
-  for (const item of lowStockItems) {
-    if (item.quantity < item.sparePart.minStock) {
-      // Check if alert already exists (not read in last 24h)
-      const existingAlert = await prisma.mtNotification.findFirst({
-        where: {
-          plantId,
-          type: "LOW_STOCK",
-          referenceId: item.sparePart.id,
-          isRead: false,
-          createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
-        },
-      });
-
-      if (!existingAlert) {
-        const notif = await createNotification(plantId, {
-          type: "LOW_STOCK",
-          title: `📦 Stock bajo: ${item.sparePart.code}`,
-          message: `${item.sparePart.name} está por debajo del mínimo (${item.quantity} < ${item.sparePart.minStock})`,
-          severity: "WARNING",
-          referenceId: item.sparePart.id,
-          referenceType: "SPARE_PART",
-          actionUrl: `/maintenance/app/inventory`,
-          actionLabel: "Ir a Inventario",
-        });
-        alerts.push(notif);
-      }
-    }
+export async function checkLowStockAlerts(plantId, managers) {
+  const parts = await getLowStockAlerts(plantId); // compara con números, suma todos los almacenes
+  let sent = 0;
+  for (const part of parts) {
+    const out = part.totalQuantity === 0;
+    const users = await notifyUsers(plantId, managers, {
+      type: "LOW_STOCK",
+      title: `${out ? "Sin existencia" : "Stock bajo"}: ${part.code}`,
+      message: `${part.name}: ${part.totalQuantity} ${part.unit} (mínimo ${part.minStock})`,
+      severity: out ? "CRITICAL" : "WARNING",
+      referenceId: part.id,
+      referenceType: "SPARE_PART",
+      actionUrl: "/maintenance/app/inventory",
+      actionLabel: "Ir a Inventario",
+    });
+    sent += users.length;
   }
-
-  return alerts;
+  return sent;
 }
 
-export async function checkOverdueWorkOrders(plantId) {
-  const overdueWOs = await prisma.mtWorkOrder.findMany({
+export async function checkOverdueWorkOrders(plantId, managers) {
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const overdue = await prisma.mtWorkOrder.findMany({
     where: {
       plantId,
-      dueAt: { lt: new Date() },
-      status: { notIn: ["FINISHED", "VALIDATED", "REJECTED", "CANCELLED"] },
+      status: { in: [...OPEN_WO, "REQUESTED"] },
+      OR: [{ dueAt: { lt: startOfToday } }, { dueAt: null, scheduledAt: { lt: startOfToday } }],
     },
-    select: {
-      id: true,
-      number: true,
-      title: true,
-      dueAt: true,
-      status: true,
-    },
+    select: { id: true, number: true, title: true, dueAt: true, scheduledAt: true, assignedTo: true },
   });
 
-  const alerts = [];
-  for (const wo of overdueWOs) {
-    // Check if alert already exists
-    const existingAlert = await prisma.mtNotification.findFirst({
-      where: {
-        plantId,
-        type: "OVERDUE_WO",
-        referenceId: wo.id,
-        isRead: false,
-        createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
-      },
+  let sent = 0;
+  for (const wo of overdue) {
+    const due = wo.dueAt || wo.scheduledAt;
+    const days = Math.max(1, Math.floor((Date.now() - new Date(due)) / DAY));
+    const techUser = await technicianUserId(wo.assignedTo);
+    const users = await notifyUsers(plantId, [...managers, techUser], {
+      type: "OVERDUE_WO",
+      title: `OT vencida: ${woNumber(wo.number)}`,
+      message: `${wo.title} — vencida hace ${days} día(s)`,
+      severity: "CRITICAL",
+      referenceId: wo.id,
+      referenceType: "WORK_ORDER",
+      actionUrl: `/maintenance/app/work-orders/${wo.id}`,
+      actionLabel: "Ver orden",
     });
-
-    if (!existingAlert) {
-      const daysOverdue = Math.floor((Date.now() - new Date(wo.dueAt)) / (1000 * 60 * 60 * 24));
-      const notif = await createNotification(plantId, {
-        type: "OVERDUE_WO",
-        title: `⏰ OT Vencida: ${wo.number}`,
-        message: `${wo.title} vence hace ${daysOverdue} días (Estado: ${wo.status})`,
-        severity: "CRITICAL",
-        referenceId: wo.id,
-        referenceType: "WORK_ORDER",
-        actionUrl: `/maintenance/app/work-orders/${wo.id}`,
-        actionLabel: "Ver Orden",
-      });
-      alerts.push(notif);
-    }
+    sent += users.length;
   }
-
-  return alerts;
+  return sent;
 }
 
-export async function checkTechnicianOverload(plantId) {
-  const technicians = await prisma.technician.findMany({
-    where: { plantId },
-    select: {
-      id: true,
-      name: true,
-      user: { select: { id: true } },
-      assignedPreventiveOrders: {
-        where: { status: { notIn: ["FINISHED", "CANCELLED"] } },
-        select: { id: true },
-      },
-    },
+/** Técnicos con más de OVERLOAD_THRESHOLD órdenes abiertas de Maintenance. */
+export async function checkTechnicianOverload(plantId, managers) {
+  const counts = await prisma.mtWorkOrder.groupBy({
+    by: ["assignedTo"],
+    where: { plantId, assignedTo: { not: null }, status: { in: OPEN_WO } },
+    _count: { _all: true },
   });
+  const overloaded = counts.filter((c) => c._count._all > OVERLOAD_THRESHOLD);
+  if (overloaded.length === 0) return 0;
 
-  const alerts = [];
-  const CAPACITY_THRESHOLD = 5; // Max 5 open orders per tech
-
-  for (const tech of technicians) {
-    const openOrders = tech.assignedPreventiveOrders.length;
-
-    if (openOrders > CAPACITY_THRESHOLD) {
-      const existingAlert = await prisma.mtNotification.findFirst({
-        where: {
-          plantId,
-          type: "TECHNICIAN_OVERLOAD",
-          referenceId: tech.id,
-          isRead: false,
-          createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
-        },
-      });
-
-      if (!existingAlert && tech.user?.id) {
-        const notif = await createNotification(plantId, {
-          userId: tech.user.id,
-          type: "TECHNICIAN_OVERLOAD",
-          title: `😰 Sobrecarga de trabajo: ${tech.name}`,
-          message: `Tienes ${openOrders} órdenes abiertas (máximo recomendado: ${CAPACITY_THRESHOLD})`,
-          severity: "WARNING",
-          referenceId: tech.id,
-          referenceType: "TECHNICIAN",
-          actionUrl: `/maintenance/app/work-orders?assignedTo=${tech.id}`,
-          actionLabel: "Ver mis órdenes",
-        });
-        alerts.push(notif);
-      }
-    }
+  const techs = await prisma.technician.findMany({
+    where: { id: { in: overloaded.map((c) => c.assignedTo) }, plantId },
+    select: { id: true, name: true },
+  });
+  let sent = 0;
+  for (const tech of techs) {
+    const open = overloaded.find((c) => c.assignedTo === tech.id)._count._all;
+    const users = await notifyUsers(plantId, [...managers, await technicianUserId(tech.id)], {
+      type: "TECHNICIAN_OVERLOAD",
+      title: `Sobrecarga: ${tech.name}`,
+      message: `${tech.name} tiene ${open} órdenes abiertas (recomendado: máximo ${OVERLOAD_THRESHOLD})`,
+      severity: "WARNING",
+      referenceId: tech.id,
+      referenceType: "TECHNICIAN",
+      actionUrl: `/maintenance/app/personnel/${tech.id}`,
+      actionLabel: "Ver técnico",
+    });
+    sent += users.length;
   }
-
-  return alerts;
+  return sent;
 }
 
-export async function checkPreventivesSoon(plantId, daysAhead = 7) {
-  const preventives = await prisma.mtPlan.findMany({
-    where: {
-      plantId,
-      active: true,
-      nextDueAt: {
-        gte: new Date(),
-        lte: new Date(Date.now() + daysAhead * 24 * 60 * 60 * 1000),
-      },
-    },
-    select: {
-      id: true,
-      code: true,
-      title: true,
-      nextDueAt: true,
-      asset: { select: { code: true, name: true } },
-    },
+export async function checkPreventivesSoon(plantId, managers, daysAhead = 7) {
+  const plans = await prisma.mtPlan.findMany({
+    where: { plantId, active: true, deletedAt: null, nextDueAt: { gte: new Date(), lte: new Date(Date.now() + daysAhead * DAY) } },
+    select: { id: true, code: true, title: true, nextDueAt: true, defaultAssigneeId: true, asset: { select: { code: true, name: true } } },
   });
 
-  const alerts = [];
-  for (const plan of preventives) {
-    const existingAlert = await prisma.mtNotification.findFirst({
-      where: {
-        plantId,
-        type: "PREVENTIVE_SOON",
-        referenceId: plan.id,
-        isRead: false,
-        createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
-      },
+  let sent = 0;
+  for (const plan of plans) {
+    const days = Math.max(0, Math.ceil((new Date(plan.nextDueAt) - Date.now()) / DAY));
+    const users = await notifyUsers(plantId, [...managers, await technicianUserId(plan.defaultAssigneeId)], {
+      type: "PREVENTIVE_SOON",
+      title: `Preventivo próximo: ${plan.code}`,
+      message: `${plan.title} (${plan.asset?.code ?? "sin activo"}) vence ${days === 0 ? "hoy" : `en ${days} día(s)`}`,
+      severity: "INFO",
+      referenceId: plan.id,
+      referenceType: "PLAN",
+      actionUrl: "/maintenance/app/maintenance-calendar",
+      actionLabel: "Ver cronograma",
     });
-
-    if (!existingAlert) {
-      const daysUntilDue = Math.ceil((new Date(plan.nextDueAt) - Date.now()) / (1000 * 60 * 60 * 24));
-      const notif = await createNotification(plantId, {
-        type: "PREVENTIVE_SOON",
-        title: `🔧 Preventivo próximo: ${plan.asset.code}`,
-        message: `${plan.title} vence en ${daysUntilDue} días (${new Date(plan.nextDueAt).toLocaleDateString()})`,
-        severity: "INFO",
-        referenceId: plan.id,
-        referenceType: "PLAN",
-        actionUrl: `/maintenance/app/assets/${plan.asset.code}`,
-        actionLabel: "Ver Activo",
-      });
-      alerts.push(notif);
-    }
+    sent += users.length;
   }
-
-  return alerts;
+  return sent;
 }
 
 export async function runAllAlertChecks(plantId) {
+  const managers = await managerUserIds(plantId);
   const [lowStock, overdue, overload, preventives] = await Promise.all([
-    checkLowStockAlerts(plantId),
-    checkOverdueWorkOrders(plantId),
-    checkTechnicianOverload(plantId),
-    checkPreventivesSoon(plantId),
+    checkLowStockAlerts(plantId, managers),
+    checkOverdueWorkOrders(plantId, managers),
+    checkTechnicianOverload(plantId, managers),
+    checkPreventivesSoon(plantId, managers),
   ]);
 
+  // Limpieza de notificaciones expiradas
+  await prisma.mtNotification.deleteMany({ where: { plantId, expiresAt: { lt: new Date() } } });
+
   return {
-    total: lowStock.length + overdue.length + overload.length + preventives.length,
-    alerts: {
-      lowStock: lowStock.length,
-      overdue: overdue.length,
-      technicianOverload: overload.length,
-      preventivesSoon: preventives.length,
-    },
+    total: lowStock + overdue + overload + preventives,
+    alerts: { lowStock, overdue, technicianOverload: overload, preventivesSoon: preventives },
   };
 }
 
 // ============================================================
-// PREFERENCES
+// EVENTOS (se llaman desde órdenes de trabajo; nunca deben romper la operación)
+// ============================================================
+
+/** Falla crítica reportada: avisa a supervisores y admins. */
+export async function notifyCriticalFailure(plantId, wo) {
+  try {
+    if (wo.type !== "CORRECTIVE" || wo.priority !== "CRITICAL") return;
+    await notifyUsers(plantId, await managerUserIds(plantId), {
+      type: "CRITICAL_FAILURE",
+      title: `Falla crítica: ${woNumber(wo.number)}`,
+      message: `${wo.title}${wo.assetName ? ` — ${wo.assetName}` : ""}`,
+      severity: "CRITICAL",
+      referenceId: wo.id,
+      referenceType: "WORK_ORDER",
+      actionUrl: `/maintenance/app/work-orders/${wo.id}`,
+      actionLabel: "Revisar orden",
+    }, { dedupeHours: 0 });
+  } catch (err) {
+    logger.error("[notifyCriticalFailure]", err);
+  }
+}
+
+/** OT asignada: avisa al técnico (si tiene usuario vinculado). */
+export async function notifyAssignment(plantId, wo, technicianId) {
+  try {
+    const userId = await technicianUserId(technicianId);
+    if (!userId) return;
+    await notifyUsers(plantId, [userId], {
+      type: "WO_ASSIGNED",
+      title: `Nueva orden asignada: ${woNumber(wo.number)}`,
+      message: wo.title,
+      severity: wo.priority === "CRITICAL" ? "CRITICAL" : "INFO",
+      referenceId: wo.id,
+      referenceType: "WORK_ORDER",
+      actionUrl: `/maintenance/app/work-orders/${wo.id}`,
+      actionLabel: "Ver orden",
+    }, { dedupeHours: 0 });
+  } catch (err) {
+    logger.error("[notifyAssignment]", err);
+  }
+}
+
+// ============================================================
+// PREFERENCIAS
 // ============================================================
 
 export async function getOrCreatePreferences(userId, plantId) {
-  let prefs = await prisma.mtNotificationPreference.findUnique({
-    where: { userId },
-  });
-
-  if (!prefs) {
-    prefs = await prisma.mtNotificationPreference.create({
-      data: { userId, plantId },
+  try {
+    return await prisma.mtNotificationPreference.upsert({
+      where: { userId },
+      update: {},
+      create: { userId, plantId },
     });
+  } catch (err) {
+    // Dos peticiones simultáneas pueden intentar crearlas a la vez: la segunda solo las lee
+    if (err.code === "P2002") return prisma.mtNotificationPreference.findUnique({ where: { userId } });
+    throw err;
   }
-
-  return prefs;
 }
 
+/** Solo acepta los interruptores conocidos (booleanos); ignora cualquier otro campo del body. */
 export async function updatePreferences(userId, plantId, data) {
-  return await prisma.mtNotificationPreference.upsert({
-    where: { userId },
-    update: data,
-    create: { userId, plantId, ...data },
-  });
+  const clean = {};
+  for (const field of PREFERENCE_FIELDS) {
+    if (typeof data?.[field] === "boolean") clean[field] = data[field];
+  }
+  await getOrCreatePreferences(userId, plantId);
+  return prisma.mtNotificationPreference.update({ where: { userId }, data: clean });
 }

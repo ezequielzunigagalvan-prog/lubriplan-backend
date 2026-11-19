@@ -3,6 +3,7 @@ import { logger } from "../../../config/logger.js";
 import {
   getUserNotifications,
   markNotificationAsRead,
+  markAllAsRead,
   getUnreadCount,
   runAllAlertChecks,
   getOrCreatePreferences,
@@ -11,14 +12,13 @@ import {
 
 const router = Router();
 
-// GET /api/maintenance/notifications
+// GET /api/maintenance/notifications?limit=50&unread=1&type=
 router.get("/", async (req, res) => {
   try {
-    const plantId = req.currentPlantId;
-    const userId = req.user.id;
-    const { limit = 50 } = req.query;
-
-    const notifications = await getUserNotifications(plantId, userId, parseInt(limit));
+    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
+    const unreadOnly = req.query.unread === "1" || req.query.unread === "true";
+    const type = typeof req.query.type === "string" && req.query.type ? req.query.type : undefined;
+    const notifications = await getUserNotifications(req.currentPlantId, req.user.id, { limit, unreadOnly, type });
     res.json(notifications);
   } catch (error) {
     logger.error("[GET /notifications]", error);
@@ -26,30 +26,29 @@ router.get("/", async (req, res) => {
   }
 });
 
-// GET /api/maintenance/notifications/unread-count
 router.get("/unread-count", async (req, res) => {
   try {
-    const plantId = req.currentPlantId;
-    const userId = req.user.id;
-
-    const count = await getUnreadCount(plantId, userId);
-    res.json({ unreadCount: count });
+    res.json({ unreadCount: await getUnreadCount(req.currentPlantId, req.user.id) });
   } catch (error) {
     logger.error("[GET /notifications/unread-count]", error);
     res.status(500).json({ error: "Error fetching unread count" });
   }
 });
 
-// PATCH /api/maintenance/notifications/:id/read
+// PATCH /api/maintenance/notifications/read-all
+router.patch("/read-all", async (req, res) => {
+  try {
+    res.json({ updated: await markAllAsRead(req.currentPlantId, req.user.id) });
+  } catch (error) {
+    logger.error("[PATCH /notifications/read-all]", error);
+    res.status(500).json({ error: "Error marking notifications as read" });
+  }
+});
+
 router.patch("/:id/read", async (req, res) => {
   try {
-    const plantId = req.currentPlantId;
-    const notif = await markNotificationAsRead(parseInt(req.params.id), plantId);
-
-    if (!notif) {
-      return res.status(404).json({ error: "Notification not found" });
-    }
-
+    const notif = await markNotificationAsRead(parseInt(req.params.id, 10), req.currentPlantId, req.user.id);
+    if (!notif) return res.status(404).json({ error: "Notification not found" });
     res.json(notif);
   } catch (error) {
     logger.error("[PATCH /notifications/:id/read]", error);
@@ -57,45 +56,31 @@ router.patch("/:id/read", async (req, res) => {
   }
 });
 
-// POST /api/maintenance/notifications/check-alerts
+// POST /api/maintenance/notifications/check-alerts — revisión manual (el scheduler también la corre)
 router.post("/check-alerts", async (req, res) => {
   try {
-    const plantId = req.currentPlantId;
-
-    const result = await runAllAlertChecks(plantId);
-    res.json(result);
+    if (!["ADMIN", "SUPERVISOR"].includes(req.user?.role)) {
+      return res.status(403).json({ error: "Only ADMIN/SUPERVISOR can run alert checks" });
+    }
+    res.json(await runAllAlertChecks(req.currentPlantId));
   } catch (error) {
     logger.error("[POST /notifications/check-alerts]", error);
     res.status(500).json({ error: "Error checking alerts" });
   }
 });
 
-// ============================================================
-// PREFERENCES
-// ============================================================
-
-// GET /api/maintenance/notifications/preferences
 router.get("/preferences", async (req, res) => {
   try {
-    const userId = req.user.id;
-    const plantId = req.currentPlantId;
-
-    const prefs = await getOrCreatePreferences(userId, plantId);
-    res.json(prefs);
+    res.json(await getOrCreatePreferences(req.user.id, req.currentPlantId));
   } catch (error) {
     logger.error("[GET /notifications/preferences]", error);
     res.status(500).json({ error: "Error fetching preferences" });
   }
 });
 
-// PATCH /api/maintenance/notifications/preferences
 router.patch("/preferences", async (req, res) => {
   try {
-    const userId = req.user.id;
-    const plantId = req.currentPlantId;
-
-    const updated = await updatePreferences(userId, plantId, req.body);
-    res.json(updated);
+    res.json(await updatePreferences(req.user.id, req.currentPlantId, req.body));
   } catch (error) {
     logger.error("[PATCH /notifications/preferences]", error);
     res.status(500).json({ error: "Error updating preferences" });

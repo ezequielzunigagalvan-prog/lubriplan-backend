@@ -4,6 +4,7 @@ import multer from "multer";
 import prisma from "../../../prisma.js";
 import { logger } from "../../../config/logger.js";
 import { onPlanWorkOrderFinished } from "../plans/schedule.js";
+import { notifyCriticalFailure, notifyAssignment } from "../notifications/service.js";
 import { startOfLocalDay } from "../scheduler/dates.js";
 import { uploadBufferToCloudinary, destroyCloudinaryImage } from "../../../lib/cloudinary.js";
 import {
@@ -389,12 +390,13 @@ router.get("/:id", async (req, res) => {
 });
 
 async function createWorkOrder({ plantId, user, data, comment }) {
+  let asset = null;
   if (data.assetId) {
-    const asset = await prisma.mtAsset.findFirst({ where: { id: data.assetId, plantId, deletedAt: null }, select: { id: true } });
+    asset = await prisma.mtAsset.findFirst({ where: { id: data.assetId, plantId, deletedAt: null }, select: { id: true, code: true, name: true } });
     if (!asset) throw Object.assign(new Error("Asset not found"), { status: 404 });
   }
 
-  return prisma.$transaction(async (tx) => {
+  const created = await prisma.$transaction(async (tx) => {
     const number = await getNextWorkOrderNumber(plantId, tx);
     const wo = await tx.mtWorkOrder.create({
       data: { plantId, number, requestedBy: user.id, ...data },
@@ -405,6 +407,16 @@ async function createWorkOrder({ plantId, user, data, comment }) {
     });
     return wo;
   });
+
+  // Falla crítica: aviso inmediato a supervisores (fuera de la transacción; si falla no afecta la OT)
+  await notifyCriticalFailure(plantId, {
+    ...created,
+    type: data.type,
+    priority: data.priority,
+    title: data.title,
+    assetName: asset ? `${asset.code} · ${asset.name}` : null,
+  });
+  return created;
 }
 
 router.post("/", async (req, res) => {
@@ -552,6 +564,9 @@ router.post("/:id/transition", async (req, res) => {
 
     if (!updatedWO) {
       return res.status(409).json({ error: "La orden fue modificada por alguien más. Recarga e intenta de nuevo." });
+    }
+    if (parsed.to === STATES.ASSIGNED) {
+      await notifyAssignment(plantId, updatedWO, updatedWO.assignedTo);
     }
     return res.json(updatedWO);
   } catch (err) {
