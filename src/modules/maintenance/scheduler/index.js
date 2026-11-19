@@ -1,7 +1,6 @@
 import prisma from "../../../prisma.js";
 import { logger } from "../../../config/logger.js";
 import { generateForPlant } from "./generator.js";
-import { runAllAlertChecks } from "../notifications/service.js";
 
 let schedulerInterval = null;
 let isRunning = false;
@@ -57,14 +56,6 @@ export async function runMaintenanceScheduler() {
       totals.generated += summary.generated;
       totals.skipped += summary.skipped;
       totals.errors += summary.errors;
-
-      // Alertas (stock bajo, OTs vencidas, sobrecarga, preventivos próximos); deduplicadas por día
-      try {
-        const alerts = await runAllAlertChecks(plantId);
-        totals.alerts = (totals.alerts || 0) + alerts.total;
-      } catch (err) {
-        logger.error(`[Maintenance Scheduler] Alert checks failed for plant ${plantId}`, err);
-      }
 
       for (const r of summary.results) {
         if (r.decision === "GENERATED") {

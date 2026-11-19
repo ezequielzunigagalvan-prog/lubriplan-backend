@@ -1,6 +1,7 @@
 import prisma from "../../../prisma.js";
 import { logger } from "../../../config/logger.js";
 import { getLowStockAlerts } from "../inventory/service.js";
+import { isOverdue, daysOverdue, CLOSED_STATUSES } from "../workOrders/due.js";
 
 const DAY = 24 * 60 * 60 * 1000;
 const RETENTION_DAYS = 30;
@@ -13,9 +14,10 @@ const TYPE_PREFERENCE = {
   OVERDUE_WO: "overdueWoEnabled",
   TECHNICIAN_OVERLOAD: "technicianOverloadEnabled",
   PREVENTIVE_SOON: "preventiveSoonEnabled",
+  PLAN_DUE: "preventiveSoonEnabled",
   CRITICAL_FAILURE: "criticalFailureEnabled",
 };
-export const PREFERENCE_FIELDS = [...Object.values(TYPE_PREFERENCE), "inAppEnabled", "emailEnabled"];
+export const PREFERENCE_FIELDS = [...new Set([...Object.values(TYPE_PREFERENCE), "inAppEnabled", "emailEnabled"])];
 
 const woNumber = (n) => `OT-${String(n).padStart(5, "0")}`;
 
@@ -180,32 +182,62 @@ export async function checkLowStockAlerts(plantId, managers) {
   return sent;
 }
 
+/**
+ * OTs preventivas y correctivas atrasadas (regla única de workOrders/due.js: preventivas por fecha
+ * compromiso, correctivas por plazo según prioridad). Avisa a supervisores y al técnico asignado.
+ */
 export async function checkOverdueWorkOrders(plantId, managers) {
-  const startOfToday = new Date();
-  startOfToday.setHours(0, 0, 0, 0);
-  const overdue = await prisma.mtWorkOrder.findMany({
-    where: {
-      plantId,
-      status: { in: [...OPEN_WO, "REQUESTED"] },
-      OR: [{ dueAt: { lt: startOfToday } }, { dueAt: null, scheduledAt: { lt: startOfToday } }],
+  const now = new Date();
+  const open = await prisma.mtWorkOrder.findMany({
+    where: { plantId, status: { notIn: CLOSED_STATUSES } },
+    select: {
+      id: true, number: true, title: true, type: true, status: true, priority: true,
+      dueAt: true, scheduledAt: true, createdAt: true, assignedTo: true,
+      asset: { select: { code: true } },
     },
-    select: { id: true, number: true, title: true, dueAt: true, scheduledAt: true, assignedTo: true },
   });
 
   let sent = 0;
-  for (const wo of overdue) {
-    const due = wo.dueAt || wo.scheduledAt;
-    const days = Math.max(1, Math.floor((Date.now() - new Date(due)) / DAY));
+  for (const wo of open.filter((w) => isOverdue(w, now))) {
+    const days = daysOverdue(wo, now);
+    const corrective = wo.type === "CORRECTIVE";
     const techUser = await technicianUserId(wo.assignedTo);
     const users = await notifyUsers(plantId, [...managers, techUser], {
       type: "OVERDUE_WO",
-      title: `OT vencida: ${woNumber(wo.number)}`,
-      message: `${wo.title} — vencida hace ${days} día(s)`,
-      severity: "CRITICAL",
+      title: `${corrective ? "Correctiva" : "Preventiva"} atrasada: ${woNumber(wo.number)}`,
+      message: `${wo.title}${wo.asset ? ` (${wo.asset.code})` : ""} — ${days} día(s) de atraso${wo.assignedTo ? "" : " · sin técnico asignado"}`,
+      severity: corrective && ["CRITICAL", "HIGH"].includes(wo.priority) ? "CRITICAL" : "WARNING",
       referenceId: wo.id,
       referenceType: "WORK_ORDER",
       actionUrl: `/maintenance/app/work-orders/${wo.id}`,
       actionLabel: "Ver orden",
+    });
+    sent += users.length;
+  }
+  return sent;
+}
+
+/** Planes cuyo ciclo ya venció y todavía no tiene OT generada (p. ej. con el scheduler apagado). */
+export async function checkPlansDueWithoutOrder(plantId, managers) {
+  const endOfToday = new Date();
+  endOfToday.setHours(23, 59, 59, 999);
+  const plans = await prisma.mtPlan.findMany({
+    where: { plantId, active: true, deletedAt: null, triggerType: "TIME", nextDueAt: { lte: endOfToday } },
+    select: { id: true, code: true, title: true, nextDueAt: true, asset: { select: { code: true } } },
+  });
+
+  let sent = 0;
+  for (const plan of plans) {
+    const late = plan.nextDueAt < new Date(new Date().setHours(0, 0, 0, 0));
+    const users = await notifyUsers(plantId, managers, {
+      type: "PLAN_DUE",
+      title: `${late ? "Preventivo vencido" : "Preventivo vence hoy"} sin OT: ${plan.code}`,
+      message: `${plan.title} (${plan.asset?.code ?? "sin activo"}) — genera la orden en Planes`,
+      severity: late ? "CRITICAL" : "WARNING",
+      referenceId: plan.id,
+      referenceType: "PLAN",
+      actionUrl: "/maintenance/app/preventive-plans",
+      actionLabel: "Ir a Planes",
     });
     sent += users.length;
   }
@@ -270,19 +302,20 @@ export async function checkPreventivesSoon(plantId, managers, daysAhead = 7) {
 
 export async function runAllAlertChecks(plantId) {
   const managers = await managerUserIds(plantId);
-  const [lowStock, overdue, overload, preventives] = await Promise.all([
+  const [lowStock, overdue, overload, preventives, plansDue] = await Promise.all([
     checkLowStockAlerts(plantId, managers),
     checkOverdueWorkOrders(plantId, managers),
     checkTechnicianOverload(plantId, managers),
     checkPreventivesSoon(plantId, managers),
+    checkPlansDueWithoutOrder(plantId, managers),
   ]);
 
   // Limpieza de notificaciones expiradas
   await prisma.mtNotification.deleteMany({ where: { plantId, expiresAt: { lt: new Date() } } });
 
   return {
-    total: lowStock + overdue + overload + preventives,
-    alerts: { lowStock, overdue, technicianOverload: overload, preventivesSoon: preventives },
+    total: lowStock + overdue + overload + preventives + plansDue,
+    alerts: { lowStock, overdue, technicianOverload: overload, preventivesSoon: preventives, plansDue },
   };
 }
 
@@ -355,4 +388,53 @@ export async function updatePreferences(userId, plantId, data) {
   }
   await getOrCreatePreferences(userId, plantId);
   return prisma.mtNotificationPreference.update({ where: { userId }, data: clean });
+}
+
+// ============================================================
+// CICLO AUTOMÁTICO DE ALERTAS
+// ============================================================
+
+let alertsInterval = null;
+
+/**
+ * Revisa las alertas de todas las plantas con Maintenance habilitado cada N minutos.
+ * Es independiente del scheduler de OTs (solo lee y crea notificaciones deduplicadas por día).
+ * Se desactiva con MAINTENANCE_ALERTS_ENABLED=false.
+ */
+export function startMaintenanceAlerts() {
+  if (process.env.MAINTENANCE_ALERTS_ENABLED === "false") {
+    logger.info("[Maintenance Alerts] Disabled (MAINTENANCE_ALERTS_ENABLED=false)");
+    return;
+  }
+  const intervalMs = (parseInt(process.env.MAINTENANCE_ALERTS_INTERVAL_MIN || "15", 10) || 15) * 60 * 1000;
+  let running = false;
+
+  const run = async () => {
+    if (running) return;
+    running = true;
+    try {
+      const access = await prisma.mtPlantAccess.findMany({ where: { enabled: true }, select: { plantId: true } });
+      for (const { plantId } of access) {
+        try {
+          const r = await runAllAlertChecks(plantId);
+          if (r.total) logger.info(`[Maintenance Alerts] Plant ${plantId}: ${r.total} notification(s)`, r.alerts);
+        } catch (err) {
+          logger.error(`[Maintenance Alerts] Plant ${plantId} failed`, err);
+        }
+      }
+    } catch (err) {
+      logger.error("[Maintenance Alerts] Unexpected error", err);
+    } finally {
+      running = false;
+    }
+  };
+
+  setTimeout(run, 20 * 1000);
+  alertsInterval = setInterval(run, intervalMs);
+  logger.info("[Maintenance Alerts] Started", { intervalMs });
+}
+
+export function stopMaintenanceAlerts() {
+  if (alertsInterval) clearInterval(alertsInterval);
+  alertsInterval = null;
 }

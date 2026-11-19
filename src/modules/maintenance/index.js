@@ -19,6 +19,7 @@ import schedulerRouter from "./scheduler/router.js";
 import analyticsRouter from "./analytics/analyticsRouter.js";
 import reportsRouter from "./reports/reportsRouter.js";
 import techniciansRouter from "./technicians/router.js";
+import { slaDueAt } from "./workOrders/due.js";
 import historyRouter from "./history/router.js";
 
 export function mountMaintenance(app, deps) {
@@ -115,6 +116,7 @@ export function mountMaintenance(app, deps) {
           number,
           type: "CORRECTIVE",
           priority,
+          dueAt: slaDueAt(priority), // plazo de atención según prioridad (ver workOrders/due.js)
           assetId: parseInt(assetId),
           title,
           description: description || "",

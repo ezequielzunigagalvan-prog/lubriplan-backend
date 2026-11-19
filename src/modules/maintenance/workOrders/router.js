@@ -17,6 +17,7 @@ import {
   isManager,
 } from "./stateMachine.js";
 import { getNextWorkOrderNumber, formatWorkOrderNumber } from "../utils/numeracion.js";
+import { effectiveDueAt, isOverdue, daysOverdue, slaDueAt, DUE_SELECT, CLOSED_STATUSES } from "./due.js";
 
 const router = express.Router();
 
@@ -172,7 +173,7 @@ router.get("/", async (req, res) => {
     }
     if (and.length) where.AND = and;
 
-    const [workOrders, total, byStatus] = await Promise.all([
+    const [workOrders, total, byStatus, openForOverdue] = await Promise.all([
       prisma.mtWorkOrder.findMany({
         where,
         select: {
@@ -200,7 +201,10 @@ router.get("/", async (req, res) => {
       }),
       prisma.mtWorkOrder.count({ where }),
       prisma.mtWorkOrder.groupBy({ by: ["status"], where: { plantId }, _count: { _all: true } }),
+      prisma.mtWorkOrder.findMany({ where: { plantId, status: { notIn: CLOSED_STATUSES } }, select: DUE_SELECT }),
     ]);
+    const now = new Date();
+    const overdueOpen = openForOverdue.filter((w) => isOverdue(w, now));
 
     const names = await resolveNames(plantId, {
       userIds: workOrders.map((w) => w.requestedBy),
@@ -210,6 +214,9 @@ router.get("/", async (req, res) => {
     return res.json({
       data: workOrders.map((w) => ({
         ...w,
+        effectiveDueAt: effectiveDueAt(w),
+        overdue: isOverdue(w, now),
+        daysOverdue: isOverdue(w, now) ? daysOverdue(w, now) : 0,
         requester: names.user.get(w.requestedBy) || null,
         assignee: w.assignedTo ? names.technician.get(w.assignedTo) || null : null,
       })),
@@ -217,6 +224,11 @@ router.get("/", async (req, res) => {
       page: pageNum,
       totalPages: Math.ceil(total / limitNum),
       countsByStatus: Object.fromEntries(byStatus.map((r) => [r.status, r._count._all])),
+      overdueCounts: {
+        total: overdueOpen.length,
+        preventive: overdueOpen.filter((w) => w.type !== "CORRECTIVE").length,
+        corrective: overdueOpen.filter((w) => w.type === "CORRECTIVE").length,
+      },
     });
   } catch (err) {
     logger.error("[workOrders GET]", err);
@@ -283,7 +295,7 @@ router.get("/technician-dashboard", async (req, res) => {
 
     // Primero lo que ya está en curso, luego por prioridad y por fecha compromiso
     const statusRank = (s) => (s === STATES.IN_PROGRESS ? 0 : s.startsWith("WAITING") ? 1 : 2);
-    const dueOf = (w) => new Date(w.dueAt || w.scheduledAt || w.createdAt).getTime();
+    const dueOf = (w) => (effectiveDueAt(w) || new Date(w.createdAt)).getTime();
     open.sort((a, b) => statusRank(a.status) - statusRank(b.status) || PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] || dueOf(a) - dueOf(b));
 
     const hoursOf = (w) => (w.startedAt && w.finishedAt ? Math.max(0, (w.finishedAt - w.startedAt) / 3600000) : 0);
@@ -294,13 +306,13 @@ router.get("/technician-dashboard", async (req, res) => {
       data: {
         technician,
         technicians,
-        openOrders: open.map((w) => ({ ...w, overdue: Boolean((w.dueAt || w.scheduledAt) && dueOf(w) < startOfToday.getTime()) })),
+        openOrders: open.map((w) => ({ ...w, effectiveDueAt: effectiveDueAt(w), overdue: isOverdue(w, now) })),
         recentCompleted: completed.slice(0, 10).map(withHours),
         stats: {
           assigned: open.filter((w) => w.status === STATES.ASSIGNED).length,
           inProgress: open.filter((w) => w.status === STATES.IN_PROGRESS).length,
           waiting: open.filter((w) => w.status.startsWith("WAITING")).length,
-          overdue: open.filter((w) => (w.dueAt || w.scheduledAt) && dueOf(w) < startOfToday.getTime()).length,
+          overdue: open.filter((w) => isOverdue(w, now)).length,
           completed30d: completed.length,
           hoursToday: round1(completed.filter((w) => w.finishedAt >= startOfToday).reduce((s, w) => s + hoursOf(w), 0)),
           hours30d: round1(completed.reduce((s, w) => s + hoursOf(w), 0)),
@@ -359,6 +371,9 @@ router.get("/:id", async (req, res) => {
       workOrder: {
         ...workOrder,
         numberFormatted: formatWorkOrderNumber(wo.number),
+        effectiveDueAt: effectiveDueAt(wo),
+        overdue: isOverdue(wo),
+        daysOverdue: isOverdue(wo) ? daysOverdue(wo) : 0,
         plan,
         requester: names.user.get(wo.requestedBy) || null,
         assignee: wo.assignedTo ? names.technician.get(wo.assignedTo) || null : null,
@@ -394,6 +409,10 @@ async function createWorkOrder({ plantId, user, data, comment }) {
   if (data.assetId) {
     asset = await prisma.mtAsset.findFirst({ where: { id: data.assetId, plantId, deletedAt: null }, select: { id: true, code: true, name: true } });
     if (!asset) throw Object.assign(new Error("Asset not found"), { status: 404 });
+  }
+
+  if (data.type === "CORRECTIVE" && !data.dueAt) {
+    data = { ...data, dueAt: slaDueAt(data.priority) };
   }
 
   const created = await prisma.$transaction(async (tx) => {

@@ -75,6 +75,7 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
   import preventiveOrdersRoutes from "./routes/preventiveOrders.routes.js";
   import { mountMaintenance } from "./modules/maintenance/index.js";
   import { startMaintenanceScheduler } from "./modules/maintenance/scheduler/index.js";
+  import { startMaintenanceAlerts } from "./modules/maintenance/notifications/service.js";
 
 
 
@@ -951,6 +952,8 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
 
   // Scheduler de preventivos de Maintenance: solo arranca si MAINTENANCE_SCHEDULER_ENABLED=true
   startMaintenanceScheduler();
+  // Alertas de Maintenance (atrasos, stock, planes vencidos): activas salvo MAINTENANCE_ALERTS_ENABLED=false
+  startMaintenanceAlerts();
 
     /* ========= PROTECCION GLOBAL ========= */
     // Sentry debe capturar excepciones antes del logger

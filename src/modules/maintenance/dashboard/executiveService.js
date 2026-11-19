@@ -1,4 +1,5 @@
 import prisma from "../../../prisma.js";
+import { isOverdue, effectiveDueAt, daysOverdue } from "../workOrders/due.js";
 
 // Estados que se consideran "cerrados" (ya no son trabajo pendiente)
 const CLOSED_STATUSES = ["FINISHED", "VALIDATED", "REJECTED", "CANCELLED"];
@@ -60,7 +61,11 @@ export async function getExecutiveDashboard({ plantId, userId, days = 30 }) {
   const [openOrders, finishedSinceTrend, preventivesDue, activeAssets, plans, memberships] = await Promise.all([
     prisma.mtWorkOrder.findMany({
       where: { plantId, status: { notIn: CLOSED_STATUSES } },
-      select: { id: true, type: true, status: true, dueAt: true, scheduledAt: true, assignedTo: true },
+      select: {
+        id: true, number: true, title: true, type: true, status: true, priority: true,
+        dueAt: true, scheduledAt: true, createdAt: true, assignedTo: true,
+        asset: { select: { code: true, name: true } },
+      },
     }),
     prisma.mtWorkOrder.findMany({
       where: { plantId, status: { in: DONE_STATUSES }, finishedAt: { gte: trendStart } },
@@ -90,7 +95,7 @@ export async function getExecutiveDashboard({ plantId, userId, days = 30 }) {
     prisma.mtAsset.count({ where: { plantId, deletedAt: null } }),
     prisma.mtPlan.findMany({
       where: { plantId, deletedAt: null },
-      select: { id: true, code: true, title: true },
+      select: { id: true, code: true, title: true, active: true, triggerType: true, nextDueAt: true, asset: { select: { code: true, name: true } } },
     }),
     userId
       ? prisma.userPlant.findMany({
@@ -101,10 +106,35 @@ export async function getExecutiveDashboard({ plantId, userId, days = 30 }) {
   ]);
 
   // ---------- Órdenes ----------
-  const overdueOrders = openOrders.filter((wo) => {
-    const due = dueDateOf(wo);
-    return due && due < now;
-  }).length;
+  // Atraso con la regla única (preventivas: fecha compromiso; correctivas: plazo según prioridad)
+  const overdueList = openOrders
+    .filter((wo) => isOverdue(wo, now))
+    .map((wo) => ({
+      id: wo.id,
+      number: wo.number,
+      title: wo.title,
+      type: wo.type,
+      priority: wo.priority,
+      status: wo.status,
+      dueAt: effectiveDueAt(wo),
+      daysOverdue: daysOverdue(wo, now),
+      asset: wo.asset,
+    }))
+    .sort((a, b) => b.daysOverdue - a.daysOverdue);
+  const overdueOrders = overdueList.length;
+
+  // Planes: activos por tiempo, y los que ya vencieron sin OT generada (nextDueAt pasado = ciclo pendiente de generar)
+  const activePlans = plans.filter((p) => p.active);
+  const startOfToday = new Date(now);
+  startOfToday.setHours(0, 0, 0, 0);
+  const endOfToday = new Date(startOfToday.getTime() + 24 * HOUR_MS - 1);
+  const plansDueWithoutOrder = activePlans
+    .filter((p) => p.triggerType === "TIME" && p.nextDueAt && p.nextDueAt <= endOfToday)
+    .map((p) => ({ id: p.id, code: p.code, title: p.title, nextDueAt: p.nextDueAt, asset: p.asset }))
+    .sort((a, b) => a.nextDueAt - b.nextDueAt);
+  const nextPlan = activePlans
+    .filter((p) => p.nextDueAt && p.nextDueAt > endOfToday)
+    .sort((a, b) => a.nextDueAt - b.nextDueAt)[0];
   const correctivePending = openOrders.filter((wo) => wo.type === "CORRECTIVE").length;
   const preventivePending = openOrders.length - correctivePending;
   const backlog = openOrders.filter((wo) => NOT_STARTED_STATUSES.includes(wo.status)).length;
@@ -195,6 +225,17 @@ export async function getExecutiveDashboard({ plantId, userId, days = 30 }) {
     correctivePending,
     preventivePending,
     overdueOrders,
+    overdueBreakdown: {
+      preventive: overdueList.filter((o) => o.type !== "CORRECTIVE").length,
+      corrective: overdueList.filter((o) => o.type === "CORRECTIVE").length,
+    },
+    overdueList: overdueList.slice(0, 10),
+    plans: {
+      active: activePlans.length,
+      paused: plans.length - activePlans.length,
+      dueWithoutOrder: plansDueWithoutOrder,
+      next: nextPlan ? { id: nextPlan.id, code: nextPlan.code, title: nextPlan.title, nextDueAt: nextPlan.nextDueAt } : null,
+    },
     completedOrders: finishedInPeriod.length,
     maintenanceBacklog: backlog,
     preventiveCompliance,
