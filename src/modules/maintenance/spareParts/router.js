@@ -6,6 +6,7 @@ import {
   getSparePart,
   listSpareParts,
   updateSparePart,
+  deactivateSparePart,
   linkSparePartToAsset,
   getSparePartsForAsset,
 } from "./service.js";
@@ -96,6 +97,19 @@ router.patch("/:id", requireRole(["ADMIN", "SUPERVISOR"]), async (req, res) => {
   } catch (error) {
     logger.error("[PATCH /spare-parts/:id]", error);
     res.status(500).json({ error: "Error updating spare part" });
+  }
+});
+
+// DELETE /api/maintenance/spare-parts/:id — baja (INACTIVE); bloqueada si tiene existencia
+router.delete("/:id", requireRole(["ADMIN", "SUPERVISOR"]), async (req, res) => {
+  try {
+    const sparePart = await deactivateSparePart(parseInt(req.params.id, 10), req.currentPlantId);
+    if (!sparePart) return res.status(404).json({ error: "Spare part not found" });
+    res.json({ message: "Spare part deactivated", sparePart });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    logger.error("[DELETE /spare-parts/:id]", error);
+    res.status(500).json({ error: "Error deactivating spare part" });
   }
 });
 

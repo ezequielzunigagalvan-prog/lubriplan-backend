@@ -106,7 +106,8 @@ export async function updateSparePart(sparePartId, plantId, data) {
 
   const updateData = {
     // NO actualizar code - es identificador único y debe ser inmutable
-    ...(data.name !== undefined && { name: data.name || null }),
+    // name es obligatorio en el esquema: un valor vacío se ignora en lugar de mandar null
+    ...(typeof data.name === 'string' && data.name.trim() && { name: data.name.trim() }),
     ...(data.description !== undefined && { description: data.description || null }),
     ...(data.category !== undefined && { category: data.category || null }),
     ...(data.brand !== undefined && { brand: data.brand || null }),
@@ -120,32 +121,35 @@ export async function updateSparePart(sparePartId, plantId, data) {
     version: { increment: 1 },
   };
 
-  console.log(`[UPDATE SPARE PART ${sparePartId}] Datos recibidos:`, JSON.stringify(data, null, 2));
-  console.log(`[UPDATE SPARE PART ${sparePartId}] Datos a actualizar:`, JSON.stringify(updateData, null, 2));
-  console.log(`[UPDATE SPARE PART ${sparePartId}] Datos actuales:`, JSON.stringify({
-    name: sparePart.name,
-    category: sparePart.category,
-    brand: sparePart.brand,
-    minStock: sparePart.minStock,
-    maxStock: sparePart.maxStock,
-    costPerUnit: sparePart.costPerUnit,
-  }, null, 2));
-
   const result = await prisma.mtSparePart.update({
     where: { id: sparePartId },
     data: updateData,
   });
 
-  console.log(`[UPDATE SPARE PART ${sparePartId}] Datos después actualización:`, JSON.stringify({
-    name: result.name,
-    category: result.category,
-    brand: result.brand,
-    minStock: result.minStock,
-    maxStock: result.maxStock,
-    costPerUnit: result.costPerUnit,
-  }, null, 2));
-
   return result;
+}
+
+/**
+ * Baja de una refacción (status INACTIVE). Se bloquea si todavía tiene existencia en algún almacén,
+ * para no "perder" inventario valorizado: primero se ajusta a 0.
+ * Devuelve null si no existe; lanza { status: 409 } si tiene existencia.
+ */
+export async function deactivateSparePart(sparePartId, plantId) {
+  const sparePart = await prisma.mtSparePart.findFirst({
+    where: { id: sparePartId, plantId },
+    include: { stocks: { select: { quantity: true } } },
+  });
+  if (!sparePart) return null;
+
+  const onHand = sparePart.stocks.reduce((s, x) => s + Number(x.quantity), 0);
+  if (onHand > 0) {
+    throw Object.assign(new Error(`No se puede dar de baja: tiene ${onHand} ${sparePart.unit} en existencia. Ajusta la existencia a 0 primero.`), { status: 409 });
+  }
+
+  return prisma.mtSparePart.update({
+    where: { id: sparePartId },
+    data: { status: "INACTIVE", version: { increment: 1 } },
+  });
 }
 
 // Link spare part to asset

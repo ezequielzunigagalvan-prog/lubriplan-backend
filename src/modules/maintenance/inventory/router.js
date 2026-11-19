@@ -1,7 +1,6 @@
 import { Router } from "express";
 import { requireRole } from "../../../middleware/requireRole.js";
 import { logger } from "../../../config/logger.js";
-import prisma from "../../../prisma.js";
 import {
   createWarehouse,
   listWarehouses,
@@ -13,9 +12,29 @@ import {
   recordSparePartConsumption,
   getStockMovementHistory,
   getLowStockAlerts,
+  getInventoryOverview,
+  setStockQuantity,
+  InventoryError,
 } from "./service.js";
 
 const router = Router();
+
+/** Responde con el código del InventoryError (400/404/409) o 500 si es inesperado. */
+function sendError(res, error, tag, fallback) {
+  if (error instanceof InventoryError) return res.status(error.status).json({ error: error.message });
+  logger.error(tag, error);
+  return res.status(500).json({ error: fallback });
+}
+
+// GET /api/maintenance/inventory/overview — catálogo con existencias por almacén e indicadores
+router.get("/overview", async (req, res) => {
+  try {
+    res.json({ data: await getInventoryOverview(req.currentPlantId) });
+  } catch (error) {
+    logger.error("[GET /inventory/overview]", error);
+    res.status(500).json({ error: "Error fetching inventory" });
+  }
+});
 
 // ============================================================
 // WAREHOUSE ENDPOINTS
@@ -127,34 +146,17 @@ router.get("/warehouses/:warehouseId/stock", async (req, res) => {
   }
 });
 
-// PATCH /api/maintenance/inventory/stock/:id - Update stock quantity
+// PATCH /api/maintenance/inventory/stock/:id — fija la existencia (conteo físico) registrando un ajuste
 router.patch("/stock/:id", requireRole(["ADMIN", "SUPERVISOR"]), async (req, res) => {
   try {
-    const plantId = req.currentPlantId;
-    const { quantity } = req.body;
-
-    if (quantity === undefined || quantity === null) {
+    const { quantity, reason } = req.body;
+    if (quantity === undefined || quantity === null || quantity === "") {
       return res.status(422).json({ error: "Missing required field: quantity" });
     }
-
-    const stockId = parseInt(req.params.id);
-    const stock = await getStock(stockId, plantId);
-
-    if (!stock) {
-      return res.status(404).json({ error: "Stock not found" });
-    }
-
-    // Actualizar cantidad directamente
-    const updated = await prisma.mtStock.update({
-      where: { id: stockId },
-      data: { quantity: Math.max(0, parseFloat(quantity)) },
-      include: { sparePart: true },
-    });
-
+    const updated = await setStockQuantity(parseInt(req.params.id, 10), quantity, req.currentPlantId, req.user.id, reason);
     res.json(updated);
   } catch (error) {
-    logger.error("[PATCH /stock/:id]", error);
-    res.status(500).json({ error: "Error updating stock" });
+    sendError(res, error, "[PATCH /stock/:id]", "Error updating stock");
   }
 });
 
@@ -169,24 +171,26 @@ router.post("/movements", requireRole(["ADMIN", "SUPERVISOR", "TECHNICIAN"]), as
     const userId = req.user.id;
     const { stockId, type, quantity, reason, costPerUnit, referenceId, referenceType } = req.body;
 
-    if (!stockId || !type || !quantity) {
+    if (!stockId || !type || quantity === undefined || quantity === null || quantity === "") {
       return res.status(422).json({ error: "Missing required fields: stockId, type, quantity" });
+    }
+    // Las salidas por OT van por /consume (registran la refacción en la orden)
+    if (referenceType === "WORK_ORDER") {
+      return res.status(400).json({ error: "Use /inventory/consume to register parts used in a work order" });
     }
 
     const movement = await recordStockMovement(
-      parseInt(stockId),
+      parseInt(stockId, 10),
       type,
-      parseFloat(quantity),
+      quantity,
       plantId,
       userId,
-      { reason, costPerUnit: costPerUnit ? parseFloat(costPerUnit) : null, referenceId, referenceType }
+      { reason, costPerUnit: costPerUnit !== undefined && costPerUnit !== "" ? costPerUnit : null, referenceId, referenceType }
     );
 
     res.status(201).json(movement);
   } catch (error) {
-    logger.error("[POST /movements]", error);
-    const statusCode = error.message.includes("Insufficient") ? 400 : 500;
-    res.status(statusCode).json({ error: error.message });
+    sendError(res, error, "[POST /movements]", "Error recording movement");
   }
 });
 
@@ -218,7 +222,7 @@ router.post("/consume", requireRole(["ADMIN", "SUPERVISOR", "TECHNICIAN"]), asyn
   try {
     const plantId = req.currentPlantId;
     const userId = req.user.id;
-    const { workOrderId, sparePartId, quantity, costPerUnit } = req.body;
+    const { workOrderId, sparePartId, quantity, costPerUnit, warehouseId } = req.body;
 
     if (!workOrderId || !sparePartId || !quantity) {
       return res.status(422).json({ error: "Missing required fields: workOrderId, sparePartId, quantity" });
@@ -230,14 +234,13 @@ router.post("/consume", requireRole(["ADMIN", "SUPERVISOR", "TECHNICIAN"]), asyn
       parseFloat(quantity),
       costPerUnit ? parseFloat(costPerUnit) : null,
       plantId,
-      userId
+      userId,
+      warehouseId ? parseInt(warehouseId, 10) : null
     );
 
     res.status(201).json(movement);
   } catch (error) {
-    logger.error("[POST /consume]", error);
-    const statusCode = error.message.includes("not found") ? 404 : 500;
-    res.status(statusCode).json({ error: error.message });
+    sendError(res, error, "[POST /consume]", "Error registering consumption");
   }
 });
 
@@ -249,14 +252,9 @@ router.post("/consume", requireRole(["ADMIN", "SUPERVISOR", "TECHNICIAN"]), asyn
 router.get("/alerts/low-stock", async (req, res) => {
   try {
     const plantId = req.currentPlantId;
+    // Las comparaciones se hacen con números en el servicio (Decimal < Decimal comparaba texto: "10" < "9")
     const alerts = await getLowStockAlerts(plantId);
-
-    const filtered = alerts.filter((item) => item.quantity < item.sparePart.minStock);
-
-    res.json({
-      alerts: filtered,
-      total: filtered.length,
-    });
+    res.json({ alerts, total: alerts.length });
   } catch (error) {
     logger.error("[GET /alerts/low-stock]", error);
     res.status(500).json({ error: "Error fetching alerts" });

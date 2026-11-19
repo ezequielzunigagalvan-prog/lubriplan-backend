@@ -50,10 +50,8 @@ router.post("/", requireRole(["ADMIN", "SUPERVISOR"]), async (req, res) => {
 
     res.status(201).json(failureCode);
   } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
     logger.error("[POST /]", error);
-    if (error.message.includes("already exists")) {
-      return res.status(400).json({ error: error.message });
-    }
     res.status(500).json({ error: "Error creating failure code" });
   }
 });
@@ -107,10 +105,11 @@ router.patch("/:id", requireRole(["ADMIN", "SUPERVISOR"]), async (req, res) => {
 
     res.json(code);
   } catch (error) {
-    logger.error("[PATCH /:id]", error);
+    if (error.status) return res.status(error.status).json({ error: error.message });
     if (error.message.includes("Cannot modify base")) {
       return res.status(400).json({ error: error.message });
     }
+    logger.error("[PATCH /:id]", error);
     res.status(500).json({ error: "Error updating failure code" });
   }
 });

@@ -158,16 +158,23 @@ export async function seedFailureCodesForPlant(plantId) {
   return { created, skipped };
 }
 
+const CATEGORIES = ["FAILURE_MODE", "MECHANISM", "ROOT_CAUSE"];
+
 // Create failure code
 export async function createFailureCode(plantId, data) {
-  const { code, name, category, parentId, assetClass } = data;
+  const code = String(data.code || "").trim().toUpperCase();
+  const name = String(data.name || "").trim();
+  const { category, parentId, assetClass } = data;
 
-  const existing = await prisma.mtFailureCode.findFirst({
-    where: { plantId, code },
-  });
+  if (!code || !name) throw Object.assign(new Error("Código y nombre son requeridos"), { status: 422 });
+  if (!CATEGORIES.includes(category)) throw Object.assign(new Error(`Categoría inválida: ${category}`), { status: 422 });
 
-  if (existing) {
-    throw new Error(`Failure code '${code}' already exists in this plant`);
+  const existing = await prisma.mtFailureCode.findFirst({ where: { plantId, code } });
+  if (existing) throw Object.assign(new Error(`El código '${code}' ya existe en esta planta`), { status: 409 });
+
+  if (parentId) {
+    const parent = await prisma.mtFailureCode.findFirst({ where: { id: Number(parentId), plantId }, select: { id: true } });
+    if (!parent) throw Object.assign(new Error("El código padre no existe en esta planta"), { status: 422 });
   }
 
   return await prisma.mtFailureCode.create({
@@ -176,8 +183,8 @@ export async function createFailureCode(plantId, data) {
       code,
       name,
       category,
-      parentId: parentId || null,
-      assetClass,
+      parentId: parentId ? Number(parentId) : null,
+      assetClass: assetClass || null,
       status: "ACTIVE",
       isBaseCode: false,
     },
@@ -207,7 +214,8 @@ export async function listFailureCodes(plantId, filters = {}) {
 
   const where = {
     plantId,
-    ...(status && { status }),
+    // status=ALL devuelve activos e inactivos (para administrar el catálogo)
+    ...(status && status !== "ALL" && { status }),
     ...(category && { category }),
     ...(assetClass && { assetClass }),
     ...(search && {
@@ -253,16 +261,20 @@ export async function updateFailureCode(codeId, plantId, data) {
     return null;
   }
 
-  if (code.isBaseCode) {
-    throw new Error("Cannot modify base failure codes");
+  // Los códigos base (ISO 14224) no se renombran, pero sí se pueden activar/desactivar
+  if (code.isBaseCode && (data.name !== undefined || data.assetClass !== undefined)) {
+    throw new Error("Cannot modify base failure codes (only activate/deactivate)");
+  }
+  if (data.status !== undefined && !["ACTIVE", "INACTIVE"].includes(data.status)) {
+    throw Object.assign(new Error("Estado inválido"), { status: 422 });
   }
 
   return await prisma.mtFailureCode.update({
     where: { id: codeId },
     data: {
-      ...(data.name && { name: data.name }),
+      ...(typeof data.name === "string" && data.name.trim() && { name: data.name.trim() }),
       ...(data.status && { status: data.status }),
-      ...(data.assetClass !== undefined && { assetClass: data.assetClass }),
+      ...(data.assetClass !== undefined && { assetClass: data.assetClass || null }),
     },
   });
 }
