@@ -7,6 +7,8 @@
  * Una OT abierta está atrasada si su fecha compromiso ya pasó.
  */
 
+import { startOfLocalDay } from "../scheduler/dates.js";
+
 export const CORRECTIVE_SLA_DAYS = { CRITICAL: 1, HIGH: 3, MEDIUM: 7, LOW: 14 };
 export const CLOSED_STATUSES = ["FINISHED", "VALIDATED", "REJECTED", "CANCELLED"];
 const DAY = 24 * 60 * 60 * 1000;
@@ -37,16 +39,17 @@ export function isOverdue(wo, now = new Date()) {
   return limit < now;
 }
 
+/** Días de atraso por día calendario de la planta: vencía el 19 → el 20 lleva 1 día (mínimo 1 si ya está atrasada). */
 export function daysOverdue(wo, now = new Date()) {
   const due = effectiveDueAt(wo);
   if (!due) return 0;
-  return Math.max(1, Math.ceil((now - due) / DAY));
+  const days = Math.round((startOfLocalDay(now).getTime() - startOfLocalDay(due).getTime()) / DAY);
+  return Math.max(1, days);
 }
 
+/** Último instante del día de `date` en la zona horaria de la planta. */
 function endOfDay(date) {
-  const d = new Date(date);
-  d.setHours(23, 59, 59, 999);
-  return d;
+  return new Date(startOfLocalDay(date).getTime() + DAY - 1);
 }
 
 /** Campos mínimos que hay que seleccionar para poder usar estas funciones. */

@@ -63,15 +63,24 @@ export function computeNextDueAt(plan, now = new Date()) {
 
 /**
  * Se llama cuando una OT generada por un plan se termina:
- * registra la realización y, en planes FLOATING, reprograma desde la fecha real de término.
+ * registra la realización y reprograma.
+ * - FLOATING: siguiente ciclo desde la fecha real de término.
+ * - FIXED: si el ciclo vigente (nextDueAt) ya venció o vence ese día y nadie lo generó aún
+ *   (p. ej. la OT se generó a mano fuera de programación), esa realización lo cubre y el plan
+ *   pasa al siguiente ciclo de su calendario. Si el ciclo vigente es futuro, no se toca.
  */
 export async function onPlanWorkOrderFinished(planId, finishedAt = new Date(), client = prisma) {
   const plan = await client.mtPlan.findUnique({ where: { id: planId } });
   if (!plan) return null;
 
   const data = { lastCompletedAt: finishedAt };
-  if (plan.scheduleMode === "FLOATING" && isTimeSchedulable(plan)) {
-    data.nextDueAt = nextCycleAfter(plan, startOfLocalDay(finishedAt));
+  if (isTimeSchedulable(plan)) {
+    const finishedDay = startOfLocalDay(finishedAt);
+    if (plan.scheduleMode === "FLOATING") {
+      data.nextDueAt = nextCycleAfter(plan, finishedDay);
+    } else if (plan.nextDueAt && startOfLocalDay(plan.nextDueAt) <= finishedDay) {
+      data.nextDueAt = nextCycleAfter(plan, finishedDay);
+    }
   }
   return client.mtPlan.update({ where: { id: planId }, data });
 }

@@ -6,6 +6,7 @@ import { getNextPlanCode } from "../utils/numeracion.js";
 import { executePlan, completePlanExecution, getPlanRoadmap } from "./planExecution.js";
 import { getOverduePlans, getUpcomingPlans } from "./planScheduler.js";
 import { computeNextDueAt } from "./schedule.js";
+import { generateForPlan } from "../scheduler/generator.js";
 import { startOfLocalDay } from "../scheduler/dates.js";
 
 const router = express.Router();
@@ -521,8 +522,34 @@ router.post("/:id/execute", async (req, res) => {
     }
     const plan = await loadPlanOr404(req, res);
     if (!plan) return;
+    const plantId = req.currentPlantId;
 
-    const result = await executePlan(plan.id, req.currentPlantId, req.user.id, req.body);
+    // Si ya hay una OT abierta del plan, se usa esa (no se duplica)
+    const open = await prisma.mtWorkOrder.findFirst({
+      where: { plantId, planId: plan.id, status: { notIn: ["FINISHED", "VALIDATED", "REJECTED", "CANCELLED"] } },
+      select: { id: true, number: true, status: true },
+      orderBy: { createdAt: "desc" },
+    });
+    if (open) return res.json({ workOrder: open, existing: true });
+
+    // Ciclo vencido o por vencer: se genera la OT DE ESE CICLO (misma lógica que el scheduler),
+    // así el plan avanza a su siguiente fecha y la OT conserva la fecha programada real.
+    if (plan.active && plan.nextDueAt) {
+      const generated = await generateForPlan(plan, { trigger: "MANUAL" });
+      if (generated.decision === "GENERATED") {
+        const workOrder = await prisma.mtWorkOrder.findUnique({
+          where: { id: generated.workOrderId },
+          select: { id: true, number: true, status: true, dueAt: true },
+        });
+        return res.status(201).json({ workOrder, cycle: true, missedCycles: generated.missedCycles });
+      }
+      if (generated.decision === "ERROR") {
+        logger.error("[plans/:id/execute] generateForPlan", generated.detail);
+      }
+    }
+
+    // Aún no vence: OT adelantada fuera de programación (al terminarla no recorre el ciclo futuro)
+    const result = await executePlan(plan.id, plantId, req.user.id, req.body);
     return res.status(201).json(result);
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message });

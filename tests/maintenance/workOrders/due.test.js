@@ -23,7 +23,15 @@ describe("workOrders/due", () => {
     const wo = { type: "CORRECTIVE", priority: "CRITICAL", status: "REQUESTED", createdAt: new Date("2026-11-16T19:35:00Z") };
     expect(isOverdue(wo, new Date("2026-11-17T19:00:00Z"))).toBe(false);
     expect(isOverdue(wo, new Date("2026-11-17T20:00:00Z"))).toBe(true);
-    expect(daysOverdue(wo, new Date("2026-11-19T20:00:00Z"))).toBe(3);
+    // Vencía el 17 (13:35 en CDMX); el 19 lleva 2 días calendario de atraso
+    expect(daysOverdue(wo, new Date("2026-11-19T20:00:00Z"))).toBe(2);
+  });
+
+  it("los días de atraso se cuentan por día calendario de planta", () => {
+    const wo = { type: "PREVENTIVE", priority: "MEDIUM", status: "APPROVED", dueAt: new Date("2026-11-19T06:00:00Z") };
+    // Vencía el 19 nov; el 20 nov a las 19:34 en CDMX lleva 1 día (antes daba 2 por bloques de 24 h)
+    expect(daysOverdue(wo, new Date("2026-11-21T01:34:00Z"))).toBe(1);
+    expect(daysOverdue(wo, new Date("2026-11-22T05:59:00Z"))).toBe(2);
   });
 
   it("una preventiva con fecha del día no está atrasada hasta que termina ese día", () => {

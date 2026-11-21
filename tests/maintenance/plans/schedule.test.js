@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeNextDueAt, nextCycleAfter, isTimeSchedulable } from "../../../src/modules/maintenance/plans/schedule.js";
+import { computeNextDueAt, nextCycleAfter, isTimeSchedulable, onPlanWorkOrderFinished } from "../../../src/modules/maintenance/plans/schedule.js";
 
 // Fechas a medianoche de Ciudad de México (UTC-6) expresadas en UTC
 const mx = (ymd) => new Date(`${ymd}T06:00:00.000Z`);
@@ -84,5 +84,41 @@ describe("plans/schedule", () => {
       const p = { ...monthly, scheduleMode: "FLOATING", frequencyUnit: "WEEK", frequencyEvery: 2, anchorDate: mx("2026-01-01") };
       expect(day(nextCycleAfter(p, mx("2026-11-17")))).toBe("2026-12-01");
     });
+  });
+});
+
+describe("onPlanWorkOrderFinished", () => {
+  // Cliente falso: findUnique devuelve el plan, update devuelve los datos que se guardarían
+  const fakeClient = (plan) => ({
+    mtPlan: {
+      findUnique: async () => plan,
+      update: async ({ data }) => data,
+    },
+  });
+  const fixed = { ...monthly, id: 5, anchorDate: mx("2026-10-19") };
+
+  it("FIXED: a manual order finished after the pending cycle advances to the next cycle", async () => {
+    const plan = { ...fixed, nextDueAt: mx("2026-11-19") };
+    // Terminada el 20 nov a las 19:28 en CDMX
+    const data = await onPlanWorkOrderFinished(5, new Date("2026-11-21T01:28:00Z"), fakeClient(plan));
+    expect(day(data.nextDueAt)).toBe("2026-12-19");
+  });
+
+  it("FIXED: finishing on the cycle day itself covers that cycle", async () => {
+    const plan = { ...fixed, nextDueAt: mx("2026-11-19") };
+    const data = await onPlanWorkOrderFinished(5, new Date("2026-11-19T18:00:00Z"), fakeClient(plan));
+    expect(day(data.nextDueAt)).toBe("2026-12-19");
+  });
+
+  it("FIXED: an order finished before the pending cycle does not move it", async () => {
+    const plan = { ...fixed, nextDueAt: mx("2026-11-19") };
+    const data = await onPlanWorkOrderFinished(5, new Date("2026-11-18T02:00:00Z"), fakeClient(plan));
+    expect(data.nextDueAt).toBeUndefined();
+  });
+
+  it("FLOATING: reschedules from the real finish date", async () => {
+    const plan = { ...fixed, scheduleMode: "FLOATING", nextDueAt: mx("2026-11-19") };
+    const data = await onPlanWorkOrderFinished(5, new Date("2026-11-21T01:28:00Z"), fakeClient(plan));
+    expect(day(data.nextDueAt)).toBe("2026-12-20");
   });
 });
