@@ -2,6 +2,8 @@ import prisma from "../../../prisma.js";
 import { logger } from "../../../config/logger.js";
 import { getNextWorkOrderNumber, formatWorkOrderNumber } from "../utils/numeracion.js";
 
+const FREQ_LABELS = { DAY: "día(s)", WEEK: "semana(s)", MONTH: "mes(es)", YEAR: "año(s)" };
+
 /**
  * Genera manualmente ("Generar OT ahora") una orden de trabajo a partir de un plan.
  * No altera la programación del plan: la próxima fecha se mantiene y, al terminar la OT,
@@ -231,13 +233,24 @@ export async function getPlanRoadmap(planId, plantId) {
         description: plan.description,
         type: plan.type,
         priority: plan.priority,
-        frequency: `Cada ${plan.frequencyEvery} ${plan.frequencyUnit}`,
+        frequency: plan.triggerType === "METER"
+          ? `Cada ${plan.meterIntervalHours ?? "?"} horas de operación`
+          : plan.frequencyUnit
+            ? `Cada ${plan.frequencyEvery} ${FREQ_LABELS[plan.frequencyUnit] || plan.frequencyUnit}`
+            : "Sin frecuencia",
+        frequencyUnit: plan.frequencyUnit,
+        frequencyEvery: plan.frequencyEvery,
+        scheduleMode: plan.scheduleMode,
+        active: plan.active,
         nextDue: plan.nextDueAt,
         lastCompleted: plan.lastCompletedAt,
         estimatedMinutes: plan.estimatedMinutes,
       },
       asset: plan.asset,
       checklist: plan.tasks.map((task, idx) => ({
+        unit: task.unit,
+        minValue: task.minValue,
+        maxValue: task.maxValue,
         order: idx + 1,
         description: task.description,
         type: task.kind,
@@ -255,11 +268,13 @@ export async function getPlanRoadmap(planId, plantId) {
         name: sp.sparePart.name,
         quantity: sp.quantityRequired,
       })),
-      recentExecutions: plan.executions.map((exec) => ({
-        date: exec.executionDate,
-        status: exec.status,
-        duration: exec.duration,
-      })),
+      // Historial real: las OTs generadas por el plan
+      recentWorkOrders: await prisma.mtWorkOrder.findMany({
+        where: { planId, plantId },
+        select: { id: true, number: true, status: true, dueAt: true, finishedAt: true, createdAt: true },
+        orderBy: { createdAt: "desc" },
+        take: 6,
+      }),
     };
   } catch (error) {
     logger.error("[planExecution] Error obteniendo roadmap:", error);
