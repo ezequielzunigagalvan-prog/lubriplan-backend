@@ -182,7 +182,27 @@ router.get("/", async (req, res) => {
       prisma.mtPlan.count({ where }),
     ]);
 
-    return res.json({ data: plans, total, page: pageNum, totalPages: Math.ceil(total / limitNum) });
+    // Orden abierta más reciente de cada plan (para "Ejecutar" desde la tarjeta)
+    const openOrders = plans.length
+      ? await prisma.mtWorkOrder.findMany({
+          where: { plantId, planId: { in: plans.map((p) => p.id) }, status: { notIn: ["FINISHED", "VALIDATED", "REJECTED", "CANCELLED"] } },
+          select: { id: true, number: true, status: true, planId: true },
+          orderBy: { createdAt: "desc" },
+        })
+      : [];
+    const openByPlan = new Map();
+    for (const wo of openOrders) if (!openByPlan.has(wo.planId)) openByPlan.set(wo.planId, wo);
+
+    // Días de atraso por día calendario de planta: vence el 19 → el 20 lleva 1 día de atraso
+    const today = startOfLocalDay(new Date()).getTime();
+    const data = plans.map((p) => {
+      const dueDay = p.active && p.nextDueAt ? startOfLocalDay(p.nextDueAt).getTime() : null;
+      const daysOverdue = dueDay != null && dueDay < today ? Math.round((today - dueDay) / 86400000) : 0;
+      const open = openByPlan.get(p.id) || null;
+      return { ...p, daysOverdue, dueToday: dueDay === today, openWorkOrder: open && { id: open.id, number: open.number, status: open.status } };
+    });
+
+    return res.json({ data, total, page: pageNum, totalPages: Math.ceil(total / limitNum) });
   } catch (err) {
     logger.error("[plans GET]", err);
     return res.status(500).json({ error: "Error fetching plans" });

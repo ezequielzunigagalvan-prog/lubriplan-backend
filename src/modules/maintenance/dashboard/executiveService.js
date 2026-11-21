@@ -1,5 +1,6 @@
 import prisma from "../../../prisma.js";
 import { isOverdue, effectiveDueAt, daysOverdue } from "../workOrders/due.js";
+import { startOfLocalDay } from "../scheduler/dates.js";
 
 // Estados que se consideran "cerrados" (ya no son trabajo pendiente)
 const CLOSED_STATUSES = ["FINISHED", "VALIDATED", "REJECTED", "CANCELLED"];
@@ -130,7 +131,15 @@ export async function getExecutiveDashboard({ plantId, userId, days = 30 }) {
   const endOfToday = new Date(startOfToday.getTime() + 24 * HOUR_MS - 1);
   const plansDueWithoutOrder = activePlans
     .filter((p) => p.triggerType === "TIME" && p.nextDueAt && p.nextDueAt <= endOfToday)
-    .map((p) => ({ id: p.id, code: p.code, title: p.title, nextDueAt: p.nextDueAt, asset: p.asset }))
+    .map((p) => ({
+      id: p.id,
+      code: p.code,
+      title: p.title,
+      nextDueAt: p.nextDueAt,
+      asset: p.asset,
+      // Días calendario de planta: vence el 19 → el 20 lleva 1 día de atraso (0 = vence hoy)
+      daysOverdue: Math.max(0, Math.round((startOfLocalDay(now).getTime() - startOfLocalDay(p.nextDueAt).getTime()) / 86400000)),
+    }))
     .sort((a, b) => a.nextDueAt - b.nextDueAt);
   const nextPlan = activePlans
     .filter((p) => p.nextDueAt && p.nextDueAt > endOfToday)
