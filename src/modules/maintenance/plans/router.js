@@ -7,6 +7,7 @@ import { executePlan, completePlanExecution, getPlanRoadmap } from "./planExecut
 import { getOverduePlans, getUpcomingPlans } from "./planScheduler.js";
 import { computeNextDueAt } from "./schedule.js";
 import { generateForPlan } from "../scheduler/generator.js";
+import { DUE_SELECT, effectiveDueAt, isOverdue, daysOverdue as woDaysOverdue } from "../workOrders/due.js";
 import { startOfLocalDay } from "../scheduler/dates.js";
 
 const router = express.Router();
@@ -187,7 +188,7 @@ router.get("/", async (req, res) => {
     const openOrders = plans.length
       ? await prisma.mtWorkOrder.findMany({
           where: { plantId, planId: { in: plans.map((p) => p.id) }, status: { notIn: ["FINISHED", "VALIDATED", "REJECTED", "CANCELLED"] } },
-          select: { id: true, number: true, status: true, planId: true },
+          select: { id: true, number: true, planId: true, ...DUE_SELECT },
           orderBy: { createdAt: "desc" },
         })
       : [];
@@ -200,7 +201,15 @@ router.get("/", async (req, res) => {
       const dueDay = p.active && p.nextDueAt ? startOfLocalDay(p.nextDueAt).getTime() : null;
       const daysOverdue = dueDay != null && dueDay < today ? Math.round((today - dueDay) / 86400000) : 0;
       const open = openByPlan.get(p.id) || null;
-      return { ...p, daysOverdue, dueToday: dueDay === today, openWorkOrder: open && { id: open.id, number: open.number, status: open.status } };
+      const openWorkOrder = open && {
+        id: open.id,
+        number: open.number,
+        status: open.status,
+        dueAt: effectiveDueAt(open),
+        overdue: isOverdue(open),
+        daysOverdue: isOverdue(open) ? woDaysOverdue(open) : 0,
+      };
+      return { ...p, daysOverdue, dueToday: dueDay === today, openWorkOrder };
     });
 
     return res.json({ data, total, page: pageNum, totalPages: Math.ceil(total / limitNum) });
