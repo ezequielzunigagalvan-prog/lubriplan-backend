@@ -6,7 +6,10 @@ import { logger } from "../../../config/logger.js";
 import { onPlanWorkOrderFinished } from "../plans/schedule.js";
 import { notifyCriticalFailure, notifyAssignment } from "../notifications/service.js";
 import { startOfLocalDay } from "../scheduler/dates.js";
-import { uploadBufferToCloudinary, destroyCloudinaryImage } from "../../../lib/cloudinary.js";
+import fs from "fs";
+import path from "path";
+import { uploadBufferToCloudinary, destroyCloudinaryImage, isCloudinaryConfigured } from "../../../lib/cloudinary.js";
+import { getUploadsSubdir } from "../../../utils/uploads.js";
 import {
   STATES,
   CLOSED_STATES,
@@ -67,6 +70,14 @@ const transitionSchema = z.object({
   failureCause: optionalText(10000),
   downtimeMinutes: z.preprocess((v) => (v === "" || v === null ? undefined : v), z.coerce.number().int().nonnegative().optional()),
   expectedVersion: z.coerce.number().int().optional(),
+  // Solo supervisor/admin al terminar: fechas reales de ejecución y validar en el mismo paso
+  startedAt: z.preprocess((v) => (v === "" || v === null ? undefined : v), z.string().refine((v) => !Number.isNaN(Date.parse(v)), "Fecha de inicio inválida").optional()),
+  finishedAt: z.preprocess((v) => (v === "" || v === null ? undefined : v), z.string().refine((v) => !Number.isNaN(Date.parse(v)), "Fecha de término inválida").optional()),
+  alsoValidate: z.boolean().optional(),
+});
+
+const commentSchema = z.object({
+  comment: z.string().trim().min(1, "Escribe un comentario").max(2000),
 });
 
 const executionSchema = z.object({
@@ -134,6 +145,42 @@ async function findWorkOrder(req, res) {
     return null;
   }
   return wo;
+}
+
+/**
+ * Cuando un supervisor/admin registra pasos de una OT asignada a otro técnico (p. ej. técnico
+ * sin usuario en el sistema), se guarda en nombre de quién se capturó.
+ */
+async function onBehalfOf(wo, user) {
+  if (!wo.assignedTo || isAssignedTechnician(wo, user) || !isManager(user)) return null;
+  const tech = await prisma.technician.findFirst({ where: { id: wo.assignedTo }, select: { id: true, name: true } });
+  return tech ? { technicianId: tech.id, technicianName: tech.name } : null;
+}
+
+const LOCAL_PREFIX = "local:";
+const EXT_BY_MIME = { "image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png", "image/webp": "webp" };
+
+/** Sube a Cloudinary; si no está configurado, guarda en la carpeta de uploads del servidor. */
+async function storePhoto(req, plantId, name) {
+  if (isCloudinaryConfigured()) {
+    const uploaded = await uploadBufferToCloudinary(req.file.buffer, { folder: `maintenance/${plantId}`, publicId: name });
+    return { url: uploaded.secure_url, publicId: uploaded.public_id };
+  }
+  const fileName = `${name}.${EXT_BY_MIME[String(req.file.mimetype).toLowerCase()] || "jpg"}`;
+  const dir = getUploadsSubdir("maintenance", String(plantId));
+  await fs.promises.writeFile(path.join(dir, fileName), req.file.buffer);
+  const relative = `maintenance/${plantId}/${fileName}`;
+  return { url: `${req.protocol}://${req.get("host")}/uploads/${relative}`, publicId: `${LOCAL_PREFIX}${relative}` };
+}
+
+async function removePhoto(publicId) {
+  if (!String(publicId || "").startsWith(LOCAL_PREFIX)) return destroyCloudinaryImage(publicId);
+  const relative = publicId.slice(LOCAL_PREFIX.length).replace(/\.\./g, "");
+  try {
+    await fs.promises.unlink(path.join(getUploadsSubdir(), relative));
+  } catch (err) {
+    if (err.code !== "ENOENT") logger.error("[workOrders] No se pudo borrar la foto local", err);
+  }
 }
 
 // GET /api/maintenance/work-orders?status=A,B&type=&priority=&assetId=&assignedTo=&mine=1&search=&page=&limit=
@@ -366,6 +413,8 @@ router.get("/:id", async (req, res) => {
     const { events, ...workOrder } = wo;
     const isAssigned = isAssignedTechnician(wo, req.user);
     const canExecute = EXECUTION_STATES.includes(wo.status) && (isAssigned || isManager(req.user));
+    const behalf = await onBehalfOf(wo, req.user);
+    const assigneeHasUser = wo.assignedTo ? (await prisma.user.count({ where: { technicianId: wo.assignedTo, active: true } })) > 0 : false;
 
     return res.json({
       workOrder: {
@@ -395,6 +444,9 @@ router.get("/:id", async (req, res) => {
         isManager: isManager(req.user),
         availableTransitions: availableTransitions(wo, req.user),
         canExecute,
+        canComment: true,
+        // El supervisor captura en nombre del técnico asignado (técnicos sin usuario, por ejemplo)
+        onBehalfOf: behalf ? { ...behalf, hasUser: assigneeHasUser } : null,
         canEditFailure: !CLOSED_STATES.includes(wo.status) || (wo.status === STATES.FINISHED && isManager(req.user)),
       },
     });
@@ -510,8 +562,15 @@ router.post("/:id/transition", async (req, res) => {
       if (parsed[field] === undefined) return res.status(400).json({ error: msg });
     }
 
+    const manager = isManager(req.user);
+    if ((parsed.startedAt || parsed.finishedAt || parsed.alsoValidate) && (parsed.to !== STATES.FINISHED || !manager)) {
+      return res.status(403).json({ error: "Solo un supervisor puede indicar fechas reales o validar al terminar" });
+    }
+
     const updateData = { status: parsed.to, version: { increment: 1 } };
     const metadata = {};
+    const behalf = await onBehalfOf(wo, req.user);
+    if (behalf) Object.assign(metadata, { onBehalfOf: behalf.technicianId, onBehalfOfName: behalf.technicianName });
 
     if (parsed.to === STATES.ASSIGNED) {
       const technician = await prisma.technician.findFirst({
@@ -535,7 +594,20 @@ router.post("/:id/transition", async (req, res) => {
       if (pending > 0) {
         return res.status(400).json({ error: `Faltan ${pending} tarea(s) obligatoria(s) del checklist por completar` });
       }
-      updateData.finishedAt = new Date();
+      const now = new Date();
+      const finishedAt = parsed.finishedAt ? new Date(parsed.finishedAt) : now;
+      if (finishedAt.getTime() > now.getTime() + 5 * 60 * 1000) {
+        return res.status(400).json({ error: "La fecha de término no puede estar en el futuro" });
+      }
+      if (parsed.startedAt) {
+        const startedAt = new Date(parsed.startedAt);
+        if (startedAt > finishedAt) return res.status(400).json({ error: "El inicio debe ser anterior al término" });
+        updateData.startedAt = startedAt;
+      } else if (parsed.finishedAt && wo.startedAt && wo.startedAt > finishedAt) {
+        updateData.startedAt = finishedAt; // el inicio registrado al capturar quedó después del término real
+      }
+      updateData.finishedAt = finishedAt;
+      if (parsed.finishedAt) metadata.realFinishedAt = finishedAt.toISOString();
       updateData.workDone = parsed.workDone;
       if (parsed.diagnosis !== undefined) updateData.diagnosis = parsed.diagnosis;
       if (parsed.failureCause !== undefined) updateData.failureCause = parsed.failureCause;
@@ -546,7 +618,9 @@ router.post("/:id/transition", async (req, res) => {
       updateData.finishedAt = null; // reabierta
     }
 
-    if (parsed.to === STATES.VALIDATED) {
+    const validateNow = parsed.to === STATES.VALIDATED || (parsed.to === STATES.FINISHED && parsed.alsoValidate);
+    if (validateNow) {
+      updateData.status = STATES.VALIDATED;
       updateData.validatedAt = new Date();
       updateData.validatedBy = req.user.id;
     }
@@ -572,6 +646,12 @@ router.post("/:id/transition", async (req, res) => {
           metadata: Object.keys(metadata).length ? metadata : undefined,
         },
       });
+
+      if (parsed.to === STATES.FINISHED && parsed.alsoValidate) {
+        await tx.mtWorkOrderEvent.create({
+          data: { workOrderId: wo.id, plantId, fromStatus: STATES.FINISHED, toStatus: STATES.VALIDATED, userId: req.user.id, comment: "Validada al registrar el término" },
+        });
+      }
 
       if (parsed.to === STATES.FINISHED && wo.planId) {
         // Registra la realización y, en planes FLOATING, reprograma desde la fecha real de término
@@ -676,6 +756,36 @@ function TERMINAL_OR_LOCKED(wo, user) {
   return false;
 }
 
+// POST /:id/comments — nota en la bitácora de la OT sin cambiar el estado
+router.post("/:id/comments", async (req, res) => {
+  try {
+    const parsed = commentSchema.parse(req.body);
+    const wo = await findWorkOrder(req, res);
+    if (!wo) return;
+
+    const behalf = await onBehalfOf(wo, req.user);
+    const metadata = { kind: "COMMENT" };
+    if (behalf) Object.assign(metadata, { onBehalfOf: behalf.technicianId, onBehalfOfName: behalf.technicianName });
+
+    const event = await prisma.mtWorkOrderEvent.create({
+      data: {
+        workOrderId: wo.id,
+        plantId: req.currentPlantId,
+        fromStatus: wo.status,
+        toStatus: wo.status,
+        userId: req.user.id,
+        comment: parsed.comment,
+        metadata,
+      },
+    });
+    return res.status(201).json(event);
+  } catch (err) {
+    if (err instanceof z.ZodError) return res.status(400).json({ error: zodMessage(err) });
+    logger.error("[workOrders/:id/comments POST]", err);
+    return res.status(500).json({ error: "Error saving comment" });
+  }
+});
+
 router.post("/:id/photos", upload.single("image"), async (req, res) => {
   try {
     const plantId = req.currentPlantId;
@@ -688,18 +798,15 @@ router.post("/:id/photos", upload.single("image"), async (req, res) => {
     const wo = await findWorkOrder(req, res);
     if (!wo) return;
 
-    const uploaded = await uploadBufferToCloudinary(req.file.buffer, {
-      folder: `maintenance/${plantId}`,
-      publicId: `wo_${wo.id}_${kind}_${Date.now()}`,
-    });
+    const stored = await storePhoto(req, plantId, `wo_${wo.id}_${kind}_${Date.now()}`);
 
     const photo = await prisma.mtWorkOrderPhoto.create({
       data: {
         workOrderId: wo.id,
         plantId,
         kind,
-        url: uploaded.secure_url,
-        publicId: uploaded.public_id,
+        url: stored.url,
+        publicId: stored.publicId,
         uploadedBy: req.user.id,
       },
     });
@@ -728,7 +835,7 @@ router.delete("/:id/photos/:photoId", async (req, res) => {
       return res.status(403).json({ error: "Only the uploader or a supervisor can delete this photo" });
     }
 
-    await destroyCloudinaryImage(photo.publicId);
+    await removePhoto(photo.publicId);
     await prisma.mtWorkOrderPhoto.delete({ where: { id: photo.id } });
 
     return res.json({ message: "Photo deleted" });

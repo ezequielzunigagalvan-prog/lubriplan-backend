@@ -7,3 +7,6 @@ node_modules
 dist
 
 /generated/prisma
+
+# Evidencia fotográfica de LubriPlan Maintenance (almacenamiento local sin Cloudinary)
+uploads/maintenance/
