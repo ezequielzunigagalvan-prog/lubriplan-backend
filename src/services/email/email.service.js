@@ -59,20 +59,37 @@ function absolutizeUrl(url) {
   return `${API_PUBLIC_BASE_URL}/${raw}`;
 }
 
-async function sendEmail({ to, subject, html }) {
+export async function sendEmail({ to, subject, html, replyTo }) {
   if (!Array.isArray(to) || to.length === 0) {
     return { ok: false, skipped: true, reason: "NO_RECIPIENTS" };
   }
 
   // ── Resend (cloud) ──────────────────────────────────────────────────────────
   if (resend) {
-    const result = await resend.emails.send({ from: EMAIL_FROM, to, subject, html });
+    const result = await resend.emails.send({
+      from: EMAIL_FROM,
+      to,
+      subject,
+      html,
+      ...(replyTo ? { replyTo } : {}),
+    });
+    // Resend no lanza excepción cuando rechaza el envío: devuelve { error }.
+    if (result?.error) {
+      logger.error("[email] Resend rechazó el envío", { subject, error: result.error });
+      return { ok: false, provider: "resend", reason: "PROVIDER_ERROR", error: result.error };
+    }
     return { ok: true, provider: "resend", result };
   }
 
   // ── SMTP (local / on-premise) ───────────────────────────────────────────────
   if (smtpTransport) {
-    const info = await smtpTransport.sendMail({ from: EMAIL_FROM, to, subject, html });
+    const info = await smtpTransport.sendMail({
+      from: EMAIL_FROM,
+      to,
+      subject,
+      html,
+      ...(replyTo ? { replyTo } : {}),
+    });
     logger.info("[email] SMTP enviado", { messageId: info.messageId, subject });
     return { ok: true, provider: "smtp", result: info };
   }

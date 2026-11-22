@@ -1,9 +1,7 @@
 ﻿import express from "express";
-import { Resend } from "resend";
+import { notifyDemoRequest } from "../services/email/leadNotifier.js";
 import { logger } from "../config/logger.js";
 
-const LEAD_EMAIL = process.env.LEAD_EMAIL || "lubriplan@hidrolub.com";
-const EMAIL_FROM = process.env.EMAIL_FROM || "LubriPlan <onboarding@resend.dev>";
 
 const VALID_SOURCES = ["landing", "card"];
 const VALID_STATUSES = ["NUEVO", "CONTACTADO", "CALIFICADO", "DESCARTADO"];
@@ -17,61 +15,22 @@ function isValidEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
 }
 
-async function sendLeadEmail({ nombre, email, telefono, empresa, source, ip }) {
-  try {
-    const apiKey = String(process.env.RESEND_API_KEY || "").trim();
-    if (!apiKey) return;
-
-    const resend = new Resend(apiKey);
-    const sourceLabel = source === "card" ? "LubriPlan Card" : "LubriPlan";
-
-    await resend.emails.send({
-      from: EMAIL_FROM,
-      to: [LEAD_EMAIL],
-      subject: `📋 Nuevo lead — ${nombre} solicita demo de ${sourceLabel}`,
-      html: `
-        <div style="font-family:system-ui,sans-serif;max-width:580px;margin:0 auto;background:#f8fafc;padding:24px;">
-          <div style="background:#0f172a;border-radius:16px;padding:20px 24px;margin-bottom:20px;">
-            <div style="font-size:22px;font-weight:900;color:#f97316;letter-spacing:-0.5px;">${sourceLabel}</div>
-            <div style="font-size:13px;color:#94a3b8;margin-top:4px;">Nuevo prospecto solicita demo</div>
-          </div>
-
-          <div style="background:#fff;border-radius:12px;padding:20px 24px;border:1px solid #e2e8f0;margin-bottom:16px;">
-            <table style="width:100%;border-collapse:collapse;">
-              <tr>
-                <td style="padding:8px 0;font-size:12px;font-weight:700;color:#94a3b8;width:110px;text-transform:uppercase;letter-spacing:.5px;">Nombre</td>
-                <td style="padding:8px 0;font-size:14px;color:#0f172a;font-weight:600;">${nombre}</td>
-              </tr>
-              <tr style="border-top:1px solid #f1f5f9;">
-                <td style="padding:8px 0;font-size:12px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px;">Correo</td>
-                <td style="padding:8px 0;font-size:14px;"><a href="mailto:${email}" style="color:#f97316;text-decoration:none;">${email}</a></td>
-              </tr>
-              <tr style="border-top:1px solid #f1f5f9;">
-                <td style="padding:8px 0;font-size:12px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px;">Teléfono</td>
-                <td style="padding:8px 0;font-size:14px;color:#0f172a;">${telefono}</td>
-              </tr>
-              ${empresa ? `
-              <tr style="border-top:1px solid #f1f5f9;">
-                <td style="padding:8px 0;font-size:12px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px;">Empresa</td>
-                <td style="padding:8px 0;font-size:14px;color:#0f172a;">${empresa}</td>
-              </tr>` : ""}
-              <tr style="border-top:1px solid #f1f5f9;">
-                <td style="padding:8px 0;font-size:12px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px;">Producto</td>
-                <td style="padding:8px 0;"><span style="background:#fff7ed;color:#c2410c;border:1px solid #fed7aa;padding:3px 10px;border-radius:999px;font-size:11px;font-weight:700;">${sourceLabel}</span></td>
-              </tr>
-            </table>
-          </div>
-
-          <div style="font-size:11px;color:#94a3b8;text-align:center;">
-            IP: ${ip} · ${new Date().toLocaleString("es-MX", { timeZone: "America/Mexico_City" })}
-          </div>
-        </div>
-      `,
-    });
-  } catch (e) {
-    logger.error("[landingLeads] Error enviando email:", e?.message);
+// Límite anti-spam: 5 solicitudes por IP por hora.
+const LEAD_IP_LIMIT_PER_HOUR = 5;
+const leadIpWindows = new Map();
+function leadRateLimit(ip) {
+  const now = Date.now();
+  const entry = leadIpWindows.get(ip);
+  if (!entry || now - entry.start > 3_600_000) {
+    leadIpWindows.set(ip, { count: 1, start: now });
+    return true;
   }
+  if (entry.count >= LEAD_IP_LIMIT_PER_HOUR) return false;
+  entry.count++;
+  return true;
 }
+
+const clip = (v, max) => String(v || "").trim().slice(0, max);
 
 export default function landingLeadsRoutes({ prisma, auth, requireRole }) {
   const router = express.Router();
@@ -79,27 +38,46 @@ export default function landingLeadsRoutes({ prisma, auth, requireRole }) {
   // POST /api/landing/lead — público, sin auth
   router.post("/landing/lead", async (req, res) => {
     try {
-      const nombre = String(req.body?.nombre || "").trim();
-      const email = String(req.body?.email || "").trim().toLowerCase();
-      const telefono = String(req.body?.telefono || "").trim();
-      const empresa = String(req.body?.empresa || "").trim() || null;
-      const source = VALID_SOURCES.includes(req.body?.source) ? req.body.source : "landing";
-      const sessionId = String(req.body?.sessionId || "").trim() || null;
       const ip = extractIp(req);
 
-      if (!nombre) return res.status(400).json({ error: "nombre es obligatorio" });
-      if (!email || !isValidEmail(email)) return res.status(400).json({ error: "email inválido" });
-      if (!telefono || telefono.length < 7) return res.status(400).json({ error: "teléfono inválido" });
+      // Campo trampa invisible para bots: si viene lleno, respondemos "ok" sin guardar nada.
+      if (String(req.body?.website || "").trim()) {
+        return res.status(201).json({ ok: true });
+      }
+      if (!leadRateLimit(ip)) {
+        return res.status(429).json({ error: "Demasiadas solicitudes. Intenta más tarde." });
+      }
+
+      const nombre = clip(req.body?.nombre, 120);
+      const email = clip(req.body?.email, 160).toLowerCase();
+      const telefono = clip(req.body?.telefono, 40);
+      const empresa = clip(req.body?.empresa, 160) || null;
+      const source = VALID_SOURCES.includes(req.body?.source) ? req.body.source : "landing";
+      const origin = req.body?.origin === "chat" ? "chat" : "form";
+      const sessionId = clip(req.body?.sessionId, 120) || null;
+
+      // LubriPlan Card pide nombre, empresa y teléfono (correo opcional).
+      // La landing principal pide nombre, correo y teléfono (empresa opcional).
+      const isCard = source === "card";
+      if (!nombre) return res.status(400).json({ error: "El nombre es obligatorio" });
+      if (isCard && !empresa) return res.status(400).json({ error: "El nombre de la empresa es obligatorio" });
+      if ((!isCard || email) && !isValidEmail(email)) return res.status(400).json({ error: "El correo no es válido" });
+      if (telefono.replace(/\D/g, "").length < 7) return res.status(400).json({ error: "El teléfono no es válido" });
 
       const lead = await prisma.landingLead.create({
         data: { nombre, email, telefono, empresa, source, sessionId, status: "NUEVO", emailSent: false, ip },
-        select: { id: true, nombre: true, email: true, source: true, createdAt: true },
+        select: { id: true, createdAt: true },
       });
 
-      await sendLeadEmail({ nombre, email, telefono, empresa, source, ip });
-      await prisma.landingLead.update({ where: { id: lead.id }, data: { emailSent: true } });
+      // El destinatario vive solo en el servidor (LEAD_EMAIL); no se devuelve al navegador.
+      const sent = await notifyDemoRequest({ nombre, email, telefono, empresa, source, ip, origin });
+      if (sent?.ok) {
+        await prisma.landingLead.update({ where: { id: lead.id }, data: { emailSent: true } });
+      } else {
+        logger.warn("[landingLeads] Lead guardado pero sin aviso por correo", { leadId: lead.id, reason: sent?.reason });
+      }
 
-      return res.status(201).json({ ok: true, lead });
+      return res.status(201).json({ ok: true });
     } catch (e) {
       logger.error("[landingLeads] POST error:", e?.message);
       return res.status(500).json({ error: "Error registrando solicitud" });

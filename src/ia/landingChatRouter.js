@@ -2,7 +2,7 @@
 // Endpoints públicos de chatbot para landing principal y landing de LubriPlan Card.
 import express from "express";
 import { logger } from "../config/logger.js";
-import { Resend } from "resend";
+import { notifyChatLead, hasContactInfo } from "../services/email/leadNotifier.js";
 import { AI_MODE, OPENAI_MODEL } from "./aiConfig.js";
 
 const LANDING_MODEL = String(process.env.AI_LANDING_CHAT_MODEL || OPENAI_MODEL || "gpt-4o-mini").trim();
@@ -10,9 +10,6 @@ const LANDING_MAX_TOKENS = Number(process.env.AI_LANDING_CHAT_MAX_TOKENS || 400)
 const LANDING_IP_LIMIT_PER_HOUR = Number(process.env.AI_LANDING_IP_LIMIT_PER_HOUR || 30);
 const MAX_MESSAGES = 20;
 const isProvider = String(AI_MODE).toLowerCase() === "provider";
-
-const LEAD_EMAIL = process.env.LEAD_EMAIL || "lubriplan@hidrolub.com";
-const EMAIL_FROM = process.env.EMAIL_FROM || "LubriPlan <onboarding@resend.dev>";
 
 const HOT_KEYWORDS = [
   "demo", "precio", "costo", "cuesta", "cotizacion", "cotización",
@@ -46,60 +43,6 @@ function detectHotKeywords(messages) {
     .map((m) => String(m.content || "").toLowerCase())
     .join(" ");
   return HOT_KEYWORDS.filter((kw) => userText.includes(kw));
-}
-
-async function sendHotLeadEmail(messages, ip, keywords, source) {
-  try {
-    const apiKey = String(process.env.RESEND_API_KEY || "").trim();
-    if (!apiKey) return;
-
-    const resend = new Resend(apiKey);
-    const sourceLabel = source === "card" ? "LubriPlan Card" : "LubriPlan";
-    const transcript = messages
-      .map((m) => `<tr>
-        <td style="padding:8px 12px;font-weight:900;color:${m.role === "user" ? "#f97316" : "#64748b"};white-space:nowrap;vertical-align:top;font-size:12px;">
-          ${m.role === "user" ? "Visitante" : "LubriBot"}
-        </td>
-        <td style="padding:8px 12px;color:#1e293b;font-size:13px;line-height:1.55;">${String(m.content || "").replace(/</g, "&lt;")}</td>
-      </tr>`)
-      .join("");
-
-    await resend.emails.send({
-      from: EMAIL_FROM,
-      to: [LEAD_EMAIL],
-      subject: `🔥 Lead caliente en ${sourceLabel} — palabras clave: ${keywords.join(", ")}`,
-      html: `
-        <div style="font-family:system-ui,sans-serif;max-width:640px;margin:0 auto;background:#f8fafc;padding:24px;">
-          <div style="background:#0f172a;border-radius:16px;padding:20px 24px;margin-bottom:20px;">
-            <div style="font-size:22px;font-weight:900;color:#f97316;letter-spacing:-0.5px;">${sourceLabel}</div>
-            <div style="font-size:13px;color:#94a3b8;margin-top:4px;">Nuevo lead caliente desde el landing</div>
-          </div>
-
-          <div style="background:#fff;border-radius:12px;padding:16px 20px;margin-bottom:16px;border:1px solid #e2e8f0;">
-            <div style="font-size:11px;font-weight:900;color:#94a3b8;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px;">Detectado</div>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;">
-              ${keywords.map((kw) => `<span style="background:#fff7ed;color:#c2410c;border:1px solid #fed7aa;padding:4px 10px;border-radius:999px;font-size:11px;font-weight:900;">${kw}</span>`).join("")}
-            </div>
-          </div>
-
-          <div style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;margin-bottom:16px;">
-            <div style="padding:12px 20px;border-bottom:1px solid #e2e8f0;">
-              <span style="font-size:11px;font-weight:900;color:#94a3b8;letter-spacing:1px;text-transform:uppercase;">Conversación completa</span>
-            </div>
-            <table style="width:100%;border-collapse:collapse;">
-              ${transcript}
-            </table>
-          </div>
-
-          <div style="font-size:11px;color:#94a3b8;text-align:center;">
-            IP: ${ip} · Mensajes: ${messages.length} · ${new Date().toLocaleString("es-MX", { timeZone: "America/Mexico_City" })}
-          </div>
-        </div>
-      `,
-    });
-  } catch (e) {
-    logger.error("[landingChat] Error enviando email lead:", e?.message);
-  }
 }
 
 async function getOpenAIClient() {
@@ -179,15 +122,13 @@ const SYSTEM_PROMPT_CARD = [
   "3. Se genera un QR unico por equipo",
   "4. El tecnico escanea el QR en campo y accede a la carta sin necesidad de cuenta ni app",
   "",
-  "PLANES DISPONIBLES (precios en pesos mexicanos):",
-  "- Card Basica ($890 MXN/mes): hasta 30 equipos con tarjeta QR, historial ilimitado, multiples puntos, panel de administracion, exportar PDF",
-  "- Card Pro ($1,690 MXN/mes): equipos ilimitados, evidencia fotografica, alertas de vencimiento automaticas, reportes y analisis, multiusuario",
-  "- LubriPlan + Card ($3,990 MXN/mes): todo Card Pro mas el sistema completo LubriPlan (rutas, actividades, inventario, reportes IA, multiplanta)",
-  "Los primeros dos planes son solo para cartas de lubricacion. El tercero incluye la integracion con el sistema de gestion completo.",
+  "PRECIOS:",
+  "NUNCA menciones precios, montos, tarifas, planes ni costos, aunque el usuario insista.",
+  "Si pregunta por precio o cotizacion, explica que la propuesta depende del numero de equipos y de la operacion,",
+  "y pide sus datos para que el equipo lo contacte (ver abajo).",
   "",
-  "SOLICITAR DEMO O COTIZACION:",
-  "Cuando el prospecto pida una demo, precio, cotizacion o quiera ser contactado, responde exactamente asi:",
-  "«Para enviarte informacion y agendar tu demo de LubriPlan Card, necesito algunos datos. ¿Puedes compartirme tu nombre completo, correo electronico, telefono y empresa (esta ultima es opcional)?»",
+  "SOLICITAR INFORMACION, DEMO O COTIZACION:",
+  `Cuando el prospecto pida informacion, una demo, precio, cotizacion o quiera ser contactado, responde exactamente asi: «${"{{CARD_CONTACT_REPLY}}"}»`,
   "Una vez que el usuario proporcione esos datos, confirma que los recibiste y que el equipo se pondra en contacto.",
   "",
   "REGLAS:",
@@ -202,8 +143,11 @@ const SYSTEM_PROMPT_CARD = [
 const DEMO_REQUEST_REPLY =
   "Para agendar tu demo personalizada, necesito algunos datos. ¿Puedes compartirme tu nombre completo, correo electrónico, teléfono y empresa (esta última es opcional)?";
 
+// LubriPlan Card: sin precios; se piden nombre, empresa y teléfono.
 const DEMO_REQUEST_REPLY_CARD =
-  "Para enviarte información y agendar tu demo de LubriPlan Card, necesito algunos datos. ¿Puedes compartirme tu nombre completo, correo electrónico, teléfono y empresa (esta última es opcional)?";
+  "Con gusto te damos información de LubriPlan Card. La propuesta depende del número de equipos y de tu operación, así que el equipo te contactará directamente. ¿Me compartes tu nombre, el nombre de tu empresa y tu número de teléfono?";
+
+const SYSTEM_PROMPT_CARD_FINAL = SYSTEM_PROMPT_CARD.replace("{{CARD_CONTACT_REPLY}}", DEMO_REQUEST_REPLY_CARD);
 
 function mockReplyLanding(userText) {
   const t = String(userText || "").toLowerCase();
@@ -224,7 +168,8 @@ function mockReplyCard(userText) {
   if (t.includes("que es") || t.includes("qué es") || t.includes("cuentame") || t.includes("explica") || t.includes("conocer")) return "LubriPlan Card es la carta de lubricación digital accesible por código QR. El técnico escanea el QR del equipo y ve al instante los puntos de lubricación, lubricante, cantidad, frecuencia y método de aplicación, sin necesidad de login ni instalación.";
   if (t.includes("como funciona") || t.includes("cómo funciona") || t.includes("proceso")) return "El administrador sube el plano del equipo, marca los puntos de lubricación sobre la imagen y se genera un QR único por equipo. El técnico escanea el QR en campo y accede a la carta actualizada en tiempo real desde cualquier celular.";
   if (t.includes("precio") || t.includes("plan") || t.includes("costo") || t.includes("tarifa")) return DEMO_REQUEST_REPLY_CARD;
-  if (t.includes("diferencia") || t.includes("vs lubriplan") || t.includes("necesito el sistema")) return "LubriPlan Card puede usarse de forma independiente (Card Básica desde $79/mes) o como parte de LubriPlan Professional ($499/mes). Si solo necesitas digitalizar las cartas de lubricación sin el sistema completo, Card es la opción.";
+  if (t.includes("diferencia") || t.includes("vs lubriplan") || t.includes("necesito el sistema")) return "LubriPlan Card puede usarse de forma independiente o como parte del sistema completo LubriPlan. Si solo necesitas digitalizar las cartas de lubricación sin el sistema completo, Card es la opción. Si quieres información para tu caso, compárteme tu nombre, empresa y teléfono.";
+  if (t.includes("informacion") || t.includes("información") || t.includes("info")) return DEMO_REQUEST_REPLY_CARD;
   if (t.includes("sin login") || t.includes("sin app") || t.includes("sin instalar") || t.includes("qr")) return "Exacto: LubriPlan Card no requiere login ni instalación. El técnico escanea el QR con la cámara del celular y accede directo a la carta del equipo. Cero fricción en campo.";
   return "LubriPlan Card digitaliza las cartas de lubricación con acceso por QR, sin login ni app. Puedo contarte cómo funciona, qué incluye o cómo solicitar una demo.";
 }
@@ -299,9 +244,29 @@ async function handleChat({ req, res, prisma, source, systemPrompt, mockFn }) {
           create: { sessionId: sid, messages: fullMessages, ip, source, isHotLead, hotKeywords, emailSent: false },
         });
 
-        if (isHotLead && !existing?.emailSent) {
-          await sendHotLeadEmail(fullMessages, ip, hotKeywords, source);
-          await prisma.landingChatLog.update({ where: { sessionId: sid }, data: { emailSent: true } });
+        // Aviso por correo:
+        //  - la primera vez que se detecta interés (demo, precio, cotización…)
+        //  - y cada vez que el visitante escribe un correo o teléfono en el chat
+        //    (antes esas respuestas no llegaban si el aviso de interés ya se había enviado).
+        const lastUserText = [...messages].reverse().find((m) => m.role === "user")?.content;
+        const sentContact = hasContactInfo(lastUserText);
+        const sendInterest = isHotLead && !existing?.emailSent;
+
+        if (sentContact || sendInterest) {
+          // Sin await: el visitante no espera al envío del correo.
+          notifyChatLead({
+            messages: fullMessages,
+            ip,
+            source,
+            keywords: hotKeywords,
+            reason: sentContact ? "contact" : "interest",
+          })
+            .then(async (r) => {
+              if (r?.ok && !existing?.emailSent) {
+                await prisma.landingChatLog.update({ where: { sessionId: sid }, data: { emailSent: true } });
+              }
+            })
+            .catch((e) => logger.error("[landingChat] Error en aviso por correo:", e?.message));
         }
       } catch (dbErr) {
         logger.error("[landingChat] Error guardando en BD:", dbErr?.message);
@@ -326,7 +291,7 @@ export default function landingChatRouter(prisma) {
 
   // Chat del landing de LubriPlan Card
   router.post("/landing/card/chat", (req, res) =>
-    handleChat({ req, res, prisma, source: "card", systemPrompt: SYSTEM_PROMPT_CARD, mockFn: mockReplyCard })
+    handleChat({ req, res, prisma, source: "card", systemPrompt: SYSTEM_PROMPT_CARD_FINAL, mockFn: mockReplyCard })
   );
 
   return router;
