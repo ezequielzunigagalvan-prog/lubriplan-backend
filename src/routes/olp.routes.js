@@ -17,6 +17,7 @@ import { Router } from "express";
 import { logger } from "../config/logger.js";
 import { resolveNextRouteDate, startOfDay, endOfDay, toSafeNoon } from "../utils/routeScheduling.js";
 import { computeRouteConsumption, round2 } from "../utils/units.js";
+import { notifyIfLowStock } from "../services/inventory/lowStock.js";
 
 const ORDER_STATUSES = ["DRAFT", "OPEN", "IN_PROGRESS", "COMPLETED", "CANCELLED"];
 const ITEM_STATUSES = ["PENDING", "COMPLETED", "SKIPPED"];
@@ -470,6 +471,7 @@ export default function olpRoutes({ prisma, auth, requireRole }) {
         if (!item) throw new HttpError(404, "Item no encontrado");
 
         let inventoryWarning = null;
+        let deductedLubricantId = null;
 
         if (item.status === "COMPLETED") {
           // Ya se ejecutó: no se crea otra ejecución ni se descuenta otra vez.
@@ -577,6 +579,7 @@ export default function olpRoutes({ prisma, auth, requireRole }) {
                 stockAfter,
               },
             });
+            deductedLubricantId = lubricant.id;
           }
 
           await rescheduleRoute(tx, { route, plantId, executedAt, technicianId: executorTechnicianId });
@@ -610,8 +613,12 @@ export default function olpRoutes({ prisma, auth, requireRole }) {
           });
         }
 
-        return { updatedItem, inventoryWarning, alreadyCompleted: false };
+        return { updatedItem, inventoryWarning, alreadyCompleted: false, deductedLubricantId };
       });
+
+      if (result.deductedLubricantId) {
+        notifyIfLowStock(prisma, { plantId, lubricantId: result.deductedLubricantId });
+      }
 
       if (result.inventoryWarning) {
         logger.warn(`[OLP] Orden #${order.id} item #${itemId}: ${result.inventoryWarning}`);

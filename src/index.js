@@ -73,6 +73,7 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
   import monthlyReportRoutes from "./routes/monthlyReport.routes.js";
   import lubricationCardsRoutes from "./routes/lubricationCards.routes.js";
   import olpRoutes from "./routes/olp.routes.js";
+  import { notifyIfLowStock } from "./services/inventory/lowStock.js";
   import { mountMaintenance } from "./modules/maintenance/index.js";
   import { startMaintenanceScheduler } from "./modules/maintenance/scheduler/index.js";
   import { startMaintenanceAlerts } from "./modules/maintenance/notifications/service.js";
@@ -5181,7 +5182,39 @@ app.get("/api/lubricants", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), as
       orderBy: { id: "desc" },
     });
 
-    res.json(items);
+    // Consumo real de 30 días, rutas que lo usan y días de cobertura estimados.
+    const ids = items.map((i) => i.id);
+    const since30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const [consumptionRows, routeRows] = ids.length
+      ? await Promise.all([
+          prisma.lubricantMovement.groupBy({
+            by: ["lubricantId"],
+            where: { lubricantId: { in: ids }, type: "OUT", createdAt: { gte: since30d } },
+            _sum: { quantity: true },
+          }),
+          prisma.route.groupBy({
+            by: ["lubricantId"],
+            where: { plantId, lubricantId: { in: ids } },
+            _count: { _all: true },
+          }),
+        ])
+      : [[], []];
+    const consumption = new Map(consumptionRows.map((r) => [r.lubricantId, Number(r._sum.quantity || 0)]));
+    const routesCount = new Map(routeRows.map((r) => [r.lubricantId, r._count._all]));
+
+    res.json(
+      items.map((it) => {
+        const used30d = round2(consumption.get(it.id) || 0);
+        const perDay = used30d / 30;
+        const stock = Number(it.stock || 0);
+        return {
+          ...it,
+          consumption30d: used30d,
+          routesCount: routesCount.get(it.id) || 0,
+          coverageDays: perDay > 0 ? Math.max(0, Math.floor(stock / perDay)) : null,
+        };
+      })
+    );
   } catch (error) {
     logger.error("Error obteniendo lubricantes:", error);
     res.status(500).json({ error: "Error obteniendo lubricantes" });
@@ -5285,10 +5318,18 @@ app.post("/api/lubricants", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), a
 
       if (!name) return res.status(400).json({ error: "name es obligatorio" });
 
-      const stockNum = stock == null || stock === "" ? 0 : Number(stock);
-      if (!Number.isFinite(stockNum) || stockNum < 0) {
+      // Si no viene stock se conserva el actual (antes se ponía en 0).
+      const stockProvided = !(stock == null || stock === "");
+      const stockNum = stockProvided ? Number(stock) : null;
+      if (stockProvided && (!Number.isFinite(stockNum) || stockNum < 0)) {
         return res.status(400).json({ error: "stock invalido" });
       }
+
+      const current = await prisma.lubricant.findFirst({
+        where: { id, plantId },
+        select: { stock: true },
+      });
+      if (!current) return res.status(404).json({ error: "Lubricante no encontrado" });
 
       const minNum = minStock == null || minStock === "" ? null : Number(minStock);
       if (minNum !== null && (!Number.isFinite(minNum) || minNum < 0)) {
@@ -5300,26 +5341,51 @@ app.post("/api/lubricants", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), a
         return res.status(400).json({ error: "unitCost invalido" });
       }
 
-      const updated = await prisma.lubricant.updateMany({
-        where: { id, plantId },
-        data: {
-          name: String(name).trim(),
-          brand: brand?.trim() || null,
-          type: type?.trim() || null,
-          viscosity: viscosity?.trim() || null,
-          unit: unit?.trim() || "ml",
-          stock: stockNum,
-          minStock: minNum,
-          location: location?.trim() || null,
-          notes: notes?.trim() || null,
-          code: code?.trim() || null,
-          supplier: supplier?.trim() || null,
-          unitCost: unitCostNum,
-        },
+      const stockBefore = round2(Number(current.stock || 0));
+      const stockChanged = stockProvided && round2(stockNum) !== stockBefore;
+
+      const updated = await prisma.$transaction(async (tx) => {
+        const result = await tx.lubricant.updateMany({
+          where: { id, plantId },
+          data: {
+            name: String(name).trim(),
+            brand: brand?.trim() || null,
+            type: type?.trim() || null,
+            viscosity: viscosity?.trim() || null,
+            unit: unit?.trim() || "ml",
+            ...(stockProvided ? { stock: stockNum } : {}),
+            minStock: minNum,
+            location: location?.trim() || null,
+            notes: notes?.trim() || null,
+            code: code?.trim() || null,
+            supplier: supplier?.trim() || null,
+            unitCost: unitCostNum,
+          },
+        });
+
+        // Cambiar el stock desde "Editar" antes no dejaba rastro en el historial.
+        if (result.count && stockChanged) {
+          await tx.lubricantMovement.create({
+            data: {
+              lubricantId: id,
+              type: "ADJUST",
+              quantity: round2(stockNum),
+              reason: "Ajuste desde edición del lubricante",
+              note: req.user?.id ? `Usuario #${req.user.id}` : null,
+              stockBefore,
+              stockAfter: round2(stockNum),
+            },
+          });
+        }
+        return result;
       });
 
       if (!updated.count) {
         return res.status(404).json({ error: "Lubricante no encontrado" });
+      }
+
+      if (stockChanged && round2(stockNum) < stockBefore) {
+        notifyIfLowStock(prisma, { plantId, lubricantId: id });
       }
 
       const item = await prisma.lubricant.findFirst({ where: { id, plantId } });
@@ -5384,16 +5450,18 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
       }
 
       const qty = Number(req.body.quantity);
-      if (!Number.isFinite(qty) || qty <= 0) {
-        return res.status(400).json({ error: "quantity inv??lida (>0)" });
+      // ADJUST fija el stock contado (puede ser 0); IN/OUT requieren cantidad > 0.
+      if (!Number.isFinite(qty) || qty < 0 || (movementType !== "ADJUST" && qty === 0)) {
+        return res.status(400).json({ error: "Cantidad inválida" });
       }
 
       const reason = req.body.reason;
       const reference = req.body.reference;
+      const clean = (v) => (typeof v === "string" ? v.trim() : v) || null;
 
       const item = await prisma.lubricant.findFirst({
         where: { id, plantId },
-        select: { id: true, stock: true, unit: true, name: true },
+        select: { id: true },
       });
       if (!item) return res.status(404).json({ error: "Lubricante no encontrado" });
 
@@ -5401,39 +5469,50 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
         where: { id: 1 },
         select: { preventNegativeStock: true },
       });
-
-      const stockBefore = Number(item.stock || 0);
-
-      let stockAfter = stockBefore;
-      if (movementType === "IN") stockAfter = stockBefore + qty;
-      if (movementType === "OUT") stockAfter = stockBefore - qty;
-      if (movementType === "ADJUST") stockAfter = qty;
-
       const preventNegativeStock = settings?.preventNegativeStock ?? true;
-      if (preventNegativeStock && stockAfter < 0) {
-        return res.status(400).json({ error: "Stock insuficiente" });
-      }
 
-      const [updated, movement] = await prisma.$transaction([
-        prisma.lubricant.update({
+      // Lectura y escritura del stock en la misma transacción con bloqueo de fila:
+      // antes se calculaba fuera y dos movimientos simultáneos se pisaban.
+      const { updated, movement } = await prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT id FROM "Lubricant" WHERE id = ${item.id} FOR UPDATE`;
+        const current = await tx.lubricant.findUnique({ where: { id: item.id }, select: { stock: true } });
+        const stockBefore = round2(Number(current?.stock || 0));
+
+        let stockAfter = stockBefore;
+        if (movementType === "IN") stockAfter = round2(stockBefore + qty);
+        if (movementType === "OUT") stockAfter = round2(stockBefore - qty);
+        if (movementType === "ADJUST") stockAfter = round2(qty);
+
+        if (preventNegativeStock && stockAfter < 0) {
+          throw Object.assign(new Error("Stock insuficiente"), { httpStatus: 400 });
+        }
+
+        const updatedLub = await tx.lubricant.update({
           where: { id: item.id },
           data: { stock: stockAfter },
-        }),
-        prisma.lubricantMovement.create({
+        });
+        const createdMovement = await tx.lubricantMovement.create({
           data: {
             lubricantId: id,
             type: movementType,
+            // En ajustes se conserva el criterio existente: cantidad = stock contado.
             quantity: qty,
-            reason: reason?.trim?.() || reason || null,
-            note: reference?.trim?.() || reference || null,
+            reason: clean(reason),
+            note: clean(reference),
             stockBefore,
             stockAfter,
           },
-        }),
-      ]);
+        });
+        return { updated: updatedLub, movement: createdMovement };
+      });
+
+      if (movement.stockAfter < movement.stockBefore) {
+        notifyIfLowStock(prisma, { plantId, lubricantId: id });
+      }
 
       res.status(201).json({ ok: true, updated, movement });
     } catch (error) {
+      if (error?.httpStatus === 400) return res.status(400).json({ error: error.message });
       logger.error("Error registrando movimiento:", error);
       res.status(500).json({ error: "Error registrando movimiento" });
     }
@@ -5448,8 +5527,28 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
       const id = Number(req.params.id);
       if (!Number.isFinite(id)) return res.status(400).json({ error: "id invalido" });
 
-      const deleted = await prisma.lubricant.deleteMany({ where: { id, plantId } });
-      if (!deleted.count) return res.status(404).json({ error: "Lubricante no encontrado" });
+      const exists = await prisma.lubricant.findFirst({ where: { id, plantId }, select: { id: true } });
+      if (!exists) return res.status(404).json({ error: "Lubricante no encontrado" });
+
+      // Borrar un lubricante eliminaba en cascada todo su historial de movimientos y dejaba
+      // sus rutas sin lubricante (dejaban de descontar). Solo se permite si no tiene ninguno.
+      const [movements, routes] = await Promise.all([
+        prisma.lubricantMovement.count({ where: { lubricantId: id } }),
+        prisma.route.count({ where: { lubricantId: id, plantId } }),
+      ]);
+      if (movements || routes) {
+        const parts = [
+          routes ? `${routes} ruta${routes === 1 ? "" : "s"} lo usa${routes === 1 ? "" : "n"}` : null,
+          movements ? `tiene ${movements} movimiento${movements === 1 ? "" : "s"} en su historial` : null,
+        ].filter(Boolean);
+        return res.status(409).json({
+          error: `No se puede eliminar: ${parts.join(" y ")}. Reasigna las rutas a otro lubricante; si ya no se usa, ajusta su stock a 0.`,
+          routes,
+          movements,
+        });
+      }
+
+      await prisma.lubricant.deleteMany({ where: { id, plantId } });
       res.json({ ok: true });
     } catch (error) {
       logger.error("Error eliminando lubricante:", error);
@@ -7171,6 +7270,7 @@ app.patch(
       let usedConvertedUnit = null;
       let inventoryDeductedAt = null;
       let movementData = null;
+      let preventNegativeStockOnComplete = true;
 
       if (!usesOptionalConsumption && usedQuantity == null) {
         return res.status(400).json({
@@ -7275,6 +7375,7 @@ app.patch(
         const stockBefore = Number(lubricant.stock || 0);
         const stockAfter = stockBefore - Number(inventoryQty);
         const preventNegativeStock = settingsStock?.preventNegativeStock ?? true;
+        preventNegativeStockOnComplete = preventNegativeStock;
 
         if (preventNegativeStock && stockAfter < 0) {
           return res.status(400).json({ error: "Stock insuficiente" });
@@ -7329,6 +7430,10 @@ app.patch(
       };
 
       const completionResult = await prisma.$transaction(async (tx) => {
+        // Bloquea la fila: si llegan dos envíos a la vez (doble clic, reintento offline),
+        // el segundo espera y ya ve inventoryDeductedAt, así no se descuenta dos veces.
+        await tx.$queryRaw`SELECT id FROM "Execution" WHERE id = ${id} FOR UPDATE`;
+
         // Leer estado actual ANTES del update para detectar reintentos que ya
         // completaron el descuento de inventario. Evita doble deducción de stock.
         const currentExec = await tx.execution.findUnique({
@@ -7345,6 +7450,22 @@ app.patch(
         let resolvedConditionReport = null;
 
         if (movementData && !alreadyDeducted) {
+          // Descuento atómico: el stock se lee y escribe en la misma operación, así dos
+          // ejecuciones simultáneas del mismo lubricante no se pisan.
+          const lubAfter = await tx.lubricant.update({
+            where: { id: movementData.lubricantId },
+            data: { stock: { decrement: movementData.quantity } },
+            select: { stock: true },
+          });
+          const realAfter = round2(lubAfter.stock);
+          const realBefore = round2(realAfter + movementData.quantity);
+          if (preventNegativeStockOnComplete && realAfter < 0) {
+            // Otra ejecución consumió el stock entre la validación y el guardado.
+            throw Object.assign(new Error("Stock insuficiente"), { httpStatus: 400 });
+          }
+          movementData.stockBefore = realBefore;
+          movementData.stockAfter = realAfter;
+
           await tx.lubricantMovement.create({
             data: {
               executionId: saved.id,
@@ -7357,15 +7478,10 @@ app.patch(
               convertedUnit: movementData.convertedUnit,
               reason: "EXECUTION",
               note: movementData.note,
-              stockBefore: movementData.stockBefore,
-              stockAfter: movementData.stockAfter,
+              stockBefore: realBefore,
+              stockAfter: realAfter,
               createdAt: movementData.occurredAt,
             },
-          });
-
-          await tx.lubricant.updateMany({
-            where: { id: movementData.lubricantId, plantId },
-            data: { stock: movementData.stockAfter },
           });
         }
 
@@ -7496,6 +7612,11 @@ app.patch(
         };
       });
 
+      // Aviso de stock bajo (sin await: no retrasa la respuesta al técnico)
+      if (movementData?.lubricantId) {
+        notifyIfLowStock(prisma, { plantId, lubricantId: movementData.lubricantId });
+      }
+
       // Query pesada fuera del transaction para no bloquear el lock de BD
       const updated = await prisma.execution.findFirst({
         where: { id: completionResult.executionId, plantId },
@@ -7608,6 +7729,7 @@ app.patch(
 
       return res.json({ ok: true, item: updated });
     } catch (e) {
+      if (e?.httpStatus === 400) return res.status(400).json({ error: e.message });
       logger.error("complete execution error:", e);
       return res.status(500).json({ error: "Error completando actividad" });
     }
@@ -7799,303 +7921,6 @@ if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
     }
   });
 
-
- // POST /emergency-activities
-app.post("/api/emergency-activities", requireAuth, async (req, res) => {
-  try {
-    const plantId = req.currentPlantId;
-    if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
-
-    const {
-      equipmentId,
-      technicianId,
-      emergencyReason,
-      executedAt, // "YYYY-MM-DD"
-      lubricantId,
-      quantity,
-      unit,
-      condition,
-      observations,
-      evidenceImage,
-      evidenceNote,
-    } = req.body || {};
-
-    if (!equipmentId) return res.status(400).json({ error: "equipmentId requerido" });
-    if (!technicianId) return res.status(400).json({ error: "technicianId requerido" });
-    if (!emergencyReason?.trim()) return res.status(400).json({ error: "emergencyReason requerido" });
-    if (!executedAt) return res.status(400).json({ error: "executedAt requerido" });
-    if (!lubricantId) return res.status(400).json({ error: "lubricantId requerido" });
-
-    const equipmentIdNum = Number(equipmentId);
-    const lubricantIdNum = Number(lubricantId);
-
-    if (!Number.isFinite(equipmentIdNum) || equipmentIdNum <= 0) {
-      return res.status(400).json({ error: "equipmentId invalido" });
-    }
-
-    if (!Number.isFinite(lubricantIdNum) || lubricantIdNum <= 0) {
-      return res.status(400).json({ error: "lubricantId invalido" });
-    }
-
-    const role = String(req.user?.role || "").toUpperCase();
-    const myTechId = req.user?.technicianId != null ? Number(req.user.technicianId) : null;
-
-    const finalTechnicianId =
-      role === "TECHNICIAN"
-        ? myTechId
-        : Number(technicianId);
-
-    if (!finalTechnicianId || !Number.isFinite(finalTechnicianId)) {
-      return res.status(400).json({ error: "technicianId requerido" });
-    }
-
-    const tech = await prisma.technician.findFirst({
-      where: { id: finalTechnicianId, deletedAt: null },
-      select: { id: true, name: true, code: true },
-    });
-    if (!tech) {
-      return res.status(400).json({ error: "Técnico inválido" });
-    }
-
-    const qty = Number(quantity);
-    if (!Number.isFinite(qty) || qty <= 0) {
-      return res.status(400).json({ error: "quantity invalida" });
-    }
-
-    const execDate = parseDateOnlyLocal(String(executedAt).slice(0, 10));
-    if (!execDate || Number.isNaN(execDate.getTime())) {
-      return res.status(400).json({ error: "executedAt invalida" });
-    }
-
-    const conditionNorm = String(condition || "BUENO").trim().toUpperCase();
-    const allowedConditions = ["BUENO", "REGULAR", "MALO", "CRITICO"];
-    if (!allowedConditions.includes(conditionNorm)) {
-      return res.status(400).json({ error: "condition invalida" });
-    }
-
-    const uploadedEvidence = await normalizeImageInput(evidenceImage, {
-      folder: "lubriplan/execution-evidence",
-      publicId: `emergency_${equipmentIdNum}_${Date.now()}_${Math.random()
-        .toString(16)
-        .slice(2)}`,
-    });
-
-    const result = await prisma.$transaction(async (tx) => {
-      // OK equipo debe ser de la planta actual
-      const eq = await tx.equipment.findFirst({
-        where: { id: equipmentIdNum, plantId },
-        select: { id: true, name: true, code: true },
-      });
-      if (!eq) throw new Error("Equipo no encontrado en la planta actual");
-
-      // OK lubricante debe ser de la planta actual
-      const lub = await tx.lubricant.findFirst({
-        where: { id: lubricantIdNum, plantId },
-        select: {
-          id: true,
-          name: true,
-          unit: true,
-          type: true,
-          stock: true,
-          minStock: true,
-        },
-      });
-      if (!lub) throw new Error("Lubricante no encontrado en la planta actual");
-
-      const finalUnit = String(unit || lub.unit || "ml").trim().toLowerCase();
-      const lubeType = lub.type || "Otro";
-
-      // convertir a unidad de inventario
-      const usedInInvUnit = convertUnits(qty, finalUnit, lub.unit || "ml");
-      if (usedInInvUnit == null) {
-        throw new Error("No se pudo convertir la unidad de captura a la unidad del lubricante");
-      }
-
-      const stockBefore = lub.stock != null ? Number(lub.stock) : null;
-      const stockAfter =
-        stockBefore != null ? Math.max(0, stockBefore - Number(usedInInvUnit)) : null;
-
-      const manualTitle = `EMERGENTE · ${eq.name || "Equipo"} · ${String(
-        emergencyReason
-      )
-        .trim()
-        .replace(/\s+/g, " ")
-        .slice(0, 80)}`.slice(0, 120);
-      const manualInstructions = [
-        `Motivo: ${String(emergencyReason).trim()}`,
-        observations?.trim() ? `Observaciones: ${observations.trim()}` : null,
-      ]
-        .filter(Boolean)
-        .join("\n\n");
-
-      // 1) ejecución irrepetible completada
-      const execution = await tx.execution.create({
-        data: {
-          plantId,
-          origin: "MANUAL",
-          equipmentId: eq.id,
-          manualTitle,
-          manualInstructions: manualInstructions || null,
-          technicianId: finalTechnicianId,
-          status: "COMPLETED",
-          scheduledAt: execDate,
-          executedAt: execDate,
-          condition: conditionNorm,
-          observations: manualInstructions || null,
-          usedQuantity: Number(usedInInvUnit),
-          usedInputQuantity: qty,
-          usedInputUnit: finalUnit,
-          usedConvertedQuantity: Number(usedInInvUnit),
-          usedConvertedUnit: lub.unit || null,
-          evidenceImage: uploadedEvidence?.imageUrl || null,
-          evidenceImagePublicId: uploadedEvidence?.imagePublicId || null,
-          evidenceNote:
-            String(evidenceNote || "").trim() ||
-            `EMERGENCY: ${String(emergencyReason).trim()}`,
-          inventoryDeductedAt: execDate,
-        },
-        include: {
-          route: { include: { equipment: true, lubricant: true } },
-          technician: true,
-          equipment: true,
-        },
-      });
-
-      // 2) movimiento OUT
-      await tx.lubricantMovement.create({
-        data: {
-          lubricantId: lub.id,
-          executionId: execution.id,
-          type: "OUT",
-          quantity: Number(usedInInvUnit),
-          inputQuantity: qty,
-          inputUnit: finalUnit,
-          convertedQuantity: Number(usedInInvUnit),
-          convertedUnit: lub.unit || null,
-          reason: "EMERGENCY",
-          note: [
-            emergencyReason.trim(),
-            `Ejecución #${execution.id}`,
-            `Equipo: ${eq.code || eq.name}`,
-            `Captura: ${qty} ${finalUnit}`,
-          ].join(" | "),
-          stockBefore,
-          stockAfter,
-          createdAt: execDate,
-        },
-      });
-
-      // 3) actualizar stock
-      if (stockBefore != null && stockAfter != null) {
-        await tx.lubricant.updateMany({
-          where: { id: lub.id, plantId },
-          data: { stock: stockAfter },
-        });
-      }
-
-      return {
-        execution,
-        equipment: eq,
-        lubricant: {
-          id: lub.id,
-          name: lub.name,
-          unit: lub.unit,
-          stockBefore,
-          stockAfter,
-        },
-      };
-    });
-
-    // condición crítica
-    if (conditionNorm === "CRITICO") {
-      try {
-        await notifyManagers(prisma, {
-          plantId,
-          type: "EXEC_CONDITION_CRITICAL",
-          title: "Actividad emergente crítica",
-          message: `${result.equipment?.name || "Equipo"}${
-            result.equipment?.code ? ` (${result.equipment.code})` : ""
-          } · Ejecución #${result.execution.id}`,
-          link: `/activities?filter=critical-risk&executionId=${result.execution.id}&focus=critical`,
-        });
-
-        await sendCriticalActivityEmail({
-          prisma,
-          payload: {
-            plantId,
-            plantName: null,
-            equipmentName: result.equipment?.name || "Equipo",
-            equipmentCode: result.equipment?.code || "",
-            riskLevel: "CRÍTICO",
-            reason: "Actividad emergente completada con condición crítica",
-            observation:
-              result.execution?.observations ||
-              result.execution?.evidenceNote ||
-              "",
-            evidenceImage: result.execution?.evidenceImage || null,
-            occurredAt: result.execution.executedAt || new Date(),
-            suggestedAction: "Revisar la actividad emergente y atender el seguimiento requerido.",
-            link: `${process.env.APP_BASE_URL || "http://localhost:5173"}/activities?filter=critical-risk&executionId=${result.execution.id}&focus=critical`,
-          },
-        });
-
-        sseHub.broadcast("execution.critical", {
-          plantId,
-          executionId: result.execution.id,
-          equipmentId: result.equipment?.id ?? null,
-          equipmentName: result.equipment?.name ?? null,
-          equipmentCode: result.equipment?.code ?? null,
-          routeName: result.execution?.route?.name ?? null,
-          executedAt: result.execution.executedAt,
-        });
-      } catch (notifyErr) {
-        logger.error("No se pudo notificar ejecución crítica emergente:", notifyErr);
-      }
-    }
-
-    // ðŸ"" low stock
-    if (
-      result.lubricant?.stockAfter != null &&
-      result.lubricant?.stockBefore != null
-    ) {
-      const minStock = await prisma.lubricant.findFirst({
-        where: { id: result.lubricant.id, plantId },
-        select: { minStock: true },
-      });
-
-      if (
-        minStock?.minStock != null &&
-        Number(result.lubricant.stockAfter) <= Number(minStock.minStock)
-      ) {
-        try {
-          await notifyLowStockIfNew(prisma, {
-            plantId,
-            lubricantName: result.lubricant.name,
-            type: "LOW_STOCK",
-            title: "Stock bajo",
-            message: `${result.lubricant.name} quedo en ${result.lubricant.stockAfter} ${result.lubricant.unit || ""}`,
-            link: "/inventory",
-          });
-
-          sseHub.broadcast("inventory.low-stock", {
-            plantId,
-            lubricantId: result.lubricant.id,
-            lubricantName: result.lubricant.name,
-            stockAfter: result.lubricant.stockAfter,
-            unit: result.lubricant.unit || null,
-          });
-        } catch (notifyErr) {
-          logger.error("No se pudo notificar low stock:", notifyErr);
-        }
-      }
-    }
-
-    return res.json({ ok: true, execution: result.execution });
-  } catch (e) {
-    logger.error("Error emergency-activities:", e);
-    return res.status(500).json({ error: e?.message || "Error creando actividad emergente" });
-  }
-});
 
 
   // =========================

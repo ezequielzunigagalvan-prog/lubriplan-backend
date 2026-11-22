@@ -39,18 +39,26 @@ function ensureWhereHasPlantId(where, plantId) {
   return { ...(where || {}), plantId };
 }
 
+// Si la fila ya trae la planta (como plantId o como relación `plant: { connect }`) no se toca.
+// Agregar plantId junto a `plant` hace que Prisma rechace la operación
+// ("Unknown argument plantId"); así fallaba, por ejemplo, crear rutas.
+function hasPlant(row) {
+  return (
+    !!row &&
+    (Object.prototype.hasOwnProperty.call(row, "plantId") ||
+      Object.prototype.hasOwnProperty.call(row, "plant"))
+  );
+}
+
 function ensureDataHasPlantId(data, plantId) {
   if (!data) return data;
 
   if (!Array.isArray(data)) {
-    if (Object.prototype.hasOwnProperty.call(data, "plantId")) return data;
+    if (hasPlant(data)) return data;
     return { ...data, plantId };
   }
 
-  return data.map((row) => {
-    if (row && Object.prototype.hasOwnProperty.call(row, "plantId")) return row;
-    return { ...(row || {}), plantId };
-  });
+  return data.map((row) => (hasPlant(row) ? row : { ...(row || {}), plantId }));
 }
 
 /**

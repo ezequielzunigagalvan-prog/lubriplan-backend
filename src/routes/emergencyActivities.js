@@ -192,14 +192,22 @@ export default function emergencyActivitiesRoutes({ prisma, auth }) {
             },
           });
 
-          // 2) Movimiento OUT
-          const stockBefore = Number(lubricant.stock || 0);
-          const stockAfter = stockBefore - qtyNormalized;
+          // 2) Descuento atómico del stock (antes se calculaba con el valor leído y se
+          //    sobrescribía, así que dos registros simultáneos podían perder un descuento).
           const settings = await tx.appSettings.findUnique({
             where: { id: 1 },
             select: { preventNegativeStock: true },
           });
           const preventNegativeStock = settings?.preventNegativeStock ?? true;
+
+          const lubAfter = await tx.lubricant.update({
+            where: { id: lubId },
+            data: { stock: { decrement: qtyNormalized } },
+            select: { stock: true },
+          });
+          const round2 = (v) => Math.round(Number(v) * 100) / 100;
+          const stockAfter = round2(lubAfter.stock);
+          const stockBefore = round2(stockAfter + qtyNormalized);
 
           if (preventNegativeStock && stockAfter < 0) {
             throw new Error("Stock insuficiente para registrar la actividad emergente");
@@ -225,11 +233,6 @@ export default function emergencyActivitiesRoutes({ prisma, auth }) {
             },
           });
 
-          // 3) Descontar stock
-          await tx.lubricant.update({
-            where: { id: lubId },
-            data: { stock: stockAfter },
-          });
 
           return {
             ok: true,
