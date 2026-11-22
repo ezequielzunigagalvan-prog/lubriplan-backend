@@ -1,6 +1,7 @@
 ﻿import jwt from "jsonwebtoken";
 import prisma from "../prisma.js";
 import { logger } from "../config/logger.js";
+import { runWithTenant } from "../tenancy/tenantContext.js";
 
 export async function requireAuth(req, res, next) {
   try {
@@ -88,7 +89,10 @@ export async function requireAuth(req, res, next) {
     }
 
     req.currentPlantId = currentPlantId ?? null;
-    return next();
+
+    // El contexto de planta (filtro automático de Prisma) se fija con la planta ya validada,
+    // no con la que llegó sin validar antes de la autenticación.
+    return runWithTenant({ plantId: req.currentPlantId }, () => next());
   } catch (err) {
     logger.error("[requireAuth] ERROR", err);
     return res.status(401).json({ error: "Token inválido" });

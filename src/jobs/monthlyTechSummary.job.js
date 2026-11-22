@@ -155,7 +155,11 @@ export async function runMonthlyTechSummaryJob({ prisma, forcePlantId = null, fo
 }
 
 export function startMonthlyTechSummaryScheduler({ prisma }) {
+  // Evita que una corrida se encime con la siguiente si tarda más que el intervalo.
+  let running = false;
   const run = async () => {
+    if (running) return;
+    running = true;
     try {
       const result = await runMonthlyTechSummaryJob({ prisma });
       if (result.some((r) => r.sent)) {
@@ -163,6 +167,8 @@ export function startMonthlyTechSummaryScheduler({ prisma }) {
       }
     } catch (e) {
       logger.error("❌ monthlyTechSummaryScheduler:", e);
+    } finally {
+      running = false;
     }
   };
 

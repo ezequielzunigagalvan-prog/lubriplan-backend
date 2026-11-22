@@ -42,12 +42,12 @@ export default function monthlyReportRoutes({
     requireRole(["ADMIN", "SUPERVISOR"]),
     async (req, res) => {
       try {
-        const plantId = req.query?.plantId ? Number(req.query.plantId) : undefined;
+        // Solo la planta actual (validada en requireAuth); antes listaba envíos de todas las plantas.
+        const plantId = req.currentPlantId;
+        if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
 
         const items = await prisma.scheduledJobRun.findMany({
-          where: {
-            ...(Number.isFinite(plantId) ? { plantId } : {}),
-          },
+          where: { plantId },
           orderBy: [{ createdAt: "desc" }],
           take: 100,
           include: {

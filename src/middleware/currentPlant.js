@@ -3,10 +3,9 @@ export async function attachCurrentPlant(req, res, next) {
   try {
     const prisma = req.app.locals.prisma;
 
-    const raw =
-      req.headers["x-plant-id"] ||
-      req.headers["X-Plant-Id"] ||
-      req.query.plantId;
+    // Solo el header x-plant-id; requireAuth valida que el usuario pertenezca a esa planta.
+    // (El ?plantId= de la URL no se usa: no se validaba y permitía cambiar el filtro de planta.)
+    const raw = req.headers["x-plant-id"];
 
     const headerPlantId = raw ? Number(raw) : null;
 

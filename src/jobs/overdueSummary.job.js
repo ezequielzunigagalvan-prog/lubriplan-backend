@@ -293,7 +293,11 @@ export function startOverdueSummaryScheduler({
   baseUrl = process.env.APP_BASE_URL || "http://localhost:5173",
   sendHour = DEFAULT_HOUR,
 }) {
+  // Evita que una corrida se encime con la siguiente si tarda más que el intervalo.
+  let running = false;
   const run = async () => {
+    if (running) return;
+    running = true;
     try {
       const result = await runScheduledOverdueSummaryJob({
         prisma,
@@ -303,6 +307,8 @@ export function startOverdueSummaryScheduler({
       logger.info("📧 overdueSummaryScheduler:", result);
     } catch (e) {
       logger.error("❌ overdueSummaryScheduler:", e);
+    } finally {
+      running = false;
     }
   };
 

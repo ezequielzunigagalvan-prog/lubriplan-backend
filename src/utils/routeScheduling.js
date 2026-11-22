@@ -1,6 +1,6 @@
 // src/utils/routeScheduling.js
 // Funciones puras de cálculo de fechas para rutas de lubricación.
-// Extraídas de index.js para reutilización en preventiveOrders.routes.js
+// Extraídas de index.js para reutilización en olp.routes.js
 // sin duplicar lógica.
 
 /**

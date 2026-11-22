@@ -329,7 +329,11 @@ export function startMonthlyExecutiveReportScheduler({
   toStartOfDaySafe,
   baseUrl = process.env.APP_BASE_URL || "http://localhost:5173",
 }) {
+  // Evita que una corrida se encime con la siguiente si tarda más que el intervalo.
+  let running = false;
   const run = async () => {
+    if (running) return;
+    running = true;
     try {
       const result = await runMonthlyExecutiveReportJob({
         prisma,
@@ -341,6 +345,8 @@ export function startMonthlyExecutiveReportScheduler({
       logger.info("📧 monthlyExecutiveReportJob:", result);
     } catch (e) {
       logger.error("❌ monthlyExecutiveReportScheduler:", e);
+    } finally {
+      running = false;
     }
   };
 
