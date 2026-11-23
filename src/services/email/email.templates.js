@@ -310,7 +310,7 @@ export function monthlyExecutiveReportTemplate(payload) {
     overdue,
     total,
     compliance,
-    opEfficiency,
+    onTimeRate,
     lowStock,
     unassigned,
     conditionReported,
@@ -331,17 +331,17 @@ export function monthlyExecutiveReportTemplate(payload) {
       ${detailRow("Planta", plantName || "—")}
       ${detailRow("Periodo", monthLabelEs(month))}
       ${detailRow("Generado", fmtDateTimeMx(generatedAt))}
-      ${detailRow("Total actividades", String(total ?? 0))}
+      ${detailRow("Actividades programadas", String(total ?? 0))}
       ${detailRow("Completadas", String(completed ?? 0))}
-      ${detailRow("Pendientes", String(pending ?? 0))}
-      ${detailRow("Atrasadas", String(overdue ?? 0))}
+      ${detailRow("Pendientes (aún en tiempo)", String(pending ?? 0))}
+      ${detailRow("Vencidas", String(overdue ?? 0))}
       ${detailRow("Cumplimiento", `${Number(compliance ?? 0)}%`)}
-      ${detailRow("Eficiencia operativa", `${Number(opEfficiency ?? 0)}%`)}
+      ${detailRow("Puntualidad (a tiempo)", `${Number(onTimeRate ?? 0)}%`)}
       ${detailRow("Lubricantes bajo stock", String(lowStock ?? 0))}
-      ${detailRow("Pendientes sin técnico", String(unassigned ?? 0))}
+      ${detailRow("Vencidas sin técnico", String(unassigned ?? 0))}
       ${detailRow("Condiciones reportadas", String(conditionReported ?? 0))}
       ${detailRow("Condiciones atendidas", String(conditionAttended ?? 0))}
-      ${detailRow("Condiciones activas", String(conditionOpen ?? 0))}
+      ${detailRow("Reportes abiertos a hoy", String(conditionOpen ?? 0))}
     </table>
 
     <div style="margin-top:22px;">

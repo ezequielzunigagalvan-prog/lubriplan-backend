@@ -44,6 +44,31 @@ export function resolvePeriod(query, tz, now = new Date()) {
   const re = /^\d{4}-\d{2}-\d{2}$/;
   let fromYmd = re.test(String(query.from || "")) ? String(query.from) : null;
   let toYmd = re.test(String(query.to || "")) ? String(query.to) : null;
+
+  // Mes calendario (reporte mensual): se compara contra el mes calendario anterior.
+  const ym = /^(\d{4})-(\d{2})$/.exec(String(query.month || ""));
+  if (ym) {
+    const y = +ym[1];
+    const m = +ym[2];
+    if (m < 1 || m > 12) return { error: "Mes inválido" };
+    const lastDay = (yy, mm) => new Date(Date.UTC(yy, mm, 0)).toISOString().slice(0, 10);
+    fromYmd = `${ym[1]}-${ym[2]}-01`;
+    toYmd = lastDay(y, m);
+    const prevFrom = new Date(Date.UTC(y, m - 2, 1)).toISOString().slice(0, 10);
+    const prevTo = lastDay(y, m - 1);
+    return {
+      tz,
+      today,
+      month: `${ym[1]}-${ym[2]}`,
+      fromYmd,
+      toYmd,
+      days: ymdDiff(fromYmd, toYmd) + 1,
+      from: zonedStartOfDay(fromYmd, tz),
+      to: zonedEndOfDay(toYmd, tz),
+      prev: { fromYmd: prevFrom, toYmd: prevTo, from: zonedStartOfDay(prevFrom, tz), to: zonedEndOfDay(prevTo, tz) },
+    };
+  }
+
   if (!fromYmd || !toYmd) {
     const days = Math.min(Math.max(Number.parseInt(query.days, 10) || 90, 1), 1095);
     toYmd = today;
@@ -157,36 +182,125 @@ export function oleIndex(compliance, onTime, normal) {
 
 /* ───────── Router ───────── */
 
-export default function analysisRoutes({ prisma, auth, requireRole }) {
-  const router = Router();
-  const managers = requireRole ? requireRole(["ADMIN", "SUPERVISOR"]) : (req, res, next) => next();
+/* ───────── Resumen ejecutivo (texto generado solo con los datos verificados) ───────── */
 
-  async function plantInfo(plantId) {
-    const plant = await prisma.plant.findFirst({ where: { id: plantId }, select: { id: true, name: true, timezone: true } });
-    return { name: plant?.name || "", tz: safeTimeZone(plant?.timezone || DEFAULT_TZ) };
+const fmtN = (n, d = 1) => Number(n || 0).toLocaleString("es-MX", { maximumFractionDigits: d });
+const fmtMoneyMx = (n) => Number(n || 0).toLocaleString("es-MX", { style: "currency", currency: "MXN", maximumFractionDigits: 0 });
+/** ", +3 pts vs. mes anterior" (vacío si no hay con qué comparar). */
+const ptsDelta = (cur, prev, label) => {
+  if (cur == null || prev == null) return "";
+  const d = r1(cur - prev);
+  if (Math.abs(d) < 0.05) return `, igual que el ${label}`;
+  return `, ${d > 0 ? "+" : "−"}${fmtN(Math.abs(d))} pts vs. ${label}`;
+};
+const plural = (n, one, many) => `${fmtN(n, 0)} ${n === 1 ? one : many}`;
+
+export function narrative(d) {
+  const prevLabel = d.period?.month ? "mes anterior" : "periodo anterior";
+  const c = d.compliance;
+  const cond = d.condition;
+  const cons = d.consumption;
+  const rep = d.reports;
+  const paragraphs = [];
+  const highlights = [];
+  const actions = [];
+
+  if (!c.due && !d.executed.total) {
+    return {
+      headline: "Sin actividades exigibles ni ejecutadas en el periodo.",
+      paragraphs: ["No hay registros de actividades programadas o ejecutadas en este periodo para la planta."],
+      highlights,
+      actions: ["Verifica que las rutas tengan fechas programadas y técnico asignado."],
+    };
   }
 
-  const EXEC_SELECT = {
-    id: true,
-    status: true,
-    scheduledAt: true,
-    executedAt: true,
-    condition: true,
-    technicianId: true,
-    routeId: true,
-    manualTitle: true,
-    equipmentId: true,
-    route: { select: { equipmentId: true, lubricantId: true } },
-  };
+  const headline = c.due
+    ? `Cumplimiento ${fmtN(c.complianceRate)}% · Puntualidad ${fmtN(c.onTimeRate)}% · ${plural(c.overdue, "vencida", "vencidas")}`
+    : `${plural(d.executed.total, "actividad ejecutada", "actividades ejecutadas")} sin actividades programadas exigibles`;
 
-  // GET /api/analysis/overview?days=90 | from&to
-  router.get("/overview", auth, managers, async (req, res) => {
-    try {
-      const plantId = req.currentPlantId;
-      if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
-      const plant = await plantInfo(plantId);
-      const P = resolvePeriod(req.query, plant.tz);
-      if (P.error) return res.status(400).json({ error: P.error });
+  if (c.due) {
+    paragraphs.push(
+      `Se completaron ${fmtN(c.completed, 0)} de ${fmtN(c.due, 0)} actividades exigibles: cumplimiento de ${fmtN(c.complianceRate)}%${ptsDelta(c.complianceRate, c.prev.complianceRate, prevLabel)}. ` +
+        `${plural(c.onTime, "se hizo a tiempo", "se hicieron a tiempo")} (puntualidad de ${fmtN(c.onTimeRate)}%${ptsDelta(c.onTimeRate, c.prev.onTimeRate, prevLabel)})` +
+        (c.late ? ` y ${plural(c.late, "con retraso", "con retraso")}, en promedio ${fmtN(c.avgLateDays)} días después de lo programado.` : ".")
+    );
+  }
+  if (c.overdue) {
+    paragraphs.push(
+      `${c.overdue === 1 ? "Queda" : "Quedan"} ${plural(c.overdue, "actividad vencida", "actividades vencidas")} del ${d.period?.month ? "mes" : "periodo"}` +
+        (c.criticalOverdue ? `, ${fmtN(c.criticalOverdue, 0)} en equipos de criticidad alta o crítica.` : ".")
+    );
+  }
+  if (cond.total) {
+    const top = (d.failures || []).filter((f) => f.total).slice(0, 2).map((f) => f.name);
+    paragraphs.push(
+      `En ${plural(cond.total, "actividad ejecutada", "actividades ejecutadas")} la condición fue normal en ${fmtN(cond.normalRate)}%` +
+        (cond.abnormal
+          ? `; se encontraron ${plural(cond.abnormal, "hallazgo", "hallazgos")} (${fmtN(cond.MALO, 0)} mala${cond.MALO === 1 ? "" : "s"}, ${fmtN(cond.CRITICO, 0)} crítica${cond.CRITICO === 1 ? "" : "s"})${top.length ? `, principalmente en ${top.join(" y ")}` : ""}.`
+          : ", sin hallazgos de condición mala o crítica.")
+    );
+  }
+  if (cons.oilL || cons.greaseKg) {
+    paragraphs.push(
+      `Consumo descontado de inventario: ${[cons.oilL ? `${fmtN(cons.oilL)} L de aceite` : null, cons.greaseKg ? `${fmtN(cons.greaseKg, 2)} kg de grasa` : null].filter(Boolean).join(" y ")}` +
+        (cons.cost ? `, con un costo de ${fmtMoneyMx(cons.cost)}${cons.prev.cost ? (Math.abs(cons.cost - cons.prev.cost) < 0.5 ? `, igual que el ${prevLabel}` : ` (${cons.cost > cons.prev.cost ? "+" : "−"}${fmtN(Math.abs(((cons.cost - cons.prev.cost) / cons.prev.cost) * 100))}% vs. ${prevLabel})`) : ""}.` : ".")
+    );
+  }
+  if (rep.total || rep.openNow) {
+    paragraphs.push(
+      `Reportes de condición: ${fmtN(rep.total, 0)} levantados en el periodo, ${fmtN(rep.byStatus.RESOLVED, 0)} resueltos; ${rep.openNow === 1 ? "1 sigue abierto" : `${fmtN(rep.openNow, 0)} siguen abiertos`} a hoy` +
+        (rep.openAvgAgeDays ? ` con ${fmtN(rep.openAvgAgeDays)} días promedio de antigüedad.` : ".")
+    );
+  }
+
+  // Puntos clave
+  const bestTech = (d.technicians || []).filter((t) => t.technicianId && t.due >= 3).sort((a, b) => (b.onTimeRate ?? 0) - (a.onTimeRate ?? 0))[0];
+  if (bestTech) highlights.push(`Mejor puntualidad: ${bestTech.name} (${fmtN(bestTech.onTimeRate)}% de ${fmtN(bestTech.due, 0)} actividades).`);
+  const worstTech = (d.technicians || []).filter((t) => t.technicianId && t.overdue).sort((a, b) => b.overdue - a.overdue)[0];
+  if (worstTech) highlights.push(`Más vencidas: ${worstTech.name} (${fmtN(worstTech.overdue, 0)}).`);
+  const topLub = (cons.byLubricant || [])[0];
+  if (topLub?.cost) highlights.push(`Mayor costo de lubricante: ${topLub.name} (${fmtMoneyMx(topLub.cost)}).`);
+
+  // Acciones sugeridas (reglas simples y explícitas)
+  if (c.criticalOverdue) actions.push(`Atender primero ${c.criticalOverdue === 1 ? "la actividad vencida" : `las ${fmtN(c.criticalOverdue, 0)} actividades vencidas`} en equipos críticos.`);
+  if (c.overdue) actions.push(`Completar o reprogramar ${c.overdue === 1 ? "la actividad vencida" : `las ${fmtN(c.overdue, 0)} actividades vencidas`}.`);
+  if (c.onTimeRate != null && c.onTimeRate < 80 && c.late) actions.push("Revisar la carga de trabajo y las fechas de las rutas: la mayoría se ejecuta después de lo programado.");
+  if (d.quality?.overdueWithoutTechnician) actions.push(`Asignar técnico a ${plural(d.quality.overdueWithoutTechnician, "actividad vencida", "actividades vencidas")} sin responsable.`);
+  if (cond.CRITICO) actions.push("Dar seguimiento correctivo a los equipos con condición crítica.");
+  if (d.quality?.completedWithoutInventoryDeduction) actions.push(`Revisar ${plural(d.quality.completedWithoutInventoryDeduction, "actividad", "actividades")} que no descontaron inventario.`);
+  if (rep.openNow) actions.push(`Cerrar o programar corrección de ${plural(rep.openNow, "reporte de condición abierto", "reportes de condición abiertos")}.`);
+
+  return { headline, paragraphs, highlights, actions: actions.slice(0, 5) };
+}
+
+async function plantInfo(prisma, plantId) {
+  const plant = await prisma.plant.findFirst({ where: { id: plantId }, select: { id: true, name: true, timezone: true } });
+  return { name: plant?.name || "", tz: safeTimeZone(plant?.timezone || DEFAULT_TZ) };
+}
+
+const EXEC_SELECT = {
+  id: true,
+  status: true,
+  scheduledAt: true,
+  executedAt: true,
+  condition: true,
+  technicianId: true,
+  routeId: true,
+  manualTitle: true,
+  equipmentId: true,
+  route: { select: { equipmentId: true, lubricantId: true } },
+};
+
+export class PeriodError extends Error {}
+
+/**
+ * Calcula todos los indicadores del periodo. Lo usan la pantalla de Análisis, el Reporte mensual,
+ * el correo mensual y el resumen con IA, para que todos digan lo mismo.
+ */
+export async function computeOverview(prisma, plantId, query, { withOverdueList = false } = {}) {
+      const plant = await plantInfo(prisma, plantId);
+      const P = resolvePeriod(query, plant.tz);
+      if (P.error) throw new PeriodError(P.error);
 
       // Ventana de 12 meses para la tendencia mensual (termina en el mes de 'to').
       const toMonth = P.toYmd.slice(0, 7);
@@ -435,11 +549,45 @@ export default function analysisRoutes({ prisma, auth, requireRole }) {
         return HIGH_CRIT.has(critKey(eqById.get(eqOf(x))?.criticality));
       }).length;
 
-      return res.json({
+      // Pendientes al cierre (anexo del reporte): exigibles del periodo sin completar.
+      let overdueList = null;
+      if (withOverdueList) {
+        const rows = await prisma.execution.findMany({
+          where: { plantId, status: { not: "COMPLETED" }, scheduledAt: { gte: P.from, lte: P.to } },
+          select: {
+            id: true,
+            scheduledAt: true,
+            manualTitle: true,
+            technician: { select: { name: true } },
+            route: { select: { name: true, equipmentId: true } },
+            equipmentId: true,
+          },
+          orderBy: { scheduledAt: "asc" },
+        });
+        overdueList = rows
+          .map((x) => ({ ...x, sd: zonedYmd(x.scheduledAt, P.tz) }))
+          .filter((x) => x.sd < P.today)
+          .slice(0, 100)
+          .map((x) => {
+            const e = eqById.get(x.route?.equipmentId ?? x.equipmentId);
+            return {
+              id: x.id,
+              scheduled: x.sd,
+              daysLate: ymdDiff(x.sd, P.today),
+              activity: x.route?.name || x.manualTitle || "Actividad",
+              equipment: e?.name || null,
+              equipmentCode: e?.code || null,
+              criticality: e?.criticality || null,
+              technician: x.technician?.name || null,
+            };
+          });
+      }
+
+      return {
         ok: true,
         generatedAt: new Date().toISOString(),
         plant: { id: plantId, name: plant.name, timezone: P.tz },
-        period: { from: P.fromYmd, to: P.toYmd, days: P.days, today: P.today, prevFrom: P.prev.fromYmd, prevTo: P.prev.toYmd },
+        period: { month: P.month || null, from: P.fromYmd, to: P.toYmd, days: P.days, today: P.today, prevFrom: P.prev.fromYmd, prevTo: P.prev.toYmd },
         compliance: { ...cur, criticalOverdue: critOverdue, prev },
         executed: { total: execCur.length, prevTotal: execPrev.length, byKind: kindCount },
         condition: { ...condCur, prev: condPrev },
@@ -465,12 +613,58 @@ export default function analysisRoutes({ prisma, auth, requireRole }) {
           openAvgAgeDays: openAges.length ? r1(openAges.reduce((s, d) => s + d, 0) / openAges.length) : null,
         },
         quality,
-      });
+        overdueList,
+      };
+}
+
+export default function analysisRoutes({ prisma, auth, requireRole }) {
+  const router = Router();
+  const managers = requireRole ? requireRole(["ADMIN", "SUPERVISOR"]) : (req, res, next) => next();
+
+  const handle = (opts, label) => async (req, res) => {
+    try {
+      const plantId = req.currentPlantId;
+      if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
+      const data = await computeOverview(prisma, plantId, req.query, opts);
+      if (opts.withOverdueList) data.narrative = narrative(data);
+      return res.json(data);
     } catch (e) {
-      logger.error("analysis/overview", e);
+      if (e instanceof PeriodError) return res.status(400).json({ error: e.message });
+      logger.error(label, e);
       return res.status(500).json({ error: "Error calculando el análisis" });
     }
-  });
+  };
+
+  // GET /api/analysis/overview?days=90 | from&to
+  router.get("/overview", auth, managers, handle({}, "analysis/overview"));
+
+  // GET /api/analysis/monthly-report?month=YYYY-MM  (compara contra el mes calendario anterior)
+  router.get("/monthly-report", auth, managers, (req, res, next) => {
+    if (!/^\d{4}-\d{2}$/.test(String(req.query.month || ""))) return res.status(400).json({ error: "Indica el mes (YYYY-MM)" });
+    return next();
+  }, handle({ withOverdueList: true }, "analysis/monthly-report"));
 
   return router;
+}
+
+/**
+ * Sustituye en el resumen del dashboard los totales de actividades del mes por los verificados,
+ * para que el resumen con IA y el correo mensual digan lo mismo que el Reporte mensual.
+ */
+export async function withVerifiedMonth(prisma, plantId, month, dashboard) {
+  const ov = await computeOverview(prisma, Number(plantId), { month });
+  const c = ov.compliance;
+  const verified = {
+    completed: c.completed,
+    pending: c.dueToday + c.upcoming,
+    overdue: c.overdue,
+    total: c.due + c.dueToday + c.upcoming,
+  };
+  const patched = {
+    ...(dashboard || {}),
+    activities: { ...(dashboard?.activities || {}), ...verified },
+    monthlyTotals: { ...(dashboard?.monthlyTotals || {}), ...verified },
+    alerts: { ...(dashboard?.alerts || {}), overdueActivities: c.overdue },
+  };
+  return { overview: ov, dashboard: patched };
 }

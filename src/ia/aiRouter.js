@@ -11,6 +11,7 @@ import {
   AI_SCHEMA_VERSION,
 } from "./aiConfig.js";
 import { dualRateLimit } from "./aiRateLimit.js";
+import { withVerifiedMonth } from "../routes/analysis.routes.js";
 
 export default function aiRouter({
   prisma,
@@ -85,7 +86,7 @@ export default function aiRouter({
         }
       }
 
-      const dashboard = await buildDashboardSummary({
+      const rawDashboard = await buildDashboardSummary({
         prisma,
         user: req.user,
         month: finalMonth,
@@ -93,6 +94,8 @@ export default function aiRouter({
         plantId: currentPlantId,
         toStartOfDaySafe,
       });
+      // Totales del mes verificados (los mismos del Reporte mensual) para que la IA no contradiga el reporte.
+      const { dashboard } = await withVerifiedMonth(prisma, currentPlantId, finalMonth, rawDashboard);
 
       const ai = await getAISummary({
         month: finalMonth,

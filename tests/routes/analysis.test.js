@@ -6,6 +6,7 @@ import {
   lubricantKind,
   toDisplayQty,
   oleIndex,
+  narrative,
 } from "../../src/routes/analysis.routes.js";
 
 const MX = "America/Mexico_City";
@@ -88,5 +89,41 @@ describe("oleIndex", () => {
   it("producto de los tres indicadores", () => {
     expect(oleIndex(90, 80, 95)).toBe(68.4);
     expect(oleIndex(null, 80, 95)).toBeNull();
+  });
+});
+
+describe("resolvePeriod mensual", () => {
+  it("mes calendario y mes anterior completo", () => {
+    const p = resolvePeriod({ month: "2026-03" }, MX);
+    expect(p).toMatchObject({ fromYmd: "2026-03-01", toYmd: "2026-03-31", days: 31, month: "2026-03" });
+    expect(p.prev).toMatchObject({ fromYmd: "2026-02-01", toYmd: "2026-02-28" });
+    expect(resolvePeriod({ month: "2026-13" }, MX).error).toBeTruthy();
+  });
+});
+
+describe("narrative", () => {
+  const base = {
+    period: { month: "2026-08" },
+    compliance: { due: 15, completed: 11, onTime: 3, late: 8, overdue: 4, criticalOverdue: 1, avgLateDays: 3.4, complianceRate: 73.3, onTimeRate: 20, dueToday: 0, upcoming: 0, prev: { complianceRate: 100, onTimeRate: 0 } },
+    executed: { total: 20 },
+    condition: { total: 20, normalRate: 95, abnormal: 1, MALO: 0, CRITICO: 1 },
+    consumption: { oilL: 0.6, greaseKg: 0.59, cost: 124, prev: { cost: 0 }, byLubricant: [] },
+    reports: { total: 0, byStatus: { RESOLVED: 0 }, openNow: 1, openAvgAgeDays: 10 },
+    technicians: [],
+    failures: [{ name: "CORTADORA", total: 1 }],
+    quality: { overdueWithoutTechnician: 2, completedWithoutInventoryDeduction: 0 },
+  };
+  it("usa solo los números dados y compara contra el mes anterior", () => {
+    const n = narrative(base);
+    expect(n.headline).toBe("Cumplimiento 73.3% · Puntualidad 20% · 4 vencidas");
+    expect(n.paragraphs[0]).toContain("Se completaron 11 de 15");
+    expect(n.paragraphs[0]).toContain("−26.7 pts vs. mes anterior");
+    expect(n.paragraphs.join(" ")).toContain("1 sigue abierto");
+    expect(n.actions[0]).toBe("Atender primero la actividad vencida en equipos críticos.");
+    expect(n.actions.some((a) => a.includes("Asignar técnico a 2"))).toBe(true);
+  });
+  it("sin actividades", () => {
+    const n = narrative({ ...base, compliance: { ...base.compliance, due: 0 }, executed: { total: 0 } });
+    expect(n.headline).toMatch(/Sin actividades/);
   });
 });

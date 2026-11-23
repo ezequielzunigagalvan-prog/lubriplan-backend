@@ -4,6 +4,7 @@ import {
   AI_SCHEMA_VERSION,
 } from "../ia/aiConfig.js";
 import { sendMonthlyExecutiveReportEmail } from "../services/email/email.service.js";
+import { withVerifiedMonth } from "../routes/analysis.routes.js";
 import { logger } from "../config/logger.js";
 
 function nowInTimezone(timezone = "America/Mexico_City") {
@@ -20,18 +21,6 @@ function previousMonthYm(date = new Date()) {
   const d = new Date(date);
   d.setMonth(d.getMonth() - 1);
   return ym(d);
-}
-
-function safePct(num, den) {
-  const a = Number(num || 0);
-  const b = Number(den || 0);
-  if (b <= 0) return 0;
-  return Math.round((a / b) * 100);
-}
-
-function clamp(n, a, b) {
-  const x = Number(n || 0);
-  return Math.max(a, Math.min(b, x));
 }
 
 function shouldRunForPlant(plant, nowTz) {
@@ -155,7 +144,7 @@ export async function runMonthlyExecutiveReportJob({
         },
       });
 
-      const dashboard = await buildDashboardSummary({
+      const rawDashboard = await buildDashboardSummary({
         prisma,
         user: {
           id: null,
@@ -168,30 +157,21 @@ export async function runMonthlyExecutiveReportJob({
         toStartOfDaySafe,
       });
 
-      const mt = dashboard?.monthlyTotals || dashboard?.activities || {};
+      // Mismos cálculos verificados que el Reporte mensual (antes usaba otra fórmula y una
+      // "eficiencia operativa" inventada).
+      const { overview, dashboard } = await withVerifiedMonth(prisma, plant.id, reportMonth, rawDashboard);
       const alerts = dashboard?.alerts || {};
-      const conditionReports =
-        dashboard?.activities?.conditionReports ||
-        mt?.conditionReports ||
-        {};
+      const c = overview.compliance;
+      const rep = overview.reports;
 
-      const completed = Number(mt.completed || 0);
-      const pending = Number(mt.pending || 0);
-      const overdue = Number(mt.overdue || 0);
-      const total = Number(mt.total || completed + pending + overdue || 0);
-      const conditionReported =
-        Number(conditionReports.OPEN || 0) +
-        Number(conditionReports.IN_PROGRESS || 0) +
-        Number(conditionReports.RESOLVED || 0) +
-        Number(conditionReports.DISMISSED || 0);
-      const conditionAttended =
-        Number(conditionReports.IN_PROGRESS || 0) +
-        Number(conditionReports.RESOLVED || 0) +
-        Number(conditionReports.DISMISSED || 0);
-
-      const compliance = safePct(completed, total);
-      const penalty = total > 0 ? Math.round((overdue / total) * 100) : 0;
-      const opEfficiency = clamp(compliance - Math.round(penalty * 0.75), 0, 100);
+      const completed = c.completed;
+      const pending = c.dueToday + c.upcoming;
+      const overdue = c.overdue;
+      const total = c.due + c.dueToday + c.upcoming;
+      const conditionReported = rep.total;
+      const conditionAttended = rep.byStatus.IN_PROGRESS + rep.byStatus.RESOLVED + rep.byStatus.DISMISSED;
+      const compliance = c.complianceRate ?? 0;
+      const onTimeRate = c.onTimeRate ?? 0;
 
       const ai = await getAISummary({
         month: reportMonth,
@@ -217,14 +197,12 @@ export async function runMonthlyExecutiveReportJob({
           pending,
           overdue,
           compliance,
-          opEfficiency,
+          onTimeRate,
           lowStock: Number(alerts?.lowStockCount || 0),
-          unassigned: Number(alerts?.unassignedPending || 0),
+          unassigned: overview.quality.overdueWithoutTechnician,
           conditionReported,
           conditionAttended,
-          conditionOpen:
-            Number(alerts?.conditionOpenCount || 0) +
-            Number(alerts?.conditionInProgressCount || 0),
+          conditionOpen: rep.openNow,
           executiveSummary: summary?.executiveSummary || "",
           highlights: Array.isArray(summary?.highlights) ? summary.highlights : [],
           recommendations: Array.isArray(summary?.recommendations)
