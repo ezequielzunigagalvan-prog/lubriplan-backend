@@ -32,7 +32,7 @@
     import conditionReportsRoutes from "./routes/conditionReports.routes.js";
 import notificationsRoutes from "./routes/notifications.routes.js";
 import { sseHub } from "./realtime/sseHub.js";
-import { notifyManagers, notifyTechnicianAssignee, notifyLowStockIfNew } from "./notifications/notify.js"; 
+import { notifyManagers, notifyTechnicianAssignee, notifyLowStockIfNew, notifyConditionReporter } from "./notifications/notify.js"; 
 import realtimeRoutes from "./routes/realtime.routes.js";
 import adminLinksRoutes from "./routes/admin.links.routes.js";
 import adminOnboardingRoutes from "./routes/admin.onboarding.routes.js";
@@ -60,6 +60,7 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
   import { validateStateChangeAllowed } from "./middleware/validateExecutionStateTransition.js";
   import { validateFileMimeType } from "./utils/mimeValidator.js";
   import { runOverdueSummaryJob, startOverdueSummaryScheduler } from "./jobs/overdueSummary.job.js";
+  import { startOverdueReminderScheduler } from "./jobs/overdueReminder.job.js";
   import uploadsRoutes from "./routes/uploads.routes.js";
   import exportRoutes from "./routes/export.js";
   import importRoutes from "./routes/import.js";
@@ -440,6 +441,10 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
     startMonthlyExecutiveReportScheduler({ prisma, buildDashboardSummary, toStartOfDaySafe, baseUrl });
     startOverdueSummaryScheduler({ prisma, baseUrl });
     startMonthlyTechSummaryScheduler({ prisma });
+    // Recordatorio diario de vencidas en la campana (técnicos y supervisores).
+    if (String(process.env.OVERDUE_REMINDER_ENABLED || "true").toLowerCase() !== "false") {
+      startOverdueReminderScheduler({ prisma });
+    }
   } else {
     logger.info("[STARTUP] Correos programados de lubricación apagados (LUBRIPLAN_JOBS_ENABLED != true)");
   }
@@ -3089,6 +3094,10 @@ app.patch(
         select: {
           id: true,
           status: true,
+          technicianId: true,
+          manualTitle: true,
+          route: { select: { name: true, equipment: { select: { name: true } } } },
+          equipment: { select: { name: true } },
         },
       });
 
@@ -3155,6 +3164,19 @@ app.patch(
           },
         },
       });
+
+      if (exec.technicianId !== tech.id) {
+        const eqName = exec.route?.equipment?.name || exec.equipment?.name || "";
+        notifyTechnicianAssignee(prisma, {
+          plantId,
+          technicianId: tech.id,
+          actorUserId: req.user?.id,
+          type: "EXEC_ASSIGNED",
+          title: "Actividad asignada",
+          message: `${exec.route?.name || exec.manualTitle || "Actividad"}${eqName ? ` · ${eqName}` : ""} · ${String(updated.scheduledAt?.toISOString?.() || "").slice(0, 10)}`,
+          link: `/activities?executionId=${updated.id}`,
+        }).catch((err) => logger.error("No se pudo notificar asignación:", err));
+      }
 
       res.json({ ok: true, item: updated });
     } catch (e) {
@@ -4464,6 +4486,18 @@ app.post(
         });
       }
 
+      if (assignedTechnicianId) {
+        notifyTechnicianAssignee(prisma, {
+          plantId,
+          technicianId: assignedTechnicianId,
+          actorUserId: req.user?.id,
+          type: "EXEC_ASSIGNED",
+          title: "Nueva ruta asignada",
+          message: `${route.name}${route.equipment?.name ? ` · ${route.equipment.name}` : ""}`,
+          link: `/routes/${route.id}`,
+        }).catch((err) => logger.error("No se pudo notificar ruta nueva:", err));
+      }
+
       return res.status(201).json(route);
     } catch (error) {
       logger.error("### ERROR POST ROUTES NUEVO ###", error);
@@ -4583,6 +4617,7 @@ app.put(
           routeKind: true,
           imageUrl: true,
           imagePublicId: true,
+          technicianId: true,
         },
       });
 
@@ -4944,6 +4979,18 @@ app.put(
       } else {
       }
 
+      if (updated?.technicianId && updated.technicianId !== existingRoute.technicianId) {
+        notifyTechnicianAssignee(prisma, {
+          plantId,
+          technicianId: updated.technicianId,
+          actorUserId: req.user?.id,
+          type: "EXEC_ASSIGNED",
+          title: "Ruta asignada",
+          message: `${updated.name}${updated.equipment?.name ? ` · ${updated.equipment.name}` : ""}`,
+          link: `/routes/${updated.id}`,
+        }).catch((err) => logger.error("No se pudo notificar asignación de ruta:", err));
+      }
+
       return res.json(updated);
     } catch (error) {
       logger.error("Error actualizando ruta:", error);
@@ -5159,6 +5206,18 @@ app.patch(
         data: { technicianId },
       });
 
+      if (routesUpdated.count || updated.count) {
+        notifyTechnicianAssignee(prisma, {
+          plantId,
+          technicianId: tech.id,
+          actorUserId: req.user?.id,
+          type: "EXEC_ASSIGNED",
+          title: "Equipo asignado",
+          message: `${eq.name}${eq.code ? ` (${eq.code})` : ""} · ${routesUpdated.count} ruta${routesUpdated.count === 1 ? "" : "s"} y ${updated.count} actividad${updated.count === 1 ? "" : "es"} pendiente${updated.count === 1 ? "" : "s"}`,
+          link: `/equipments/${eq.id}`,
+        }).catch((err) => logger.error("No se pudo notificar asignación de equipo:", err));
+      }
+
       return res.json({
         ok: true,
         equipment: eq,
@@ -5215,7 +5274,7 @@ app.patch(
 
       const exists = await prisma.route.findFirst({
         where: { id, plantId },
-        select: { id: true },
+        select: { id: true, name: true, technicianId: true, equipment: { select: { name: true } } },
       });
 
       if (!exists) {
@@ -5226,6 +5285,18 @@ app.patch(
         where: { id },
         data: { technicianId: techId },
       });
+
+      if (techId != null && exists.technicianId !== techId) {
+        notifyTechnicianAssignee(prisma, {
+          plantId,
+          technicianId: techId,
+          actorUserId: req.user?.id,
+          type: "EXEC_ASSIGNED",
+          title: "Ruta asignada",
+          message: `${exists.name}${exists.equipment?.name ? ` · ${exists.equipment.name}` : ""}`,
+          link: `/routes/${id}`,
+        }).catch((err) => logger.error("No se pudo notificar asignación de ruta:", err));
+      }
 
       await prisma.execution.updateMany({
         where: {
@@ -7715,6 +7786,7 @@ app.patch(
               id: true,
               plantId: true,
               equipmentId: true,
+              reportedById: true,
               status: true,
               resolvedAt: true,
               equipment: {
@@ -7779,7 +7851,18 @@ app.patch(
               : ""
           } · Reporte #${resolvedReport.id}`,
           link: "/condition-reports?status=RESOLVED",
+          excludeUserId: req.user?.id,
         }).catch((notifyErr) => logger.error("No se pudo notificar resolucion de reporte:", notifyErr));
+
+        notifyConditionReporter(prisma, {
+          plantId,
+          reportedById: resolvedReport.reportedById,
+          actorUserId: req.user?.id,
+          type: "CONDITION_RESOLVED",
+          title: "Tu reporte quedó resuelto",
+          message: `${resolvedReport.equipment?.name || "Equipo"} · Reporte #${resolvedReport.id}`,
+          link: `/condition-reports?status=RESOLVED&reportId=${resolvedReport.id}`,
+        }).catch((notifyErr) => logger.error("No se pudo notificar al que reportó:", notifyErr));
 
         sseHub.broadcast("condition-report.resolved", {
           plantId,

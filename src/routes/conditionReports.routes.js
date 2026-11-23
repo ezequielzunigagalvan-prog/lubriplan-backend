@@ -3,7 +3,7 @@ import express from "express";
 import multer from "multer";
 import { normalizeImageInput, uploadBufferToCloudinary } from "../lib/cloudinary.js";
 
-import { notifyManagers, notifyTechnicianAssignee } from "../notifications/notify.js";
+import { notifyManagers, notifyTechnicianAssignee, notifyConditionReporter } from "../notifications/notify.js";
 import { sseHub } from "../realtime/sseHub.js";
 import { sendConditionAlertEmail } from "../services/email/email.service.js";
 import { logger } from "../config/logger.js";
@@ -197,6 +197,7 @@ export default function conditionReportsRoutes({ prisma, auth }) {
       // Notifica managers en sistema
       await notifyManagers(prisma, {
         plantId,
+        excludeUserId: req.user?.id,
         type: "CONDITION_REPORTED",
         title: "Condición anormal reportada",
         message: `${item.equipment?.name || "Equipo"}${
@@ -336,7 +337,18 @@ export default function conditionReportsRoutes({ prisma, auth }) {
           updated.equipment?.code ? ` (${updated.equipment.code})` : ""
         } · Reporte #${updated.id}`,
         link: "/condition-reports?status=DISMISSED",
+        excludeUserId: req.user?.id,
       });
+
+      notifyConditionReporter(prisma, {
+        plantId,
+        reportedById: updated.reportedById,
+        actorUserId: req.user?.id,
+        type: "CONDITION_DISMISSED",
+        title: "Tu reporte fue revisado y descartado",
+        message: `${updated.equipment?.name || "Equipo"} · Reporte #${updated.id}`,
+        link: `/condition-reports?status=DISMISSED&reportId=${updated.id}`,
+      }).catch((err) => logger.error("No se pudo notificar al que reportó:", err));
 
       sseHub.broadcast("condition-report.dismissed", {
         plantId,
@@ -497,6 +509,7 @@ export default function conditionReportsRoutes({ prisma, auth }) {
             updated.equipment?.code ? ` (${updated.equipment.code})` : ""
           } · Reporte #${updated.id} · Ejecución #${execution.id}`,
           link: "/condition-reports?status=IN_PROGRESS",
+          excludeUserId: req.user?.id,
         });
 
         sseHub.broadcast("condition-report.corrective-scheduled", {
@@ -520,15 +533,26 @@ export default function conditionReportsRoutes({ prisma, auth }) {
         return { report: updated, execution };
       });
 
+      notifyConditionReporter(prisma, {
+        plantId,
+        reportedById: report.reportedById,
+        actorUserId: req.user?.id,
+        type: "CONDITION_REPORTED",
+        title: "Se programó la corrección de tu reporte",
+        message: `${report.equipment?.name || "Equipo"} · Reporte #${reportId} · para ${String(scheduledAt).slice(0, 10)}`,
+        link: `/condition-reports?status=IN_PROGRESS&reportId=${reportId}`,
+      }).catch((err) => logger.error("No se pudo notificar al que reportó:", err));
+
       if (techId != null) {
         try {
           await notifyTechnicianAssignee(prisma, {
             plantId,
             technicianId: techId,
+            actorUserId: req.user?.id,
             type: "EXEC_ASSIGNED",
-            title: "Accion correctiva asignada",
+            title: "Acción correctiva asignada",
             message: `${manualTitle} programada para ${String(scheduledAt).slice(0, 10)}`,
-            link: "/activities",
+            link: `/activities?executionId=${result.execution.id}`,
           });
         } catch (notifyErr) {
           logger.error("No se pudo notificar accion correctiva al tecnico:", notifyErr);

@@ -67,6 +67,8 @@ export async function notifyTechnicianAssignee(prisma, payload) {
   });
 
   if (!user?.id) return { notified: 0 };
+  // Quien hace la asignación no necesita avisarse a sí mismo.
+  if (payload?.actorUserId != null && Number(payload.actorUserId) === user.id) return { notified: 0, self: true };
 
   await notifyUser(prisma, user.id, {
     plantId: scopedPlantId,
@@ -100,7 +102,8 @@ export async function notifyManagers(prisma, payload) {
     select: { id: true },
   });
 
-  const ids = managers.map((u) => u.id);
+  const exclude = payload.excludeUserId != null ? Number(payload.excludeUserId) : null;
+  const ids = managers.map((u) => u.id).filter((id) => id !== exclude);
   if (!ids.length) return { notified: 0 };
 
   // Individual creates to obtain IDs for proper SSE payloads
@@ -168,4 +171,29 @@ export async function notifyLowStockIfNew(prisma, payload) {
   }
 
   return result;
+}
+
+/**
+ * Avisa al usuario que levantó un reporte de condición (normalmente un técnico)
+ * cuando su reporte cambia de estado: descartado, correctiva programada o resuelto.
+ */
+export async function notifyConditionReporter(prisma, payload) {
+  const userId = payload?.reportedById != null ? Number(payload.reportedById) : null;
+  if (!Number.isFinite(userId)) return { notified: 0 };
+  if (payload?.actorUserId != null && Number(payload.actorUserId) === userId) return { notified: 0, self: true };
+
+  const user = await prisma.user.findFirst({
+    where: { id: userId, active: true },
+    select: { id: true },
+  });
+  if (!user) return { notified: 0 };
+
+  await notifyUser(prisma, user.id, {
+    plantId: payload.plantId,
+    type: payload.type,
+    title: payload.title,
+    message: payload.message || null,
+    link: payload.link || null,
+  });
+  return { notified: 1, userId: user.id };
 }
