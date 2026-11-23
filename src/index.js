@@ -73,6 +73,7 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
   import monthlyReportRoutes from "./routes/monthlyReport.routes.js";
   import lubricationCardsRoutes from "./routes/lubricationCards.routes.js";
   import olpRoutes from "./routes/olp.routes.js";
+  import historyRoutes from "./routes/history.routes.js";
   import { notifyIfLowStock } from "./services/inventory/lowStock.js";
   import { mountMaintenance } from "./modules/maintenance/index.js";
   import { startMaintenanceScheduler } from "./modules/maintenance/scheduler/index.js";
@@ -185,6 +186,8 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
 
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,x-plant-id,x-request-id');
+    // Para que el navegador lea el nombre del archivo en las descargas (CSV/Excel).
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
 
     if (req.method === 'OPTIONS') {
       return res.status(204).end();
@@ -342,6 +345,8 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
   app.use("/api", lubricationCardsRoutes({ prisma, auth: requireAuth, requireRole }));
   // Órdenes de Lubricación Preventiva (OLP)
   app.use("/api/preventive-orders", olpRoutes({ prisma, auth: requireAuth, requireRole }));
+  // Historial / auditoría
+  app.use("/api/history", historyRoutes({ prisma, auth: requireAuth }));
 
   app.use("/api", realtimeRoutes({ auth: requireAuth }));
 
@@ -4960,15 +4965,44 @@ app.delete(
       const id = Number(req.params.id);
       if (!Number.isFinite(id)) return res.status(400).json({ error: "id invalido" });
 
-      const deleted = await prisma.route.deleteMany({
+      const route = await prisma.route.findFirst({
         where: { id, plantId },
+        select: { id: true, name: true, equipmentId: true, instructions: true },
       });
+      if (!route) return res.status(404).json({ error: "Ruta no encontrada" });
 
-      if (!deleted.count) {
-        return res.status(404).json({ error: "Ruta no encontrada" });
+      // Una ruta en órdenes preventivas en curso o cerradas no se borra: se perdería el registro de la orden.
+      const olpItems = await prisma.preventiveOrderItem.count({
+        where: { routeId: id, preventiveOrder: { status: { not: "DRAFT" } } },
+      });
+      if (olpItems > 0) {
+        return res.status(409).json({
+          error: `No se puede eliminar: la ruta está en ${olpItems} orden${olpItems === 1 ? "" : "es"} preventiva${olpItems === 1 ? "" : "s"} emitida${olpItems === 1 ? "" : "s"}.`,
+        });
       }
 
-      res.json({ ok: true });
+      // La relación Execution→Route borra en cascada. Para no perder el historial (auditoría),
+      // las actividades completadas se desligan de la ruta y conservan equipo, nombre e instrucciones.
+      const result = await prisma.$transaction(async (tx) => {
+        const untitled = await tx.execution.updateMany({
+          where: { plantId, routeId: id, status: "COMPLETED", manualTitle: null },
+          data: {
+            routeId: null,
+            equipmentId: route.equipmentId,
+            manualTitle: route.name,
+            manualInstructions: route.instructions || null,
+          },
+        });
+        const titled = await tx.execution.updateMany({
+          where: { plantId, routeId: id, status: "COMPLETED" },
+          data: { routeId: null, equipmentId: route.equipmentId },
+        });
+        const removedPending = await tx.execution.deleteMany({ where: { plantId, routeId: id } });
+        await tx.route.delete({ where: { id } });
+        return { preserved: untitled.count + titled.count, removedPending: removedPending.count };
+      });
+
+      res.json({ ok: true, ...result });
     } catch (error) {
       logger.error("Error eliminando ruta:", error);
       res.status(500).json({ error: "Error interno del servidor" });
@@ -7826,377 +7860,7 @@ app.patch(
 
 
 
-  // =========================
-  // HISTORY (COMPLETED EXECUTIONS)
-  // GET /history/executions?from=YYYY-MM-DD&to=YYYY-MM-DD&page=1&pageSize=20&condition=CRITICO&q=texto
-  // + NUEVO: /history/executions?filter=bad-condition&month=YYYY-MM
-  // =========================
-  app.get("/api/history/executions", requireAuth, async (req, res) => {
-    try {
-      const plantId = req.currentPlantId;
-if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
-      const fromStr = String(req.query.from || "");
-      const toStr = String(req.query.to || "");
-      const monthStr = String(req.query.month || "").trim(); // nuevo
-      const filter = String(req.query.filter || "").trim().toLowerCase(); // nuevo
-
-      const conditionRaw = String(req.query.condition || "").toUpperCase().trim(); // ALL | BUENO | ...
-      const q = String(req.query.q || "").trim();
-
-      const pageRaw = Number(req.query.page || 1);
-      const pageSizeRaw = Number(req.query.pageSize || 20);
-
-      const page = Number.isFinite(pageRaw) ? Math.max(1, pageRaw) : 1;
-      const pageSize = Number.isFinite(pageSizeRaw) ? Math.min(Math.max(1, pageSizeRaw), 200) : 20;
-
-      // =========================
-      // Rangos: from/to o month
-      // =========================
-      const parseMonthRangeLocal = (ym) => {
-        if (!/^\d{4}-\d{2}$/.test(String(ym || ""))) return null;
-        const [y, m] = String(ym).split("-").map(Number);
-        if (!Number.isFinite(y) || !Number.isFinite(m)) return null;
-
-        const from = new Date(y, m - 1, 1, 0, 0, 0, 0);
-        const to = new Date(y, m, 0, 23, 59, 59, 999);
-        return { from, to };
-      };
-
-      const parseQueryDateLocal = (value, endOfDay = false) => {
-        if (!value) return null;
-        const local = parseDateOnlyLocal(String(value).slice(0, 10));
-        if (local && !Number.isNaN(local.getTime())) {
-          if (endOfDay) local.setHours(23, 59, 59, 999);
-          else local.setHours(0, 0, 0, 0);
-          return local;
-        }
-
-        const dt = new Date(value);
-        if (Number.isNaN(dt.getTime())) return null;
-        if (endOfDay) dt.setHours(23, 59, 59, 999);
-        else dt.setHours(0, 0, 0, 0);
-        return dt;
-      };
-
-      let from = parseQueryDateLocal(fromStr, false);
-      let to = parseQueryDateLocal(toStr, true);
-
-      // Validacion minima
-      if (from && Number.isNaN(from.getTime())) return res.status(400).json({ error: "from invalido" });
-      if (to && Number.isNaN(to.getTime())) return res.status(400).json({ error: "to invalido" });
-
-      // Si NO mandan from/to pero si month, usamos month
-      if ((!fromStr || !toStr) && monthStr && (!from || !to)) {
-        const r = parseMonthRangeLocal(monthStr);
-        if (r) {
-          from = r.from;
-          to = r.to;
-        }
-      }
-
-      // =========================
-  // RBAC scope (TECHNICIAN)
-  // - Historial: solo COMPLETED del tecnico
-  // =========================
-  const role = String(req.user?.role || "").toUpperCase();
-  const myTechId = req.user?.technicianId != null ? Number(req.user.technicianId) : null;
-
-  const scopeWhereByUser = (baseWhere = {}) => {
-    if (role !== "TECHNICIAN") return baseWhere;
-    if (!Number.isFinite(myTechId)) {
-      // si no sabemos qué técnico es, no le muestres historial (seguro)
-      return { ...baseWhere, technicianId: -1 };
-    }
-    return { ...baseWhere, technicianId: myTechId };
-  };
-
-      // =========================
-      // Condiciones: condition o filter=bad-condition
-      // =========================
-      const validConditions = new Set(["BUENO", "REGULAR", "MALO", "CRITICO"]);
-      const condition = validConditions.has(conditionRaw) ? conditionRaw : ""; // si viene basura, ignora
-
-      let conditionWhere = {};
-      // prioridad: si el usuario manda condition explicito, usalo
-      if (condition) {
-        conditionWhere = { condition };
-      } else if (filter === "bad-condition") {
-        // nuevo: ambas
-        conditionWhere = { condition: { in: ["MALO", "CRITICO"] } };
-      }
-
-      const where = scopeWhereByUser({
-         plantId,
-    status: "COMPLETED",
-    ...(from || to
-      ? {
-          executedAt: {
-            ...(from ? { gte: from } : {}),
-            ...(to ? { lte: to } : {}),
-          },
-        }
-      : {}),
-    ...conditionWhere,
-    ...(q
-      ? {
-          OR: [
-            { observations: { contains: q, mode: "insensitive" } },
-            { manualTitle: { contains: q, mode: "insensitive" } },
-            { equipment: { is: { name: { contains: q, mode: "insensitive" } } } },
-            { equipment: { is: { code: { contains: q, mode: "insensitive" } } } },
-            { route: { is: { name: { contains: q, mode: "insensitive" } } } },
-            { route: { is: { equipment: { is: { name: { contains: q, mode: "insensitive" } } } } } },
-            { route: { is: { equipment: { is: { code: { contains: q, mode: "insensitive" } } } } } },
-            { route: { is: { lubricant: { is: { name: { contains: q, mode: "insensitive" } } } } } },
-            { route: { is: { lubricant: { is: { code: { contains: q, mode: "insensitive" } } } } } },
-            { technician: { is: { name: { contains: q, mode: "insensitive" } } } },
-            { technician: { is: { code: { contains: q, mode: "insensitive" } } } },
-          ],
-        }
-      : {}),
-  });
-
-      const skip = (page - 1) * pageSize;
-
-      const items = await prisma.execution.findMany({
-        where,
-        include: {
-          route: { include: { equipment: true, lubricant: true } },
-          technician: true,
-          lubricantMovements: {
-            include: {
-              lubricant: { select: { id: true, name: true, unit: true, code: true } },
-            },
-            orderBy: { createdAt: "desc" },
-          },
-        },
-        orderBy: { executedAt: "desc" },
-        skip,
-        take: pageSize,
-      });
-
-      const total = await prisma.execution.count({ where });
-
-      const grouped = await prisma.execution.groupBy({
-        by: ["condition"],
-        where,
-        _count: { _all: true },
-      });
-
-      const totals = { total, BUENO: 0, REGULAR: 0, MALO: 0, CRITICO: 0 };
-      for (const row of grouped) {
-        const k = String(row.condition || "").toUpperCase();
-        if (k in totals) totals[k] = row._count._all;
-      }
-
-      const pages = Math.max(1, Math.ceil(total / pageSize));
-
-      return res.json({
-        ok: true,
-        items,
-        meta: {
-          page,
-          pageSize,
-          total,
-          pages,
-          totals,
-          query: { filter, month: monthStr, condition: conditionRaw, from: fromStr, to: toStr }, // opcional, util
-        },
-      });
-    } catch (e) {
-      logger.error("Error history executions:", e);
-      return res.status(500).json({ error: "Error obteniendo historial" });
-    }
-  });
-
-
-
-  // =========================
-  // HISTORY: LUBRICANT MOVEMENTS (IN/OUT/ADJUST)
-  // GET /history/lubricant-movements?from=YYYY-MM-DD&to=YYYY-MM-DD&page=1&pageSize=20&type=IN&q=texto
-  // =========================
-  // =========================
-// HISTORY: LUBRICANT MOVEMENTS (IN/OUT/ADJUST)
-// GET /history/lubricant-movements?from=YYYY-MM-DD&to=YYYY-MM-DD&page=1&pageSize=20&type=IN&q=texto
-// MULTI-PLANTA
-// =========================
-app.get("/api/history/lubricant-movements", requireAuth, async (req, res) => {
-  try {
-    const plantId = req.currentPlantId;
-    if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
-
-    const fromStr = String(req.query.from || "");
-    const toStr = String(req.query.to || "");
-    const q = String(req.query.q || "").trim();
-    const type = String(req.query.type || "").toUpperCase().trim(); // IN | OUT | ADJUST | ""
-
-    const pageRaw = Number(req.query.page || 1);
-    const pageSizeRaw = Number(req.query.pageSize || 20);
-
-    const page = Number.isFinite(pageRaw) ? Math.max(1, pageRaw) : 1;
-    const pageSize = Number.isFinite(pageSizeRaw)
-      ? Math.min(Math.max(1, pageSizeRaw), 200)
-      : 20;
-
-    const parseQueryDateLocal = (value, endOfDay = false) => {
-      if (!value) return null;
-      const local = parseDateOnlyLocal(String(value).slice(0, 10));
-      if (local && !Number.isNaN(local.getTime())) {
-        if (endOfDay) local.setHours(23, 59, 59, 999);
-        else local.setHours(0, 0, 0, 0);
-        return local;
-      }
-
-      const dt = new Date(value);
-      if (Number.isNaN(dt.getTime())) return null;
-      if (endOfDay) dt.setHours(23, 59, 59, 999);
-      else dt.setHours(0, 0, 0, 0);
-      return dt;
-    };
-
-    const from = parseQueryDateLocal(fromStr, false);
-    const to = parseQueryDateLocal(toStr, true);
-
-    if (from && Number.isNaN(from.getTime())) {
-      return res.status(400).json({ error: "from invalido" });
-    }
-
-    if (to && Number.isNaN(to.getTime())) {
-      return res.status(400).json({ error: "to invalido" });
-    }
-
-    const role = String(req.user?.role || "").toUpperCase();
-    const myTechId =
-      req.user?.technicianId != null ? Number(req.user.technicianId) : null;
-
-    // =========================
-    // Base WHERE por planta
-    // - manuales / ajustes sin ejecucion: se filtran por lubricant.plantId
-    // - ligados a ejecucion: se filtran por execution.plantId
-    // =========================
-    const baseWhere = {
-      AND: [
-        {
-          OR: [
-            { lubricant: { plantId } },
-            { execution: { is: { plantId } } },
-          ],
-        },
-        ...(from || to
-          ? [
-              {
-                OR: [
-                  {
-                    createdAt: {
-                      ...(from ? { gte: from } : {}),
-                      ...(to ? { lte: to } : {}),
-                    },
-                  },
-                  {
-                    execution: {
-                      is: {
-                        executedAt: {
-                          ...(from ? { gte: from } : {}),
-                          ...(to ? { lte: to } : {}),
-                        },
-                      },
-                    },
-                  },
-                ],
-              },
-            ]
-          : []),
-        ...(type ? [{ type }] : []),
-        ...(q
-          ? [
-              {
-                OR: [
-                  { reason: { contains: q, mode: "insensitive" } },
-                  { note: { contains: q, mode: "insensitive" } },
-                  { lubricant: { name: { contains: q, mode: "insensitive" } } },
-                  { lubricant: { code: { contains: q, mode: "insensitive" } } },
-                ],
-              },
-            ]
-          : []),
-      ],
-    };
-
-    // =========================
-    // Scope por rol
-    // =========================
-    const where =
-      role === "TECHNICIAN"
-        ? Number.isFinite(myTechId)
-          ? {
-              AND: [
-                baseWhere,
-                {
-                  execution: {
-                    is: {
-                      plantId,
-                      technicianId: myTechId,
-                    },
-                  },
-                },
-              ],
-            }
-          : {
-              AND: [
-                baseWhere,
-                { executionId: -1 },
-              ],
-            }
-        : baseWhere;
-
-    const skip = (page - 1) * pageSize;
-
-    const items = await prisma.lubricantMovement.findMany({
-      where,
-      include: {
-        lubricant: {
-          select: { id: true, name: true, unit: true, code: true },
-        },
-        execution: {
-          include: {
-            route: { include: { equipment: true } },
-            technician: true,
-          },
-        },
-      },
-      orderBy: { createdAt: "desc" },
-      skip,
-      take: pageSize,
-    });
-
-    const total = await prisma.lubricantMovement.count({ where });
-    const pages = Math.max(1, Math.ceil(total / pageSize));
-
-    const grouped = await prisma.lubricantMovement.groupBy({
-      by: ["type"],
-      where,
-      _count: { _all: true },
-    });
-
-    const totals = { total, IN: 0, OUT: 0, ADJUST: 0 };
-    for (const row of grouped) {
-      const k = String(row.type || "").toUpperCase();
-      if (k in totals) totals[k] = row._count._all;
-    }
-
-    return res.json({
-      ok: true,
-      items,
-      meta: { page, pageSize, total, pages, totals },
-    });
-  } catch (e) {
-    logger.error("Error history lubricant-movements:", e);
-    return res.status(500).json({
-      error: "Error obteniendo movimientos",
-      detail: e?.message || null,
-    });
-  }
-});
+  // HISTORY: ver src/routes/history.routes.js (montado junto a OLP)
 
   // =========================
   // GET /alerts/technician-overload?windowDays=7&overdueLookbackDays=30&capacityPerDay=6&warnRatio=1.1&criticalRatio=1.4
