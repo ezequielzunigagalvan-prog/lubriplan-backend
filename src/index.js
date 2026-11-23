@@ -75,6 +75,7 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
   import lubricationCardsRoutes from "./routes/lubricationCards.routes.js";
   import olpRoutes from "./routes/olp.routes.js";
   import historyRoutes from "./routes/history.routes.js";
+  import analysisRoutes from "./routes/analysis.routes.js";
   import { notifyIfLowStock } from "./services/inventory/lowStock.js";
   import { mountMaintenance } from "./modules/maintenance/index.js";
   import { startMaintenanceScheduler } from "./modules/maintenance/scheduler/index.js";
@@ -348,6 +349,8 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
   app.use("/api/preventive-orders", olpRoutes({ prisma, auth: requireAuth, requireRole }));
   // Historial / auditoría
   app.use("/api/history", historyRoutes({ prisma, auth: requireAuth }));
+  // Análisis (indicadores con definiciones verificables)
+  app.use("/api/analysis", analysisRoutes({ prisma, auth: requireAuth, requireRole }));
 
   app.use("/api", realtimeRoutes({ auth: requireAuth }));
 
