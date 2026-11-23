@@ -2570,7 +2570,7 @@ app.get(
 app.get(
   "/api/alerts/repeated-failures",
   requireAuth,
-  requireRole(["ADMIN"]),
+  requireRole(["ADMIN", "SUPERVISOR"]),
   async (req, res) => {
     try {
       const plantId = req.currentPlantId;
@@ -2618,6 +2618,11 @@ app.get(
           executedAt: true,
           condition: true,
           observations: true,
+          manualTitle: true,
+          // Manuales/emergencias traen el equipo directo (sin ruta); antes no se contaban.
+          equipment: {
+            select: { id: true, name: true, code: true, location: true, criticality: true },
+          },
           route: {
             select: {
               id: true,
@@ -2640,7 +2645,7 @@ app.get(
       const byEq = new Map();
 
       for (const ev of badEvents) {
-        const eq = ev.route?.equipment;
+        const eq = ev.route?.equipment || ev.equipment;
         if (!eq?.id) continue;
 
         if (!byEq.has(eq.id)) {
@@ -2671,7 +2676,7 @@ app.get(
             executionId: ev.id,
             executedAt: ev.executedAt,
             condition: ev.condition,
-            routeName: ev.route?.name || "—",
+            routeName: ev.route?.name || ev.manualTitle || "Actividad manual",
             notes: ev.observations || null,
           });
         }
@@ -3260,25 +3265,58 @@ const isManager = (req) => ["ADMIN", "SUPERVISOR"].includes(getRole(req));
    EQUIPMENT
 ========================= */
 
+const EQUIPMENT_STATUSES = ["ACTIVO", "INACTIVO"];
+const EQUIPMENT_CRITICALITIES = ["BAJA", "MEDIA", "ALTA", "CRITICA"];
+
+// Valida y normaliza el cuerpo de crear/editar equipo. Devuelve { data } o { error }.
+function parseEquipmentBody(body = {}) {
+  const clean = (v, max) => {
+    const s = String(v ?? "").trim();
+    return s ? s.slice(0, max) : null;
+  };
+  const name = clean(body.name, 120);
+  const location = clean(body.location, 120);
+  const status = String(body.status ?? "").trim().toUpperCase();
+  const criticalityRaw = String(body.criticality ?? "")
+    .trim()
+    .toUpperCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "");
+
+  if (!name || !location || !status) return { error: "Nombre, ubicación y estado son obligatorios" };
+  if (!EQUIPMENT_STATUSES.includes(status)) return { error: "Estado inválido (ACTIVO o INACTIVO)" };
+  if (criticalityRaw && !EQUIPMENT_CRITICALITIES.includes(criticalityRaw)) {
+    return { error: "Criticidad inválida (BAJA, MEDIA, ALTA o CRITICA)" };
+  }
+
+  const code = clean(body.code, 40);
+  return {
+    data: {
+      name,
+      location,
+      status,
+      description: clean(body.description, 1000),
+      code: code ? code.toUpperCase().replace(/\s+/g, "-") : null,
+      criticality: criticalityRaw || null,
+      brand: clean(body.brand, 80),
+      model: clean(body.model, 80),
+    },
+  };
+}
+
+// El código es único en todo el sistema (también lo usa LubriPlan Card para el QR).
+const DUPLICATE_CODE_MSG = (code) =>
+  `Ya existe un equipo con el código ${code || ""}`.trim() + ". Usa otro código (puede estar registrado en otra planta).";
+
 // CREATE EQUIPMENT
 app.post("/api/equipment", requireAuth, requireManager, async (req, res) => {
   try {
     const plantId = req.currentPlantId;
     if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
 
-    const {
-      name,
-      location,
-      status,
-      description,
-      code,
-      areaId,
-      criticality,
-    } = req.body;
-
-    if (!name || !location || !status) {
-      return res.status(400).json({ error: "name, location y status son obligatorios" });
-    }
+    const { areaId } = req.body;
+    const parsed = parseEquipmentBody(req.body);
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
 
     const parsedAreaId =
       areaId != null && String(areaId).trim() !== "" ? Number(areaId) : null;
@@ -3302,15 +3340,8 @@ app.post("/api/equipment", requireAuth, requireManager, async (req, res) => {
     const equipment = await prisma.equipment.create({
       data: {
         plantId,
-        name: String(name).trim(),
-        location: String(location).trim(),
-        status: String(status).trim().toUpperCase(),
-        description: description?.trim() ? String(description).trim() : null,
-        code: code?.trim() ? String(code).trim().toUpperCase() : null,
+        ...parsed.data,
         areaId: parsedAreaId,
-        criticality: criticality?.trim()
-          ? String(criticality).trim().toUpperCase()
-          : null,
       },
       include: {
         area: true,
@@ -3319,11 +3350,10 @@ app.post("/api/equipment", requireAuth, requireManager, async (req, res) => {
 
     res.status(201).json(equipment);
   } catch (error) {
-    logger.error("Error creando equipo:", error);
-
     if (error?.code === "P2002") {
-      return res.status(409).json({ error: "Codigo/Tag ya existe" });
+      return res.status(409).json({ error: DUPLICATE_CODE_MSG(parseEquipmentBody(req.body).data?.code) });
     }
+    logger.error("Error creando equipo:", error);
 
     res.status(500).json({ error: "Error interno del servidor" });
   }
@@ -3414,23 +3444,20 @@ app.get("/api/equipment", requireAuth, async (req, res) => {
     }
 
     if (filter === "no-activities") {
+      const inRange = {
+        OR: [
+          { scheduledAt: { gte: fromDays, lte: now } },
+          { executedAt: { gte: fromDays, lte: now } },
+        ],
+      };
+      // Sin actividad = ni de sus rutas ni manual/emergencia registrada directo al equipo.
       where = {
         plantId,
         routes: { some: {} },
-        NOT: {
-          routes: {
-            some: {
-              executions: {
-                some: {
-                  OR: [
-                    { scheduledAt: { gte: fromDays, lte: now } },
-                    { executedAt: { gte: fromDays, lte: now } },
-                  ],
-                },
-              },
-            },
-          },
-        },
+        NOT: [
+          { routes: { some: { executions: { some: inRange } } } },
+          { executions: { some: inRange } },
+        ],
       };
     }
 
@@ -3449,13 +3476,14 @@ app.get("/api/equipment", requireAuth, async (req, res) => {
         select: {
           executedAt: true,
           condition: true,
+          equipmentId: true,
           route: { select: { equipmentId: true } },
         },
       });
 
       const byEq = new Map();
       for (const ex of badEvents || []) {
-        const eqId = ex?.route?.equipmentId;
+        const eqId = ex?.equipmentId ?? ex?.route?.equipmentId;
         if (eqId == null) continue;
 
         const t = new Date(ex.executedAt).getTime();
@@ -3515,20 +3543,25 @@ app.get("/api/equipment", requireAuth, async (req, res) => {
     const hadExecInRangeByEqId = new Set();
 
     if (filter !== "no-activities" && filter !== "repeated-failures" && ids.length) {
+      // Cuenta actividades de ruta y también manuales/emergencias (equipmentId directo).
       const execs = await prisma.execution.findMany({
         where: {
           plantId,
-          route: { equipmentId: { in: ids } },
-          OR: [
-            { scheduledAt: { gte: fromDays, lte: now } },
-            { executedAt: { gte: fromDays, lte: now } },
+          AND: [
+            { OR: [{ equipmentId: { in: ids } }, { route: { equipmentId: { in: ids } } }] },
+            {
+              OR: [
+                { scheduledAt: { gte: fromDays, lte: now } },
+                { executedAt: { gte: fromDays, lte: now } },
+              ],
+            },
           ],
         },
-        select: { route: { select: { equipmentId: true } } },
+        select: { equipmentId: true, route: { select: { equipmentId: true } } },
       });
 
       for (const e of execs) {
-        const eqId = e?.route?.equipmentId;
+        const eqId = e?.equipmentId ?? e?.route?.equipmentId;
         if (eqId != null) hadExecInRangeByEqId.add(eqId);
       }
     }
@@ -3546,18 +3579,19 @@ app.get("/api/equipment", requireAuth, async (req, res) => {
           status: "COMPLETED",
           executedAt: { gte: histFrom, lte: histTo },
           condition: { in: ["MALO", "CRITICO"] },
-          route: { equipmentId: { in: ids } },
+          OR: [{ equipmentId: { in: ids } }, { route: { equipmentId: { in: ids } } }],
         },
         select: {
           executedAt: true,
           condition: true,
+          equipmentId: true,
           route: { select: { equipmentId: true } },
         },
       });
 
       repeatedMap = new Map();
       for (const ex of badEvents || []) {
-        const eqId = ex?.route?.equipmentId;
+        const eqId = ex?.equipmentId ?? ex?.route?.equipmentId;
         if (eqId == null) continue;
 
         const t = new Date(ex.executedAt).getTime();
@@ -3685,6 +3719,42 @@ app.get("/api/equipment/:id/detail", requireAuth, async (req, res) => {
       return res.status(404).json({ error: "No encontrado" });
     }
 
+    // Historial real (completadas, más recientes primero) y próximas actividades,
+    // incluyendo manuales/emergencias registradas directo al equipo.
+    const eqExecWhere = { plantId, OR: [{ equipmentId: id }, { route: { equipmentId: id } }] };
+    const execSelect = {
+      id: true,
+      status: true,
+      origin: true,
+      scheduledAt: true,
+      executedAt: true,
+      condition: true,
+      observations: true,
+      manualTitle: true,
+      usedConvertedQuantity: true,
+      usedConvertedUnit: true,
+      technician: { select: { id: true, name: true, code: true } },
+      route: { select: { id: true, name: true, routeKind: true } },
+    };
+    const [historyRows, upcomingRows] = await Promise.all([
+      prisma.execution.findMany({
+        where: { ...eqExecWhere, status: "COMPLETED" },
+        orderBy: [{ executedAt: "desc" }, { id: "desc" }],
+        take: 30,
+        select: execSelect,
+      }),
+      prisma.execution.findMany({
+        where: { ...eqExecWhere, status: { in: ["PENDING", "OVERDUE"] } },
+        orderBy: [{ scheduledAt: "asc" }, { id: "asc" }],
+        take: 15,
+        select: execSelect,
+      }),
+    ]);
+    const withRouteName = (ex) => ({
+      ...ex,
+      route: ex.route ? { ...ex.route, name: buildRouteDisplayName(ex.route.name, ex.route.routeKind) } : null,
+    });
+
     // tecnico mas usado
     const techUsageMap = new Map();
 
@@ -3739,6 +3809,8 @@ app.get("/api/equipment/:id/detail", requireAuth, async (req, res) => {
               : execution?.route || null,
           }))
         : [],
+      history: historyRows.map(withRouteName),
+      upcoming: upcomingRows.map(withRouteName),
       routesCount: equipment._count?.routes || 0,
       executionsCount: equipment._count?.executions || 0,
       conditionReportsCount: equipment._count?.conditionReports || 0,
@@ -3760,20 +3832,11 @@ app.put("/api/equipment/:id", requireAuth, requireManager, async (req, res) => {
     if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
 
     const id = Number(req.params.id);
-    const {
-      name,
-      location,
-      status,
-      description,
-      code,
-      areaId,
-      criticality,
-    } = req.body;
+    const { areaId } = req.body;
 
     if (!Number.isFinite(id)) return res.status(400).json({ error: "id invalido" });
-    if (!name || !location || !status) {
-      return res.status(400).json({ error: "name, location y status son obligatorios" });
-    }
+    const parsed = parseEquipmentBody(req.body);
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
 
     const parsedAreaId =
       areaId != null && String(areaId).trim() !== "" ? Number(areaId) : null;
@@ -3793,18 +3856,15 @@ app.put("/api/equipment/:id", requireAuth, requireManager, async (req, res) => {
       }
     }
 
+    // Marca y modelo solo se tocan si vienen (la pantalla de edición anterior no los enviaba).
+    const { brand, model, ...rest } = parsed.data;
     const updatedCount = await prisma.equipment.updateMany({
       where: { id, plantId },
       data: {
-        name: String(name).trim(),
-        location: String(location).trim(),
-        status: String(status).trim().toUpperCase(),
-        description: description?.trim() ? String(description).trim() : null,
-        code: code?.trim() ? String(code).trim().toUpperCase() : null,
+        ...rest,
+        ...(req.body.brand !== undefined ? { brand } : {}),
+        ...(req.body.model !== undefined ? { model } : {}),
         areaId: parsedAreaId,
-        criticality: criticality?.trim()
-          ? String(criticality).trim().toUpperCase()
-          : null,
       },
     });
 
@@ -3819,10 +3879,10 @@ app.put("/api/equipment/:id", requireAuth, requireManager, async (req, res) => {
 
     return res.json(updated);
   } catch (error) {
-    logger.error("Error actualizando equipo:", error);
     if (error?.code === "P2002") {
-      return res.status(409).json({ error: "Codigo/Tag ya existe" });
+      return res.status(409).json({ error: DUPLICATE_CODE_MSG(parseEquipmentBody(req.body).data?.code) });
     }
+    logger.error("Error actualizando equipo:", error);
     res.status(500).json({ error: "Error interno del servidor" });
   }
 });
@@ -3836,14 +3896,39 @@ app.delete("/api/equipment/:id", requireAuth, requireManager, async (req, res) =
     const id = Number(req.params.id);
     if (!Number.isFinite(id)) return res.status(400).json({ error: "id invalido" });
 
-    const deleted = await prisma.equipment.deleteMany({
-      where: { id, plantId },
-    });
+    const exists = await prisma.equipment.findFirst({ where: { id, plantId }, select: { id: true } });
+    if (!exists) return res.status(404).json({ error: "Equipo no encontrado" });
 
-    if (!deleted.count) {
-      return res.status(404).json({ error: "Equipo no encontrado" });
+    // Borrar un equipo eliminaba EN CASCADA sus rutas, actividades (incluidas las
+    // completadas), reportes de condición, análisis de aceite, carta de lubricación y OLP.
+    // Solo se permite si no tiene nada de eso; si no, se sugiere marcarlo INACTIVO.
+    const [routes, executions, reports, samples, card, orders] = await Promise.all([
+      prisma.route.count({ where: { equipmentId: id, plantId } }),
+      prisma.execution.count({ where: { plantId, OR: [{ equipmentId: id }, { route: { equipmentId: id } }] } }),
+      prisma.conditionReport.count({ where: { equipmentId: id, plantId } }),
+      prisma.oilSample.count({ where: { equipmentId: id } }),
+      prisma.lubricationCard.count({ where: { equipmentId: id } }),
+      prisma.preventiveOrder.count({ where: { equipmentId: id, plantId } }),
+    ]);
+
+    const plural = (n, s, p) => `${n} ${n === 1 ? s : p}`;
+    const parts = [
+      routes && plural(routes, "ruta", "rutas"),
+      executions && plural(executions, "actividad", "actividades"),
+      reports && plural(reports, "reporte de condición", "reportes de condición"),
+      samples && plural(samples, "análisis de aceite", "análisis de aceite"),
+      card && "carta de lubricación",
+      orders && plural(orders, "orden preventiva", "órdenes preventivas"),
+    ].filter(Boolean);
+
+    if (parts.length) {
+      return res.status(409).json({
+        error: `No se puede eliminar: el equipo tiene ${parts.join(", ")}. Para dejar de usarlo sin perder su historial, cámbialo a INACTIVO.`,
+        counts: { routes, executions, reports, samples, card, orders },
+      });
     }
 
+    await prisma.equipment.deleteMany({ where: { id, plantId } });
     res.json({ ok: true });
   } catch (error) {
     logger.error("Error eliminando equipo:", error);
@@ -5018,6 +5103,9 @@ app.patch(
         select: { id: true, name: true, code: true, status: true },
       });
       if (!tech) return res.status(404).json({ error: "Técnico no encontrado" });
+      if (!["ACTIVO", "ACTIVE"].includes(String(tech.status || "").toUpperCase())) {
+        return res.status(400).json({ error: `${tech.name} está inactivo; actívalo antes de asignarle equipos.` });
+      }
 
       const where = {
         plantId,

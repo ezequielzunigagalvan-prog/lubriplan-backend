@@ -145,6 +145,8 @@ model Equipment {
   location    String
   status      String
   description String?
+  brand       String?
+  model       String?
 
   areaId Int?
   area   EquipmentArea? @relation(fields: [areaId], references: [id], onDelete: SetNull)
