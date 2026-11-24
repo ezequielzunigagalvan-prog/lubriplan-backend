@@ -26,6 +26,10 @@ function fakePrisma(overrides = {}) {
       findFirst: vi.fn(async () => ({ id: 50 })),
       findMany: vi.fn(async () => []),
     },
+    technician: {
+      findFirst: vi.fn(async () => ({ userId: null })),
+      findMany: vi.fn(async () => []),
+    },
     ...overrides,
   };
 }

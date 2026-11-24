@@ -65,7 +65,7 @@ async function nextTechnicianCode(plantId) {
 }
 
 function toClient(t, extra = {}) {
-  const { executions, user, ...rest } = t;
+  const { executions, user, accountUser, ...rest } = t;
   return {
     ...rest,
     status: normalizeStatus(rest.status),
@@ -110,6 +110,7 @@ export const findAll = async (req, res) => {
           take: 1,
           select: { executedAt: true },
         },
+        accountUser: { select: { id: true, active: true } },
         user: {
           select: {
             id: true,
@@ -182,7 +183,7 @@ export const findAll = async (req, res) => {
 
       return toClient(t, {
         lastActivityAt,
-        hasAppAccess: !!t.user && t.user.active !== false,
+        hasAppAccess: (!!t.user && t.user.active !== false) || (!!t.accountUser && t.accountUser.active !== false),
         stats: {
           pending: pending.get(t.id) || 0,
           overdue: overdue.get(t.id) || 0,

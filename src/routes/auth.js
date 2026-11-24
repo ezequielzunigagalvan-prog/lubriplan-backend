@@ -9,6 +9,7 @@ import { logger } from "../config/logger.js";
 import { validate } from "../middleware/validate.js";
 import { loginSchema, setPasswordSchema } from "../schemas/index.js";
 import { createResetToken, verifyResetToken, sendResetEmail } from "../services/auth/passwordReset.js";
+import { resolveTechnicianId } from "../services/technicianProfile.js";
 
 const router = express.Router();
 
@@ -133,6 +134,11 @@ router.post("/login", loginRateLimiter, validate(loginSchema), async (req, res) 
     }));
 
     const defaultPlantId = plants.find((p) => p.isDefault)?.id ?? plants[0]?.id ?? null;
+    // Técnico multiplanta: su perfil en la planta con la que entra.
+    const loginTechnicianId =
+      String(user.role).toUpperCase() === "TECHNICIAN" && defaultPlantId
+        ? await resolveTechnicianId(prisma, { userId: user.id, homeTechnicianId: user.technicianId ?? null, plantId: defaultPlantId })
+        : user.technicianId ?? null;
 
     const token = jwt.sign(
       {
@@ -152,7 +158,7 @@ router.post("/login", loginRateLimiter, validate(loginSchema), async (req, res) 
         name: user.name,
         email: user.email,
         role: user.role,
-        technicianId: user.technicianId,
+        technicianId: loginTechnicianId,
         technician: user.technician,
       },
       plants,
@@ -260,6 +266,26 @@ router.post("/reset-password", resetLimiter, async (req, res) => {
   } catch (e) {
     logger.error("reset-password error:", e);
     return res.status(500).json({ error: "No se pudo restablecer la contraseña." });
+  }
+});
+
+// GET /api/auth/me — datos del usuario para la planta activa.
+// Para técnicos, technicianId es su perfil en ESA planta (pueden trabajar en varias).
+router.get("/me", requireAuth, async (req, res) => {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { id: true, name: true, email: true, role: true },
+    });
+    if (!user) return res.status(404).json({ error: "Usuario no encontrado" });
+    const technicianId = req.user.technicianId ?? null;
+    const technician = technicianId
+      ? await prisma.technician.findFirst({ where: { id: technicianId, plantId: { gt: 0 } }, select: { id: true, name: true, code: true, plantId: true } })
+      : null;
+    return res.json({ ok: true, user: { ...user, technicianId, technician }, plantId: req.currentPlantId ?? null });
+  } catch (e) {
+    logger.error("GET /auth/me error:", e);
+    return res.status(500).json({ error: "Error obteniendo el usuario" });
   }
 });
 

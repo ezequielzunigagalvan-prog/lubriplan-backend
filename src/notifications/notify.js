@@ -39,29 +39,16 @@ export async function notifyTechnicianAssignee(prisma, payload) {
 
   if (!technicianId) return { notified: 0 };
 
+  // Dueño del perfil: la cuenta ligada al perfil (técnico multiplanta) o la que lo tiene como principal.
+  const tech = await prisma.technician.findFirst({
+    where: { id: technicianId, ...(scopedPlantId != null ? { plantId: scopedPlantId } : { plantId: { gt: 0 } }) },
+    select: { userId: true },
+  });
   const user = await prisma.user.findFirst({
     where: {
       active: true,
-      technicianId,
-      ...(scopedPlantId != null
-        ? {
-            OR: [
-              {
-                technician: {
-                  plantId: scopedPlantId,
-                },
-              },
-              {
-                userPlants: {
-                  some: {
-                    plantId: scopedPlantId,
-                    active: true,
-                  },
-                },
-              },
-            ],
-          }
-        : {}),
+      OR: [{ technicianId }, ...(tech?.userId ? [{ id: tech.userId }] : [])],
+      ...(scopedPlantId != null ? { userPlants: { some: { plantId: scopedPlantId, active: true } } } : {}),
     },
     select: { id: true },
   });

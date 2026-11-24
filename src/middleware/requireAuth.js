@@ -2,6 +2,7 @@
 import prisma from "../prisma.js";
 import { logger } from "../config/logger.js";
 import { runWithTenant } from "../tenancy/tenantContext.js";
+import { resolveTechnicianId } from "../services/technicianProfile.js";
 
 export async function requireAuth(req, res, next) {
   try {
@@ -89,6 +90,17 @@ export async function requireAuth(req, res, next) {
     }
 
     req.currentPlantId = currentPlantId ?? null;
+
+    // Un técnico puede trabajar en varias plantas con un perfil por planta:
+    // en cada petición se usa su perfil de la planta activa.
+    if (String(dbUser.role).toUpperCase() === "TECHNICIAN" && req.currentPlantId) {
+      req.user.homeTechnicianId = dbUser.technicianId ?? null;
+      req.user.technicianId = await resolveTechnicianId(prisma, {
+        userId: dbUser.id,
+        homeTechnicianId: dbUser.technicianId ?? null,
+        plantId: req.currentPlantId,
+      });
+    }
 
     // El contexto de planta (filtro automático de Prisma) se fija con la planta ya validada,
     // no con la que llegó sin validar antes de la autenticación.

@@ -84,18 +84,25 @@ export async function runOverdueReminders({ prisma, now = new Date(), hour = REM
     const techCounts = new Map(byTech.filter((r) => r.technicianId != null).map((r) => [r.technicianId, r._count._all]));
     const todayCounts = new Map(todayByTech.filter((r) => r.technicianId != null).map((r) => [r.technicianId, r._count._all]));
     if (techCounts.size) {
+      // Dueño de cada perfil: cuenta ligada (técnico multiplanta) o la que lo tiene como perfil principal.
+      const techIds = [...techCounts.keys()];
+      const profiles = await prisma.technician.findMany({ where: { id: { in: techIds } }, select: { id: true, userId: true } });
+      const ownerIds = profiles.map((x) => x.userId).filter(Boolean);
       const users = await prisma.user.findMany({
-        where: { active: true, role: "TECHNICIAN", technicianId: { in: [...techCounts.keys()] } },
+        where: { active: true, role: "TECHNICIAN", OR: [{ technicianId: { in: techIds } }, ...(ownerIds.length ? [{ id: { in: ownerIds } }] : [])] },
         select: { id: true, technicianId: true },
       });
+      const techOf = (u) => profiles.find((x) => x.userId === u.id)?.id ?? (techCounts.has(u.technicianId) ? u.technicianId : null);
       for (const u of users) {
+        const techId = techOf(u);
+        if (!techId) continue;
         if (await alreadyNotified(prisma, { userId: u.id, plantId: plant.id, since: dayStart })) continue;
-        const overdue = techCounts.get(u.technicianId) || 0;
+        const overdue = techCounts.get(techId) || 0;
         await notifyUser(prisma, u.id, {
           plantId: plant.id,
           type: "EXEC_OVERDUE",
           title: overdue === 1 ? "Tienes 1 actividad vencida" : `Tienes ${overdue} actividades vencidas`,
-          message: technicianMessage({ overdue, today: todayCounts.get(u.technicianId) || 0 }),
+          message: technicianMessage({ overdue, today: todayCounts.get(techId) || 0 }),
           link: "/activities?filter=overdue",
         });
         sent++;

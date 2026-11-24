@@ -73,6 +73,7 @@ model User {
 
   technicianId Int?        @unique
   technician   Technician? @relation("UserTechnician", fields: [technicianId], references: [id], onDelete: SetNull)
+  technicianProfiles Technician[] @relation("UserTechnicianProfiles")
 
   notifications             Notification[]
   conditionReports          ConditionReport[]
@@ -114,7 +115,13 @@ model Technician {
 
   user User? @relation("UserTechnician")
 
+  // Cuenta de usuario dueña de este perfil. Un usuario técnico puede tener un perfil por planta
+  // (para trabajar en varias plantas). User.technicianId sigue siendo su perfil principal.
+  userId      Int?
+  accountUser User? @relation("UserTechnicianProfiles", fields: [userId], references: [id], onDelete: SetNull)
+
   @@unique([plantId, code]) // recomendado: código único por planta
+  @@unique([userId, plantId])
   @@index([plantId])
 }
 
