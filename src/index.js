@@ -75,6 +75,10 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
   import lubricationCardsRoutes from "./routes/lubricationCards.routes.js";
   import olpRoutes from "./routes/olp.routes.js";
   import historyRoutes from "./routes/history.routes.js";
+  import { parseRouteInput, RouteInputError } from "./routes/routeRules.js";
+  import { syncOpenExecution, routeEquipmentIds } from "./services/routeExecutions.js";
+  import { ymdToDate as ymdToDateRs, toYmd as toYmdRs, ruleOf as ruleOfRs, nextAfterCompletion } from "./utils/routeSchedule.js";
+  import { zonedYmd as zonedYmdTz, safeTimeZone as safeTimeZoneTz } from "./utils/tzRange.js";
   import analysisRoutes from "./routes/analysis.routes.js";
   import { notifyIfLowStock } from "./services/inventory/lowStock.js";
   import { mountMaintenance } from "./modules/maintenance/index.js";
@@ -3463,13 +3467,14 @@ app.get("/api/equipment", requireAuth, async (req, res) => {
       where = {
         plantId,
         routes: { none: {} },
+        routeLinks: { none: {} },
       };
     }
 
     if (filter === "with-routes") {
       where = {
         plantId,
-        routes: { some: {} },
+        OR: [{ routes: { some: {} } }, { routeLinks: { some: {} } }],
       };
     }
 
@@ -3483,9 +3488,10 @@ app.get("/api/equipment", requireAuth, async (req, res) => {
       // Sin actividad = ni de sus rutas ni manual/emergencia registrada directo al equipo.
       where = {
         plantId,
-        routes: { some: {} },
+        OR: [{ routes: { some: {} } }, { routeLinks: { some: {} } }],
         NOT: [
           { routes: { some: { executions: { some: inRange } } } },
+          { routeLinks: { some: { route: { executions: { some: inRange } } } } },
           { executions: { some: inRange } },
         ],
       };
@@ -3563,6 +3569,10 @@ app.get("/api/equipment", requireAuth, async (req, res) => {
               select: { id: true, name: true, code: true },
             },
           },
+        },
+        // Rutas con varios equipos donde participa este equipo.
+        routeLinks: {
+          select: { route: { select: { id: true, technicianId: true, technician: { select: { id: true, name: true, code: true } } } } },
         },
         _count: { select: { routes: true } },
       },
@@ -3649,9 +3659,11 @@ app.get("/api/equipment", requireAuth, async (req, res) => {
     }
 
     const out = equipment.map((eq) => {
-      const routesCount = Number(eq?._count?.routes || 0);
+      const allRoutes = [...(eq?.routes || [])];
+      for (const l of eq?.routeLinks || []) if (l.route && !allRoutes.some((r) => r.id === l.route.id)) allRoutes.push(l.route);
+      const routesCount = allRoutes.length;
       const hasRoutes = routesCount > 0;
-      const assignedTechnician = summarizeEquipmentAssignedTechnician(eq?.routes || []);
+      const assignedTechnician = summarizeEquipmentAssignedTechnician(allRoutes);
 
       const noActivitiesInRange =
         filter === "no-activities" ? true : hasRoutes ? !hadExecInRangeByEqId.has(eq.id) : false;
@@ -3751,7 +3763,7 @@ app.get("/api/equipment/:id/detail", requireAuth, async (req, res) => {
 
     // Historial real (completadas, más recientes primero) y próximas actividades,
     // incluyendo manuales/emergencias registradas directo al equipo.
-    const eqExecWhere = { plantId, OR: [{ equipmentId: id }, { route: { equipmentId: id } }] };
+    const eqExecWhere = { plantId, OR: [{ equipmentId: id }, { route: { equipmentId: id } }, { route: { equipments: { some: { equipmentId: id } } } }] };
     const execSelect = {
       id: true,
       status: true,
@@ -3817,14 +3829,21 @@ app.get("/api/equipment/:id/detail", requireAuth, async (req, res) => {
         return new Date(b.lastExecutionAt || 0).getTime() - new Date(a.lastExecutionAt || 0).getTime();
       })[0] || null;
 
+    // Rutas con varios equipos donde participa este equipo (además de las suyas).
+    const linkedRoutes = await prisma.route.findMany({
+      where: { plantId, equipmentId: { not: id }, equipments: { some: { equipmentId: id } } },
+      include: { lubricant: true, technician: { select: { id: true, name: true, code: true } }, _count: { select: { equipments: true } } },
+      orderBy: [{ nextDate: "asc" }, { id: "desc" }],
+    });
+    const allEquipmentRoutes = [...(equipment?.routes || []), ...linkedRoutes];
+
     const payload = {
       ...equipment,
-      routes: Array.isArray(equipment?.routes)
-        ? equipment.routes.map((route) => ({
-            ...route,
-            name: buildRouteDisplayName(route?.name, route?.routeKind),
-          }))
-        : [],
+      routes: allEquipmentRoutes.map((route) => ({
+        ...route,
+        name: buildRouteDisplayName(route?.name, route?.routeKind),
+        equipmentsCount: route?._count?.equipments || 1,
+      })),
       executions: Array.isArray(equipment?.executions)
         ? equipment.executions.map((execution) => ({
             ...execution,
@@ -3841,7 +3860,7 @@ app.get("/api/equipment/:id/detail", requireAuth, async (req, res) => {
         : [],
       history: historyRows.map(withRouteName),
       upcoming: upcomingRows.map(withRouteName),
-      routesCount: equipment._count?.routes || 0,
+      routesCount: allEquipmentRoutes.length,
       executionsCount: equipment._count?.executions || 0,
       conditionReportsCount: equipment._count?.conditionReports || 0,
       mostUsedTechnician,
@@ -3933,7 +3952,7 @@ app.delete("/api/equipment/:id", requireAuth, requireManager, async (req, res) =
     // completadas), reportes de condición, análisis de aceite, carta de lubricación y OLP.
     // Solo se permite si no tiene nada de eso; si no, se sugiere marcarlo INACTIVO.
     const [routes, executions, reports, samples, card, orders] = await Promise.all([
-      prisma.route.count({ where: { equipmentId: id, plantId } }),
+      prisma.route.count({ where: { plantId, OR: [{ equipmentId: id }, { equipments: { some: { equipmentId: id } } }] } }),
       prisma.execution.count({ where: { plantId, OR: [{ equipmentId: id }, { route: { equipmentId: id } }] } }),
       prisma.conditionReport.count({ where: { equipmentId: id, plantId } }),
       prisma.oilSample.count({ where: { equipmentId: id } }),
@@ -4116,6 +4135,10 @@ app.get("/api/routes/:id", requireAuth, async (req, res) => {
         equipment: true,
         lubricant: true,
         technician: true,
+        equipments: {
+          orderBy: [{ position: "asc" }, { id: "asc" }],
+          include: { equipment: { select: { id: true, name: true, code: true, location: true, criticality: true, status: true } } },
+        },
         executions: {
           where: {
             plantId,
@@ -4123,6 +4146,7 @@ app.get("/api/routes/:id", requireAuth, async (req, res) => {
           },
           include: {
             technician: true,
+            evidenceEquipment: { select: { id: true, name: true, code: true } },
           },
           orderBy: [
             { scheduledAt: "asc" },
@@ -4160,354 +4184,173 @@ app.get("/api/routes/:id", requireAuth, async (req, res) => {
 });
 
 
-// CREATE ROUTE
-app.post(
-  "/api/routes",
-  requireAuth,
-  requireRole(["ADMIN", "SUPERVISOR"]),
-  async (req, res) => {
-    try {
-      const plantId = req.currentPlantId;
-      if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
+// ===== RUTAS: alta y edición (validación en routes/routeRules.js, programación en utils/routeSchedule.js) =====
+const ROUTE_FULL_INCLUDE = {
+  equipment: true,
+  lubricant: true,
+  technician: true,
+  equipments: {
+    orderBy: [{ position: "asc" }, { id: "asc" }],
+    include: { equipment: { select: { id: true, name: true, code: true, location: true, criticality: true, status: true } } },
+  },
+};
 
-      const {
-        name,
-        routeKind,
-        equipmentId,
-        lubricantType,
-        quantity,
-        frequencyDays,
-        frequencyType,
-        weeklyDays,
-        monthlyAnchorDay,
-        lubricantId,
-        lubricantName,
-        technicianId,
-        unit,
-        pumpStrokeValue,
-        pumpStrokeUnit,
-        method,
-        points,
-        instructions,
-        nextDate,
-        lastDate,
-        imageUrl,
-        imagePublicId,
-      } = req.body;
+async function plantTodayYmd(plantId) {
+  const plant = await prisma.plant.findFirst({ where: { id: plantId }, select: { timezone: true } });
+  return zonedYmdTz(new Date(), safeTimeZoneTz(plant?.timezone || "America/Mexico_City"));
+}
 
-      if (!name || !equipmentId || frequencyDays === undefined) {
-        return res.status(400).json({
-          error: "name, equipmentId y frequencyDays son obligatorios",
-        });
-      }
+class RouteHttpError extends Error {
+  constructor(status, message, extra = {}) {
+    super(message);
+    this.status = status;
+    this.extra = extra;
+  }
+}
 
-      const normalizedRouteKind = normalizeRouteKind(routeKind);
-      const finalRouteName = buildRouteDisplayName(name, normalizedRouteKind);
-      const requiresBaseConsumption = normalizedRouteKind === "LUBRICATION";
-      const q =
-        quantity === "" || quantity == null
-          ? null
-          : Number(quantity);
-      const f = Number(frequencyDays);
-      const eqId = Number(equipmentId);
+function routeError(res, e, label) {
+  if (e instanceof RouteHttpError || e instanceof RouteInputError) {
+    return res.status(e.status || 400).json({ error: e.message, ...(e.extra || {}) });
+  }
+  logger.error(label, e);
+  return res.status(500).json({ error: "No se pudo guardar la ruta" });
+}
 
-      if (requiresBaseConsumption && (!Number.isFinite(q) || q < 0)) {
-        return res.status(400).json({ error: "quantity invalida" });
-      }
+async function saveRoute({ req, plantId, existing }) {
+  const body = { ...(req.body || {}) };
+  // Edición sin lista de equipos (p. ej. reasignar técnico): conserva los equipos actuales de la ruta.
+  if (existing && !Array.isArray(body.equipmentIds)) {
+    const links = await prisma.routeEquipment.findMany({ where: { routeId: existing.id }, orderBy: [{ position: "asc" }, { id: "asc" }], select: { equipmentId: true } });
+    const primary = Number(body.equipmentId) || existing.equipmentId;
+    body.equipmentIds = [primary, ...links.map((l) => l.equipmentId).filter((id) => id !== primary)];
+  }
+  const routeKind = normalizeRouteKind(body.routeKind || existing?.routeKind);
+  const today = await plantTodayYmd(plantId);
+  const { fields, equipmentIds, schedule } = parseRouteInput(body, { today, existing, isInspection: routeKind === "INSPECTION" });
 
-      if (!requiresBaseConsumption && q != null && (!Number.isFinite(q) || q < 0)) {
-        return res.status(400).json({ error: "quantity invalida" });
-      }
+  const finalName = buildRouteDisplayName(fields.name, routeKind);
+  if (!finalName) throw new RouteHttpError(400, "Escribe el nombre de la ruta");
+  const normalizedName = normalizeRouteName(finalName);
+  const method = normalizeRouteMethod(fields.method);
 
-      if (!Number.isFinite(f) || f <= 0) {
-        return res.status(400).json({ error: "frequencyDays invalida" });
-      }
+  // Equipos de la planta y activos.
+  const equipments = await prisma.equipment.findMany({ where: { plantId, id: { in: equipmentIds } }, select: { id: true, name: true, status: true } });
+  const byId = new Map(equipments.map((e) => [e.id, e]));
+  if (equipmentIds.some((id) => !byId.has(id))) throw new RouteHttpError(404, "Uno de los equipos no existe en esta planta");
+  const inactive = equipments.filter((e) => String(e.status || "").toUpperCase() === "INACTIVO");
+  if (inactive.length) throw new RouteHttpError(400, `${inactive.map((e) => e.name).join(", ")}: equipo inactivo; actívalo o quítalo de la ruta`);
+  const primaryId = equipmentIds[0];
 
-      if (!Number.isFinite(eqId) || eqId <= 0) {
-        return res.status(400).json({ error: "equipmentId invalido" });
-      }
+  if (fields.lubricantId) {
+    const lub = await prisma.lubricant.findFirst({ where: { id: fields.lubricantId, plantId }, select: { id: true } });
+    if (!lub) throw new RouteHttpError(404, "El lubricante no existe en esta planta");
+  }
 
-      const finalLubricantType = String(lubricantType || "").trim() || null;
-
-      if (!finalRouteName) {
-        return res.status(400).json({ error: "name invalido" });
-      }
-
-      if (requiresBaseConsumption && !finalLubricantType) {
-        return res.status(400).json({ error: "lubricantType obligatorio para rutas de lubricacion" });
-      }
-
-      const unitNorm = String(unit || "ml").trim().toUpperCase();
-      const allowedUnits = ["ML", "L", "G", "KG", "BOMBAZOS"];
-
-      if (!allowedUnits.includes(unitNorm)) {
-        return res.status(400).json({ error: "unit invalida" });
-      }
-
-      const pumpStrokeValueNum =
-        pumpStrokeValue === "" || pumpStrokeValue == null ? null : Number(pumpStrokeValue);
-
-      const pumpStrokeUnitNorm =
-        pumpStrokeUnit == null || String(pumpStrokeUnit).trim() === ""
-          ? null
-          : String(pumpStrokeUnit).trim().toLowerCase();
-
-      if (unitNorm === "BOMBAZOS" && q != null) {
-        if (!Number.isFinite(pumpStrokeValueNum) || pumpStrokeValueNum <= 0) {
-          return res.status(400).json({ error: "pumpStrokeValue invalido para bombazos" });
-        }
-
-        if (!["g", "kg", "ml", "l"].includes(String(pumpStrokeUnitNorm || ""))) {
-          return res.status(400).json({ error: "pumpStrokeUnit invalida para bombazos" });
-        }
-      }
-
-      const pointsInt =
-        points === "" || points === undefined || points === null ? null : Number(points);
-
-      if (pointsInt !== null && !Number.isFinite(pointsInt)) {
-        return res.status(400).json({ error: "points debe ser numerico" });
-      }
-
-      const lubIdNum =
-        lubricantId === "" || lubricantId == null ? null : Number(lubricantId);
-
-      if (lubIdNum !== null && !Number.isFinite(lubIdNum)) {
-        return res.status(400).json({ error: "lubricantId invalido" });
-      }
-
-      const normalizedFrequencyType =
-        String(frequencyType || "").trim().toUpperCase() || null;
-
-      const weeklyDaysNorm = Array.isArray(weeklyDays)
-        ? Array.from(new Set(weeklyDays.map(Number)))
-            .filter((n) => n >= 1 && n <= 7)
-            .sort((a, b) => a - b)
-        : [];
-
-      const monthlyAnchorDayNorm =
-        monthlyAnchorDay == null || monthlyAnchorDay === ""
-          ? null
-          : Number(monthlyAnchorDay);
-
-      if (
-        monthlyAnchorDayNorm !== null &&
-        (!Number.isFinite(monthlyAnchorDayNorm) ||
-          monthlyAnchorDayNorm < 1 ||
-          monthlyAnchorDayNorm > 31)
-      ) {
-        return res.status(400).json({ error: "monthlyAnchorDay invalido" });
-      }
-
-      if (normalizedFrequencyType === "WEEKLY" && weeklyDaysNorm.length === 0) {
-        return res.status(400).json({
-          error: "weeklyDays es obligatorio para frecuencia semanal multiple",
-        });
-      }
-
-      const equipmentExists = await prisma.equipment.findFirst({
-        where: {
-          id: eqId,
-          plantId,
-        },
-        select: {
-          id: true,
-          routes: {
-            where: {
-              technicianId: { not: null },
-            },
-            orderBy: [{ id: "desc" }],
-            take: 1,
-            select: { technicianId: true },
-          },
-        },
-      });
-
-      if (!equipmentExists) {
-        return res.status(404).json({ error: "Equipo no encontrado en la planta actual" });
-      }
-
-      if (lubIdNum !== null) {
-        const lubricantExists = await prisma.lubricant.findFirst({
-          where: {
-            id: lubIdNum,
-            plantId,
-          },
-          select: { id: true },
-        });
-
-        if (!lubricantExists) {
-          return res.status(404).json({ error: "Lubricante no encontrado en la planta actual" });
-        }
-      }
-
-      const requestedTechnicianId =
-        technicianId === "" || technicianId == null ? null : Number(technicianId);
-
-      const inheritedEquipmentTechnicianId =
-        equipmentExists?.routes?.[0]?.technicianId != null
-          ? Number(equipmentExists.routes[0].technicianId)
-          : null;
-
-      const assignedTechnicianId =
-        requestedTechnicianId != null ? requestedTechnicianId : inheritedEquipmentTechnicianId;
-
-      if (assignedTechnicianId !== null && !Number.isFinite(assignedTechnicianId)) {
-        return res.status(400).json({ error: "technicianId invalido" });
-      }
-
-      if (assignedTechnicianId !== null) {
-        const technicianExists = await prisma.technician.findFirst({
-          where: {
-            id: assignedTechnicianId,
-            plantId,
-            deletedAt: null,
-          },
-          select: { id: true },
-        });
-
-        if (!technicianExists) {
-          return res.status(404).json({ error: "Técnico no encontrado en la planta actual" });
-        }
-      }
-
-      const parsedLastDate = parseDateOrNull(lastDate);
-      const parsedNextDate = resolveNextRouteDate({
-        lastDate: parsedLastDate,
-        nextDate,
-        frequencyDays: f,
-        frequencyType: normalizedFrequencyType,
-        weeklyDays: weeklyDaysNorm,
-        monthlyAnchorDay: monthlyAnchorDayNorm,
-      });
-
-      const normalizedName = normalizeRouteName(finalRouteName);
-      const normalizedMethod = normalizeRouteMethod(method);
-      const finalUnit =
-        !requiresBaseConsumption && q == null
-          ? null
-          : unitNorm === "BOMBAZOS"
-          ? "BOMBAZOS"
-          : String(unit || "ml").trim().toLowerCase();
-
-      const duplicatedRoute = await prisma.route.findFirst({
-        where: {
-          plantId,
-          equipmentId: eqId,
-          normalizedName,
-          lubricantId: lubIdNum,
-          method: normalizedMethod,
-        },
-        select: {
-          id: true,
-          name: true,
-        },
-      });
-
-      if (duplicatedRoute) {
-        return res.status(409).json({
-          error: "Ya existe una ruta activa con el mismo equipo, nombre, lubricante y metodo.",
-          code: "ROUTE_DUPLICATE",
-          duplicatedRouteId: duplicatedRoute.id,
-        });
-      }
-
-      const routeData = {
-        plant: { connect: { id: plantId } },
-
-        name: finalRouteName,
-        normalizedName,
-        routeKind: normalizedRouteKind,
-        lubricantType: finalLubricantType,
-        quantity: q,
-        frequencyDays: f,
-        frequencyType: normalizedFrequencyType,
-        weeklyDays: weeklyDaysNorm,
-        monthlyAnchorDay:
-          monthlyAnchorDayNorm ?? (parsedLastDate ? parsedLastDate.getDate() : null),
-        customIntervalDays: null,
-
-        equipment: { connect: { id: eqId } },
-        technician: assignedTechnicianId
-          ? { connect: { id: assignedTechnicianId } }
-          : undefined,
-
-        lubricantName: lubIdNum ? null : lubricantName?.trim?.() || lubricantName || null,
-        unit: finalUnit,
-        pumpStrokeValue: unitNorm === "BOMBAZOS" && q != null ? pumpStrokeValueNum : null,
-        pumpStrokeUnit: unitNorm === "BOMBAZOS" && q != null ? pumpStrokeUnitNorm : null,
-        method: normalizedMethod,
-        points: pointsInt,
-        instructions: instructions?.trim?.() || instructions || null,
-
-        lastDate: parsedLastDate,
-        nextDate: parsedNextDate,
-
-        imageUrl: imageUrl?.trim?.() || imageUrl || null,
-        imagePublicId: imagePublicId?.trim?.() || imagePublicId || null,
-
-        ...(lubIdNum ? { lubricant: { connect: { id: lubIdNum } } } : {}),
-      };
-
-
-      const route = await prisma.route.create({
-        data: routeData,
-        include: { equipment: true, lubricant: true, technician: true },
-      });
-
-
-      const scheduledAt = parsedNextDate ? toSafeNoon(parsedNextDate) : toSafeNoon(new Date());
-
-      const start = new Date(scheduledAt);
-      start.setHours(0, 0, 0, 0);
-
-      const end = new Date(scheduledAt);
-      end.setHours(23, 59, 59, 999);
-
-      const existing = await prisma.execution.findFirst({
-        where: {
-          plant: { id: plantId },
-          routeId: route.id,
-          status: "PENDING",
-          scheduledAt: { gte: start, lte: end },
-        },
-        select: { id: true },
-      });
-
-      if (!existing) {
-        await prisma.execution.create({
-          data: {
-            plant: { connect: { id: plantId } },
-            route: { connect: { id: route.id } },
-            equipment: { connect: { id: eqId } },
-            status: "PENDING",
-            scheduledAt,
-            ...(assignedTechnicianId
-              ? { technician: { connect: { id: assignedTechnicianId } } }
-              : {}),
-          },
-        });
-      }
-
-      if (assignedTechnicianId) {
-        notifyTechnicianAssignee(prisma, {
-          plantId,
-          technicianId: assignedTechnicianId,
-          actorUserId: req.user?.id,
-          type: "EXEC_ASSIGNED",
-          title: "Nueva ruta asignada",
-          message: `${route.name}${route.equipment?.name ? ` · ${route.equipment.name}` : ""}`,
-          link: `/routes/${route.id}`,
-        }).catch((err) => logger.error("No se pudo notificar ruta nueva:", err));
-      }
-
-      return res.status(201).json(route);
-    } catch (error) {
-      logger.error("### ERROR POST ROUTES NUEVO ###", error);
-      return res.status(500).json({ error: "Error creando ruta NUEVO" });
+  // Técnico: el indicado; en una ruta nueva sin técnico, el que ya atiende el equipo principal.
+  let technicianId = fields.technicianId;
+  if (!existing && technicianId == null) {
+    const last = await prisma.route.findFirst({
+      where: { plantId, equipmentId: primaryId, technicianId: { not: null } },
+      orderBy: { id: "desc" },
+      select: { technicianId: true },
+    });
+    technicianId = last?.technicianId ?? null;
+  }
+  if (technicianId != null) {
+    const tech = await prisma.technician.findFirst({ where: { id: technicianId, plantId, deletedAt: null }, select: { id: true, name: true, status: true } });
+    if (!tech) throw new RouteHttpError(404, "El técnico no existe en esta planta");
+    const changed = !existing || existing.technicianId !== technicianId;
+    if (changed && !["ACTIVO", "ACTIVE"].includes(String(tech.status || "").toUpperCase())) {
+      throw new RouteHttpError(400, `${tech.name} está inactivo; elige otro técnico`);
     }
   }
-);
+
+  const duplicated = await prisma.route.findFirst({
+    where: { plantId, equipmentId: primaryId, normalizedName, lubricantId: fields.lubricantId, method, ...(existing ? { id: { not: existing.id } } : {}) },
+    select: { id: true },
+  });
+  if (duplicated) {
+    throw new RouteHttpError(409, "Ya existe una ruta con el mismo equipo, nombre, lubricante y método.", { code: "ROUTE_DUPLICATE", duplicatedRouteId: duplicated.id });
+  }
+
+  // Imagen de referencia: si no se manda, se conserva la actual.
+  const imgGiven = body.imageUrl != null && String(body.imageUrl).trim() !== "";
+  const imageUrl = imgGiven ? String(body.imageUrl).trim() : existing?.imageUrl ?? null;
+  const sameImage = imgGiven && existing?.imageUrl && imageUrl === existing.imageUrl;
+  const imagePublicId = sameImage
+    ? existing.imagePublicId ?? null
+    : imgGiven
+    ? String(body.imagePublicId || "").trim() || null
+    : existing?.imagePublicId ?? null;
+
+  const data = {
+    name: finalName,
+    normalizedName,
+    routeKind,
+    lubricantType: fields.lubricantType,
+    lubricantName: fields.lubricantName,
+    quantity: fields.quantity,
+    unit: fields.unit,
+    pumpStrokeValue: fields.pumpStrokeValue,
+    pumpStrokeUnit: fields.pumpStrokeUnit,
+    points: fields.points,
+    method,
+    instructions: fields.instructions,
+    frequencyDays: fields.frequencyDays,
+    frequencyType: fields.frequencyType,
+    weeklyDays: fields.weeklyDays,
+    monthlyAnchorDay: fields.monthlyAnchorDay,
+    customIntervalDays: null,
+    evidenceRequired: fields.evidenceRequired,
+    lastDate: schedule.lastYmd ? ymdToDateRs(schedule.lastYmd) : existing?.lastDate ?? null,
+    nextDate: ymdToDateRs(schedule.nextYmd),
+    equipmentId: primaryId,
+    lubricantId: fields.lubricantId,
+    technicianId,
+    imageUrl,
+    imagePublicId,
+  };
+
+  const route = await prisma.$transaction(async (tx) => {
+    const saved = existing
+      ? await tx.route.update({ where: { id: existing.id }, data, select: { id: true } })
+      : await tx.route.create({ data: { ...data, plantId }, select: { id: true } });
+    await tx.routeEquipment.deleteMany({ where: { routeId: saved.id } });
+    if (equipmentIds.length > 1) {
+      await tx.routeEquipment.createMany({ data: equipmentIds.map((equipmentId, position) => ({ routeId: saved.id, equipmentId, position })) });
+    }
+    const full = await tx.route.findFirst({ where: { id: saved.id }, include: { equipments: true } });
+    await syncOpenExecution(tx, { plantId, route: full, ymd: schedule.nextYmd, technicianId });
+    return tx.route.findFirst({ where: { id: saved.id }, include: ROUTE_FULL_INCLUDE });
+  });
+
+  if (existing?.imagePublicId && existing.imagePublicId !== route.imagePublicId) {
+    Promise.resolve(destroyCloudinaryImage(existing.imagePublicId)).catch(() => {});
+  }
+  if (route.technicianId && route.technicianId !== existing?.technicianId) {
+    notifyTechnicianAssignee(prisma, {
+      plantId,
+      technicianId: route.technicianId,
+      actorUserId: req.user?.id,
+      type: "EXEC_ASSIGNED",
+      title: existing ? "Ruta asignada" : "Nueva ruta asignada",
+      message: `${route.name}${route.equipments?.length > 1 ? ` · ${route.equipments.length} equipos` : route.equipment?.name ? ` · ${route.equipment.name}` : ""}`,
+      link: `/routes/${route.id}`,
+    }).catch((err) => logger.error("No se pudo notificar asignación de ruta:", err));
+  }
+  return route;
+}
+
+// CREATE ROUTE
+app.post("/api/routes", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), async (req, res) => {
+  try {
+    const plantId = req.currentPlantId;
+    if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
+    return res.status(201).json(await saveRoute({ req, plantId, existing: null }));
+  } catch (e) {
+    return routeError(res, e, "POST /api/routes");
+  }
+});
 
 // GET ROUTES
 app.get("/api/routes", requireAuth, async (req, res) => {
@@ -4521,6 +4364,10 @@ app.get("/api/routes", requireAuth, async (req, res) => {
         equipment: true,
         lubricant: true,
         technician: true,
+        equipments: {
+          orderBy: [{ position: "asc" }, { id: "asc" }],
+          include: { equipment: { select: { id: true, name: true, code: true, location: true, criticality: true, status: true } } },
+        },
         executions: {
           where: {
             plantId,
@@ -4528,6 +4375,7 @@ app.get("/api/routes", requireAuth, async (req, res) => {
           },
           include: {
             technician: true,
+            evidenceEquipment: { select: { id: true, name: true, code: true } },
           },
           orderBy: [
             { scheduledAt: "asc" },
@@ -4568,439 +4416,19 @@ app.get("/api/routes", requireAuth, async (req, res) => {
 });
 
 // UPDATE ROUTE
-app.put(
-  "/api/routes/:id",
-  requireAuth,
-  requireRole(["ADMIN", "SUPERVISOR"]),
-  async (req, res) => {
-    const t0 = Date.now();
-    const stamp = () => `(+${Date.now() - t0}ms)`;
-
-    try {
-      const plantId = req.currentPlantId;
-      if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
-
-      const id = Number(req.params.id);
-
-
-      const {
-        name,
-        routeKind,
-        lubricantType,
-        lubricantName,
-        quantity,
-        frequencyDays,
-        frequencyType,
-        weeklyDays,
-        monthlyAnchorDay,
-        equipmentId,
-        unit,
-        pumpStrokeValue,
-        pumpStrokeUnit,
-        method,
-        points,
-        instructions,
-        lastDate,
-        nextDate,
-        technicianId,
-        lubricantId,
-        imageUrl,
-        imagePublicId,
-      } = req.body;
-
-      const normalizedMethod = normalizeRouteMethod(method);
-
-
-      if (!Number.isFinite(id)) return res.status(400).json({ error: "id invalido" });
-
-      const existingRoute = await prisma.route.findFirst({
-        where: { id, plantId },
-        select: {
-          id: true,
-          routeKind: true,
-          imageUrl: true,
-          imagePublicId: true,
-          technicianId: true,
-        },
-      });
-
-      if (!existingRoute) {
-        return res.status(404).json({ error: "Ruta no encontrada" });
-      }
-
-      if (!name || !equipmentId) {
-        return res.status(400).json({
-          error: "name y equipmentId son obligatorios",
-        });
-      }
-
-      const normalizedRouteKind = normalizeRouteKind(routeKind || existingRoute.routeKind);
-      const finalRouteName = buildRouteDisplayName(name, normalizedRouteKind);
-      const normalizedName = normalizeRouteName(finalRouteName);
-      const requiresBaseConsumption = normalizedRouteKind === "LUBRICATION";
-      const q =
-        quantity === "" || quantity == null
-          ? null
-          : Number(quantity);
-      const f = Number(frequencyDays);
-      const eqId = Number(equipmentId);
-
-      if (requiresBaseConsumption && (!Number.isFinite(q) || q < 0)) {
-        return res.status(400).json({ error: "quantity invalida" });
-      }
-      if (!requiresBaseConsumption && q != null && (!Number.isFinite(q) || q < 0)) {
-        return res.status(400).json({ error: "quantity invalida" });
-      }
-      if (!Number.isFinite(f) || f <= 0) {
-        return res.status(400).json({ error: "frequencyDays invalida" });
-      }
-      if (!Number.isFinite(eqId) || eqId <= 0) {
-        return res.status(400).json({ error: "equipmentId invalido" });
-      }
-
-      const toNullIfEmpty = (v) => (v === "" || v === undefined ? null : v);
-
-      const unitNorm = String(unit || "ml").trim().toUpperCase();
-      const allowedUnits = ["ML", "L", "G", "KG", "BOMBAZOS"];
-
-      if (!allowedUnits.includes(unitNorm)) {
-        return res.status(400).json({ error: "unit invalida" });
-      }
-
-      const pumpStrokeValueNum =
-        pumpStrokeValue === "" || pumpStrokeValue == null
-          ? null
-          : Number(pumpStrokeValue);
-
-      const pumpStrokeUnitNorm =
-        pumpStrokeUnit == null || String(pumpStrokeUnit).trim() === ""
-          ? null
-          : String(pumpStrokeUnit).trim().toLowerCase();
-
-      if (unitNorm === "BOMBAZOS" && q != null) {
-        if (!Number.isFinite(pumpStrokeValueNum) || pumpStrokeValueNum <= 0) {
-          return res.status(400).json({
-            error: "pumpStrokeValue invalido para bombazos",
-          });
-        }
-
-        if (!["g", "kg", "ml", "l"].includes(String(pumpStrokeUnitNorm || ""))) {
-          return res.status(400).json({
-            error: "pumpStrokeUnit invalida para bombazos",
-          });
-        }
-      }
-
-      const pointsInt =
-        points === "" || points === undefined || points === null
-          ? null
-          : Number(points);
-
-      if (pointsInt !== null && !Number.isFinite(pointsInt)) {
-        return res.status(400).json({ error: "points debe ser numerico" });
-      }
-
-      const lubIdNum =
-        lubricantId === "" || lubricantId == null ? null : Number(lubricantId);
-
-      if (lubIdNum !== null && !Number.isFinite(lubIdNum)) {
-        return res.status(400).json({ error: "lubricantId invalido" });
-      }
-
-      const techIdNum =
-        technicianId === "" || technicianId == null ? null : Number(technicianId);
-
-      if (techIdNum !== null && !Number.isFinite(techIdNum)) {
-        return res.status(400).json({ error: "technicianId invalido" });
-      }
-
-      if (techIdNum !== null) {
-        const technicianExists = await prisma.technician.findFirst({
-          where: {
-            id: techIdNum,
-            plantId,
-            deletedAt: null,
-          },
-          select: { id: true },
-        });
-
-        if (!technicianExists) {
-          return res.status(404).json({
-            error: "Técnico no encontrado en la planta actual",
-          });
-        }
-      }
-
-      const finalLubricantName = lubIdNum
-        ? null
-        : String(lubricantName || "").trim() || null;
-      const finalLubricantType = String(lubricantType || "").trim() || null;
-      const finalUnit =
-        !requiresBaseConsumption && q == null
-          ? null
-          : unitNorm === "BOMBAZOS"
-          ? "BOMBAZOS"
-          : toNullIfEmpty(unit)?.trim?.().toLowerCase() || "ml";
-
-      if (requiresBaseConsumption && !finalLubricantType) {
-        return res.status(400).json({ error: "lubricantType obligatorio para rutas de lubricacion" });
-      }
-
-      if (!finalRouteName) {
-        return res.status(400).json({ error: "name invalido" });
-      }
-
-      const equipmentExists = await prisma.equipment.findFirst({
-        where: { id: eqId, plantId },
-        select: { id: true },
-      });
-
-      if (!equipmentExists) {
-        return res.status(404).json({
-          error: "Equipo no encontrado en la planta actual",
-        });
-      }
-
-      if (lubIdNum !== null) {
-        const lubricantExists = await prisma.lubricant.findFirst({
-          where: { id: lubIdNum, plantId },
-          select: { id: true },
-        });
-
-        if (!lubricantExists) {
-          return res.status(404).json({
-            error: "Lubricante no encontrado en la planta actual",
-          });
-        }
-      }
-
-      const duplicatedRoute = await prisma.route.findFirst({
-        where: {
-          plantId,
-          equipmentId: eqId,
-          normalizedName,
-          lubricantId: lubIdNum,
-          method: normalizedMethod,
-          id: { not: id },
-        },
-        select: {
-          id: true,
-          name: true,
-        },
-      });
-
-      if (duplicatedRoute) {
-        return res.status(409).json({
-          error:
-            "Ya existe una ruta activa con el mismo equipo, nombre, lubricante y metodo.",
-          code: "ROUTE_DUPLICATE",
-          duplicatedRouteId: duplicatedRoute.id,
-        });
-      }
-
-      const normalizedFrequencyType =
-        String(frequencyType || "").trim().toUpperCase() || null;
-
-      const weeklyDaysNorm = Array.isArray(weeklyDays)
-        ? Array.from(new Set(weeklyDays.map(Number)))
-            .filter((n) => n >= 1 && n <= 7)
-            .sort((a, b) => a - b)
-        : [];
-
-      const monthlyAnchorDayNorm =
-        monthlyAnchorDay == null || monthlyAnchorDay === ""
-          ? null
-          : Number(monthlyAnchorDay);
-
-      if (
-        monthlyAnchorDayNorm !== null &&
-        (!Number.isFinite(monthlyAnchorDayNorm) ||
-          monthlyAnchorDayNorm < 1 ||
-          monthlyAnchorDayNorm > 31)
-      ) {
-        return res.status(400).json({ error: "monthlyAnchorDay invalido" });
-      }
-
-      if (normalizedFrequencyType === "WEEKLY" && weeklyDaysNorm.length === 0) {
-        return res.status(400).json({
-          error: "weeklyDays es obligatorio para frecuencia semanal multiple",
-        });
-      }
-
-      const parsedLast = parseDateOrNull(lastDate);
-      const parsedNext = resolveNextRouteDate({
-        lastDate: parsedLast,
-        nextDate,
-        frequencyDays: f,
-        frequencyType: normalizedFrequencyType,
-        weeklyDays: weeklyDaysNorm,
-        monthlyAnchorDay: monthlyAnchorDayNorm,
-      });
-
-      logger.info(
-        "[PUT route] parsed dates",
-        {
-          lastDate,
-          parsedLast: parsedLast ? parsedLast.toISOString() : null,
-          nextDate,
-          parsedNext: parsedNext ? parsedNext.toISOString() : null,
-        },
-        stamp()
-      );
-
-      const nextImageUrl =
-        imageUrl == null || String(imageUrl).trim() === ""
-          ? existingRoute.imageUrl
-          : toNullIfEmpty(imageUrl)?.trim?.() || toNullIfEmpty(imageUrl);
-
-      const nextImagePublicId =
-        imageUrl == null || String(imageUrl).trim() === ""
-          ? existingRoute.imagePublicId
-          : imagePublicId == null || String(imagePublicId).trim() === ""
-          ? nextImageUrl === existingRoute.imageUrl
-            ? existingRoute.imagePublicId
-            : null
-          : toNullIfEmpty(imagePublicId)?.trim?.() || toNullIfEmpty(imagePublicId);
-
-      const updatedCount = await prisma.route.updateMany({
-        where: { id, plantId },
-        data: {
-          name: finalRouteName,
-          normalizedName,
-          routeKind: normalizedRouteKind,
-          lubricantType: finalLubricantType,
-          lubricantName: finalLubricantName,
-          quantity: q,
-          frequencyDays: f,
-          frequencyType: normalizedFrequencyType,
-          weeklyDays: weeklyDaysNorm,
-          monthlyAnchorDay:
-            monthlyAnchorDayNorm ?? (parsedLast ? parsedLast.getDate() : null),
-          customIntervalDays: null,
-          unit: finalUnit,
-          pumpStrokeValue: unitNorm === "BOMBAZOS" && q != null ? pumpStrokeValueNum : null,
-          pumpStrokeUnit: unitNorm === "BOMBAZOS" && q != null ? pumpStrokeUnitNorm : null,
-          method: normalizedMethod,
-          points: pointsInt,
-          instructions: toNullIfEmpty(instructions),
-          lastDate: parsedLast,
-          nextDate: parsedNext,
-          imageUrl: nextImageUrl,
-          imagePublicId: nextImagePublicId,
-          equipmentId: eqId,
-          lubricantId: lubIdNum,
-          technicianId: techIdNum,
-        },
-      });
-
-      if (!updatedCount.count) {
-        return res.status(404).json({ error: "Ruta no encontrada" });
-      }
-
-      if (
-        existingRoute.imagePublicId &&
-        nextImagePublicId &&
-        existingRoute.imagePublicId !== nextImagePublicId
-      ) {
-        await destroyCloudinaryImage(existingRoute.imagePublicId);
-      }
-
-      const updated = await prisma.route.findFirst({
-        where: { id, plantId },
-        include: { equipment: true, lubricant: true, technician: true },
-      });
-
-
-      if (parsedNext) {
-
-        const nd = toSafeNoon(parsedNext);
-
-        const start = startOfDay(nd);
-
-        const end = endOfDay(nd);
-
-        logger.info(
-          "[PUT route] align range",
-          {
-            nd: nd.toISOString(),
-            start: start.toISOString(),
-            end: end.toISOString(),
-          },
-          stamp()
-        );
-
-        const pending = await prisma.execution.findFirst({
-          where: {
-            plantId,
-            routeId: id,
-            status: { in: ["PENDING", "OVERDUE"] },
-          },
-          orderBy: { scheduledAt: "asc" },
-          select: { id: true, scheduledAt: true, status: true },
-        });
-
-        const existingSameDay = await prisma.execution.findFirst({
-          where: {
-            plantId,
-            routeId: id,
-            status: "PENDING",
-            scheduledAt: { gte: start, lte: end },
-            ...(pending ? { NOT: { id: pending.id } } : {}),
-          },
-          select: { id: true },
-        });
-
-        if (pending) {
-          if (!existingSameDay) {
-            await prisma.execution.updateMany({
-              where: { id: pending.id, plantId },
-              data: {
-                scheduledAt: nd,
-                status: "PENDING",
-                technicianId: techIdNum,
-                equipmentId: eqId,
-              },
-            });
-          } else {
-            await prisma.execution.deleteMany({
-              where: { id: pending.id, plantId },
-            });
-          }
-        } else if (!existingSameDay) {
-          await prisma.execution.create({
-            data: {
-              plantId,
-              routeId: id,
-              equipmentId: eqId,
-              technicianId: techIdNum,
-              status: "PENDING",
-              scheduledAt: nd,
-            },
-          });
-        }
-
-      } else {
-      }
-
-      if (updated?.technicianId && updated.technicianId !== existingRoute.technicianId) {
-        notifyTechnicianAssignee(prisma, {
-          plantId,
-          technicianId: updated.technicianId,
-          actorUserId: req.user?.id,
-          type: "EXEC_ASSIGNED",
-          title: "Ruta asignada",
-          message: `${updated.name}${updated.equipment?.name ? ` · ${updated.equipment.name}` : ""}`,
-          link: `/routes/${updated.id}`,
-        }).catch((err) => logger.error("No se pudo notificar asignación de ruta:", err));
-      }
-
-      return res.json(updated);
-    } catch (error) {
-      logger.error("Error actualizando ruta:", error);
-      return res.status(500).json({ error: "Error interno del servidor" });
-    }
+app.put("/api/routes/:id", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), async (req, res) => {
+  try {
+    const plantId = req.currentPlantId;
+    if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: "id invalido" });
+    const existing = await prisma.route.findFirst({ where: { id, plantId } });
+    if (!existing) return res.status(404).json({ error: "Ruta no encontrada" });
+    return res.json(await saveRoute({ req, plantId, existing }));
+  } catch (e) {
+    return routeError(res, e, "PUT /api/routes/:id");
   }
-);
+});
 
 // DELETE ROUTE
 app.delete(
@@ -6800,8 +6228,16 @@ const executionBaseSelect = {
   observations: true,
   evidenceImage: true,
   evidenceNote: true,
+  equipmentChecklist: true,
+  evidenceEquipmentId: true,
+  evidenceEquipment: { select: { id: true, name: true, code: true } },
   route: {
     select: {
+      evidenceRequired: true,
+      equipments: {
+        orderBy: [{ position: "asc" }, { id: "asc" }],
+        select: { equipmentId: true, position: true, equipment: { select: { id: true, name: true, code: true, location: true } } },
+      },
       id: true,
       name: true,
       routeKind: true,
@@ -7242,8 +6678,9 @@ app.patch(
       const execution = await prisma.execution.findFirst({
         where: { id, plantId },
         include: {
-          route: true,
+          route: { include: { equipments: { orderBy: [{ position: "asc" }, { id: "asc" }], include: { equipment: { select: { id: true, name: true, code: true } } } } } },
           equipment: true,
+          evidenceEquipment: { select: { id: true, name: true, code: true } },
         },
       });
 
@@ -7267,33 +6704,13 @@ app.patch(
         return res.json({ ok: true, alreadyCompleted: true, item: execution });
       }
 
-      const scheduledAt = execution?.scheduledAt ? new Date(execution.scheduledAt) : null;
-      if (scheduledAt && !Number.isNaN(scheduledAt.getTime())) {
-        const scheduledDay = new Date(
-          scheduledAt.getFullYear(),
-          scheduledAt.getMonth(),
-          scheduledAt.getDate(),
-          0,
-          0,
-          0,
-          0
-        );
-        const today = new Date();
-        const todayStart = new Date(
-          today.getFullYear(),
-          today.getMonth(),
-          today.getDate(),
-          0,
-          0,
-          0,
-          0
-        );
-
-        if (scheduledDay > todayStart) {
-          return res.status(400).json({
-            error: "Esta actividad esta programada para una fecha futura y no se puede completar aun.",
-          });
-        }
+      // Día de hoy en la planta (las fechas programadas son días de calendario).
+      const plantTodayForComplete = await plantTodayYmd(plantId);
+      const scheduledYmdForComplete = toYmdRs(execution?.scheduledAt);
+      if (scheduledYmdForComplete && scheduledYmdForComplete > plantTodayForComplete) {
+        return res.status(400).json({
+          error: "Esta actividad esta programada para una fecha futura y no se puede completar aun.",
+        });
       }
 
       if (role === "TECHNICIAN") {
@@ -7368,6 +6785,29 @@ app.patch(
         return res.status(400).json({
           error: "Evidencia obligatoria: agrega al menos una evidencia (foto o nota).",
         });
+      }
+
+      const routeForEvidence = execution?.route || null;
+      if (routeForEvidence?.evidenceRequired && !evidenceImage) {
+        const eqName = execution?.evidenceEquipment?.name;
+        return res.status(400).json({
+          error: eqName ? `Esta ruta requiere foto de evidencia del equipo ${eqName}.` : "Esta ruta requiere foto de evidencia.",
+        });
+      }
+
+      // Rutas con varios equipos: lista de equipos atendidos (por defecto, todos).
+      const routeEqIds = routeForEvidence ? routeEquipmentIds(routeForEvidence) : [];
+      let equipmentChecklist = null;
+      let attendedCount = 1;
+      if (routeEqIds.length > 1) {
+        const given = Array.isArray(req.body?.equipmentChecklist) ? req.body.equipmentChecklist : null;
+        const doneSet = new Set(
+          given ? given.filter((x) => x && (x.done === true || x.done === "true")).map((x) => Number(x.equipmentId)) : routeEqIds
+        );
+        const notes = new Map((given || []).map((x) => [Number(x?.equipmentId), String(x?.note || "").trim().slice(0, 300)]));
+        equipmentChecklist = routeEqIds.map((equipmentId) => ({ equipmentId, done: doneSet.has(equipmentId), note: notes.get(equipmentId) || null }));
+        attendedCount = equipmentChecklist.filter((x) => x.done).length;
+        if (!attendedCount) return res.status(400).json({ error: "Marca al menos un equipo atendido." });
       }
 
       const validConditions = new Set(["BUENO", "REGULAR", "MALO", "CRITICO"]);
@@ -7506,7 +6946,7 @@ app.patch(
         const routePoints = Math.max(1, Number(route?.points || 1));
         const routeInstructions = String(route?.instructions || "");
         const isAdvancedPoints = routeInstructions.includes("PUNTOS (AVANZADO)");
-        const multiplier = usesOptionalConsumption ? 1 : isAdvancedPoints ? 1 : routePoints;
+        const multiplier = usesOptionalConsumption ? 1 : (isAdvancedPoints ? 1 : routePoints) * attendedCount;
 
         if (usesOptionalConsumption) {
           usedInputUnit = requestedUnit || normalizeUnit(lubricant.unit || "");
@@ -7623,6 +7063,7 @@ app.patch(
         usedConvertedQuantity,
         usedConvertedUnit,
         inventoryDeductedAt,
+        ...(equipmentChecklist ? { equipmentChecklist } : {}),
       };
 
       const completionResult = await prisma.$transaction(async (tx) => {
@@ -7682,79 +7123,24 @@ app.patch(
         }
 
         if (route?.id) {
-          const executedDay = startOfDay(executedAt);
-          const nextRouteDate = resolveNextRouteDate({
-            lastDate: executedDay,
-            nextDate: null,
-            frequencyDays: route.frequencyDays,
-            frequencyType: route.frequencyType,
-            weeklyDays: Array.isArray(route.weeklyDays) ? route.weeklyDays : [],
-            monthlyAnchorDay: route.monthlyAnchorDay,
-          });
+          // Calendario fijo: la siguiente fecha sale de la fecha PROGRAMADA y queda después del día de ejecución.
+          const plantTzRow = await tx.plant.findFirst({ where: { id: plantId }, select: { timezone: true } });
+          const executedYmd = zonedYmdTz(executedAt, safeTimeZoneTz(plantTzRow?.timezone || "America/Mexico_City"));
+          const nextYmd = nextAfterCompletion(ruleOfRs(route), toYmdRs(execution.scheduledAt), executedYmd);
+          // La ruta conserva su técnico; si no tenía, queda con quien la ejecutó.
+          const routeTechnicianId = route.technicianId ?? finalTechnicianId ?? null;
 
           await tx.route.updateMany({
             where: { id: route.id, plantId },
             data: {
-              lastDate: executedDay,
-              nextDate: nextRouteDate,
-              technicianId: finalTechnicianId,
+              lastDate: ymdToDateRs(executedYmd),
+              nextDate: nextYmd ? ymdToDateRs(nextYmd) : null,
+              technicianId: routeTechnicianId,
             },
           });
 
-          if (nextRouteDate) {
-            const nd = toSafeNoon(nextRouteDate);
-            const start = startOfDay(nd);
-            const end = endOfDay(nd);
-
-            const pending = await tx.execution.findFirst({
-              where: {
-                plantId,
-                routeId: route.id,
-                status: { in: ["PENDING", "OVERDUE"] },
-              },
-              orderBy: { scheduledAt: "asc" },
-              select: { id: true, scheduledAt: true, status: true },
-            });
-
-            const existingSameDay = await tx.execution.findFirst({
-              where: {
-                plantId,
-                routeId: route.id,
-                status: "PENDING",
-                scheduledAt: { gte: start, lte: end },
-                ...(pending ? { NOT: { id: pending.id } } : {}),
-              },
-              select: { id: true },
-            });
-
-            if (pending) {
-              if (!existingSameDay) {
-                await tx.execution.updateMany({
-                  where: { id: pending.id, plantId },
-                  data: {
-                    scheduledAt: nd,
-                    status: "PENDING",
-                    technicianId: finalTechnicianId,
-                    equipmentId: execution.equipmentId ?? route.equipmentId ?? null,
-                  },
-                });
-              } else {
-                await tx.execution.deleteMany({
-                  where: { id: pending.id, plantId },
-                });
-              }
-            } else if (!existingSameDay) {
-              await tx.execution.create({
-                data: {
-                  plantId,
-                  routeId: route.id,
-                  equipmentId: execution.equipmentId ?? route.equipmentId ?? null,
-                  technicianId: finalTechnicianId,
-                  status: "PENDING",
-                  scheduledAt: nd,
-                },
-              });
-            }
+          if (nextYmd) {
+            await syncOpenExecution(tx, { plantId, route, ymd: nextYmd, technicianId: routeTechnicianId });
           }
         }
 

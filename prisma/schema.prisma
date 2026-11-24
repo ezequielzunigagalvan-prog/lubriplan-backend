@@ -173,6 +173,9 @@ model Equipment {
   preventiveOrders PreventiveOrder[]
 
   @@index([plantId])
+  routeLinks          RouteEquipment[]
+  evidenceExecutions  Execution[]      @relation("ExecutionEvidenceEquipment")
+
   @@index([areaId])
   @@index([status])
 }
@@ -278,6 +281,13 @@ model Route {
 
   isEmergency Boolean @default(false)
 
+  // Evidencia fotográfica obligatoria al completar. En rutas con varios equipos se pide
+  // de un equipo al azar por actividad (Execution.evidenceEquipmentId).
+  evidenceRequired Boolean @default(false)
+
+  // Equipos de la ruta cuando son varios (equipmentId sigue siendo el principal / primero).
+  equipments RouteEquipment[]
+
   lastDate DateTime?
   nextDate DateTime?
 
@@ -349,6 +359,11 @@ model Execution {
   evidenceNote          String?
 
   inventoryDeductedAt DateTime?
+
+  // Rutas con varios equipos: equipo elegido para la evidencia y lista de equipos atendidos.
+  evidenceEquipmentId Int?
+  evidenceEquipment   Equipment? @relation("ExecutionEvidenceEquipment", fields: [evidenceEquipmentId], references: [id], onDelete: SetNull)
+  equipmentChecklist  Json?
 
   // Clave de idempotencia para operaciones offline. El cliente genera un UUID v4 y lo envía en el body.
   clientId String? @unique
@@ -1686,4 +1701,18 @@ model MtNotificationPreference {
   updatedAt       DateTime @updatedAt
 
   @@index([plantId])
+}
+
+/// Equipos de una ruta con varios equipos (incluye el principal).
+model RouteEquipment {
+  id          Int       @id @default(autoincrement())
+  routeId     Int
+  route       Route     @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  equipmentId Int
+  equipment   Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+  position    Int       @default(0)
+  createdAt   DateTime  @default(now())
+
+  @@unique([routeId, equipmentId])
+  @@index([equipmentId])
 }

@@ -16,6 +16,9 @@
 import { Router } from "express";
 import { logger } from "../config/logger.js";
 import { resolveNextRouteDate, startOfDay, endOfDay, toSafeNoon } from "../utils/routeScheduling.js";
+import { ruleOf, toYmd, ymdToDate, nextAfterCompletion } from "../utils/routeSchedule.js";
+import { zonedYmd, safeTimeZone } from "../utils/tzRange.js";
+import { syncOpenExecution } from "../services/routeExecutions.js";
 import { computeRouteConsumption, round2 } from "../utils/units.js";
 import { notifyIfLowStock } from "../services/inventory/lowStock.js";
 
@@ -53,78 +56,23 @@ async function assertTechnicianInPlant(db, technicianId, plantId) {
 }
 
 /**
- * Reprograma la ruta después de ejecutarla y mueve su actividad pendiente/vencida
- * a la siguiente fecha. Misma regla que PATCH /api/executions/:id/complete.
+ * Reprograma la ruta después de ejecutarla (misma regla que completar una actividad):
+ * calendario fijo a partir de su próxima fecha programada y siempre después del día de ejecución.
  */
 async function rescheduleRoute(tx, { route, plantId, executedAt, technicianId }) {
-  const executedDay = startOfDay(executedAt);
-  const nextRouteDate = resolveNextRouteDate({
-    lastDate: executedDay,
-    nextDate: null,
-    frequencyDays: route.frequencyDays,
-    frequencyType: route.frequencyType,
-    weeklyDays: Array.isArray(route.weeklyDays) ? route.weeklyDays : [],
-    monthlyAnchorDay: route.monthlyAnchorDay,
-    customIntervalDays: route.customIntervalDays,
-  });
+  const plant = await tx.plant.findFirst({ where: { id: plantId }, select: { timezone: true } });
+  const executedYmd = zonedYmd(executedAt, safeTimeZone(plant?.timezone || "America/Mexico_City"));
+  const full = await tx.route.findFirst({ where: { id: route.id }, include: { equipments: true } });
+  const nextYmd = nextAfterCompletion(ruleOf(full), toYmd(full?.nextDate) || executedYmd, executedYmd);
+  const routeTechnicianId = full?.technicianId ?? technicianId ?? null;
 
   await tx.route.updateMany({
     where: { id: route.id, plantId },
-    data: {
-      lastDate: executedDay,
-      nextDate: nextRouteDate,
-      ...(technicianId ? { technicianId } : {}),
-    },
+    data: { lastDate: ymdToDate(executedYmd), nextDate: nextYmd ? ymdToDate(nextYmd) : null, technicianId: routeTechnicianId },
   });
-
-  if (!nextRouteDate) return nextRouteDate;
-
-  const nd = toSafeNoon(nextRouteDate);
-  const start = startOfDay(nd);
-  const end = endOfDay(nd);
-
-  const pending = await tx.execution.findFirst({
-    where: { plantId, routeId: route.id, status: { in: ["PENDING", "OVERDUE"] } },
-    orderBy: { scheduledAt: "asc" },
-    select: { id: true },
-  });
-
-  const existingSameDay = await tx.execution.findFirst({
-    where: {
-      plantId,
-      routeId: route.id,
-      status: "PENDING",
-      scheduledAt: { gte: start, lte: end },
-      ...(pending ? { NOT: { id: pending.id } } : {}),
-    },
-    select: { id: true },
-  });
-
-  const assignTech = technicianId ?? route.technicianId ?? null;
-
-  if (pending) {
-    if (!existingSameDay) {
-      await tx.execution.updateMany({
-        where: { id: pending.id, plantId },
-        data: { scheduledAt: nd, status: "PENDING", technicianId: assignTech, equipmentId: route.equipmentId },
-      });
-    } else {
-      await tx.execution.deleteMany({ where: { id: pending.id, plantId } });
-    }
-  } else if (!existingSameDay) {
-    await tx.execution.create({
-      data: {
-        plantId,
-        routeId: route.id,
-        equipmentId: route.equipmentId,
-        technicianId: assignTech,
-        status: "PENDING",
-        scheduledAt: nd,
-      },
-    });
-  }
-
-  return nextRouteDate;
+  if (!nextYmd) return null;
+  await syncOpenExecution(tx, { plantId, route: full, ymd: nextYmd, technicianId: routeTechnicianId });
+  return ymdToDate(nextYmd);
 }
 
 export default function olpRoutes({ prisma, auth, requireRole }) {

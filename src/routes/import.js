@@ -106,7 +106,8 @@ export function parseSheetYmd(value) {
 }
 
 const addDaysYmd = (ymd, n) => new Date(Date.parse(`${ymd}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
-const noonInTz = (ymd, tz) => new Date(zonedStartOfDay(ymd, tz).getTime() + 12 * 3600000);
+// Fechas de calendario de rutas: 12:00 UTC del día (misma convención que utils/routeSchedule.js).
+const noonInTz = (ymd) => new Date(`${ymd}T12:00:00.000Z`);
 
 /* ───────── Lectura del libro ───────── */
 function findSheet(workbook, key) {

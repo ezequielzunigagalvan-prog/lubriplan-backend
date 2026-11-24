@@ -46,7 +46,7 @@ function makeDb({ stock = 10, preventNegativeStock = true, routeOverrides = {} }
     route: {
       findFirst: async ({ where }) => {
         const r = state.routes[where.id];
-        return r && r.plantId === where.plantId ? { ...r } : null;
+        return r && (where.plantId == null || r.plantId === where.plantId) ? { ...r, equipments: [] } : null;
       },
       updateMany: async (args) => {
         state.routeUpdates.push(args);
@@ -74,9 +74,12 @@ function makeDb({ stock = 10, preventNegativeStock = true, routeOverrides = {} }
         return e;
       },
       findFirst: async () => null,
+      findMany: async () => [],
+      update: async ({ data }) => ({ id: 1, ...data }),
       updateMany: async () => ({ count: 1 }),
       deleteMany: async () => ({ count: 1 }),
     },
+    plant: { findFirst: async () => ({ timezone: "America/Mexico_City" }) },
     $transaction: async (fn) => fn(db),
   };
   return db;
