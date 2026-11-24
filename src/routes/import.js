@@ -1,689 +1,689 @@
-﻿import express from "express";
+﻿// src/routes/import.js
+// Importación masiva desde Excel: equipos, lubricantes, técnicos y rutas.
+//
+// Correcciones respecto a la versión anterior:
+//  - SEGURIDAD: al confirmar, el servidor volvía a crear lo que el navegador le mandaba sin validarlo.
+//    Ahora se vuelve a subir el archivo y se valida de nuevo en el servidor antes de guardar.
+//  - El código de equipo es único en todo el sistema: se valida contra todas las plantas
+//    (antes pasaba la validación y fallaba al guardar con un error genérico).
+//  - Los códigos de técnicos eliminados también cuentan (la base de datos no permite repetirlos).
+//  - Criticidad "Crítica" aceptada; acentos y mayúsculas indistintos.
+//  - Lo que ya existe se OMITE (aviso) en lugar de bloquear todo el archivo.
+//  - Transacción con tiempo suficiente para archivos grandes (antes fallaba a los 5 segundos).
+//  - Lectura robusta de celdas (texto con formato, fórmulas, fechas de Excel) y aviso de columnas faltantes.
+//  - Fechas en la zona horaria de la planta; se rechaza una última fecha en el futuro.
+//  - Registro en auditoría de cada importación.
+
+import express from "express";
 import ExcelJS from "exceljs";
 import multer from "multer";
 import prisma from "../prisma.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { requireRole } from "../middleware/requireRole.js";
 import { logger } from "../config/logger.js";
+import { logAudit } from "../services/audit.service.js";
+import { DEFAULT_TZ, safeTimeZone, zonedStartOfDay, zonedYmd } from "../utils/tzRange.js";
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024 } });
+const managers = [requireAuth, requireRole(["ADMIN", "SUPERVISOR"])];
 
-const SHEETS = ["equipos", "lubricantes", "tecnicos", "rutas"];
-const WORKSHEET_NAMES = {
-  equipos: "equipos",
-  lubricantes: "lubricantes",
-  tecnicos: "tecnicos",
-  rutas: "rutas",
+export const SHEETS = ["equipos", "lubricantes", "tecnicos", "rutas"];
+const MAX_ROWS = 2000;
+
+export const TEMPLATE_COLUMNS = {
+  equipos: ["codigo", "nombre", "area", "ubicacion", "estado", "criticidad", "descripcion", "marca", "modelo"],
+  lubricantes: ["codigo", "nombre", "tipo", "viscosidad", "unidad", "stock", "minStock", "marca", "costo_unitario"],
+  tecnicos: ["nombre", "codigo", "especialidad", "estatus"],
+  rutas: [
+    "equipo_codigo", "nombre", "frecuencia_dias", "lubricante_codigo", "cantidad", "unidad", "equivalencia_bombazo",
+    "unidad_equivalencia_bombazo", "tecnico_codigo", "puntos_lubricacion", "metodo_aplicacion", "ultima_fecha_lubricacion", "instrucciones",
+  ],
 };
-const VALID_STATUS = new Set(["ACTIVO", "INACTIVO"]);
-const VALID_CRITICALITY = new Set(["ALTA", "MEDIA", "BAJA"]);
-const VALID_LUBRICANT_TYPES = new Set(["ACEITE", "GRASA"]);
-const VALID_UNITS = new Set(["L", "ML", "KG", "G", "BOMBAZOS"]);
+const REQUIRED_COLUMNS = {
+  equipos: ["codigo", "nombre"],
+  lubricantes: ["codigo", "nombre", "tipo", "unidad", "stock"],
+  tecnicos: ["nombre", "codigo"],
+  rutas: ["equipo_codigo", "nombre", "frecuencia_dias", "lubricante_codigo", "cantidad", "unidad", "ultima_fecha_lubricacion"],
+};
 
-function clean(value) {
-  return String(value ?? "").trim();
-}
+/* ───────── Normalización ───────── */
+export const clean = (v) => String(v ?? "").replace(/\s+/g, " ").trim();
+const fold = (v) => clean(v).normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase();
+export const normalizeHeader = (v) => fold(v).toLowerCase().replace(/[\s-]+/g, "_");
+export const normalizeCode = (v) => fold(v).replace(/\s+/g, "-");
+const normalizeRouteName = (v) => clean(v).toLowerCase();
+const normalizeMethod = (v) => clean(v).toLowerCase();
 
-function upper(value) {
-  return clean(value).toUpperCase();
-}
-
-function toNumber(value) {
+export function toNumber(value) {
   if (value == null || value === "") return null;
-  const n = Number(String(value).replace(",", "."));
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  let s = clean(value).replace(/\s/g, "");
+  if (/^-?\d{1,3}(,\d{3})+(\.\d+)?$/.test(s)) s = s.replace(/,/g, ""); // 1,234.5
+  else s = s.replace(",", "."); // 1,5
+  const n = Number(s);
   return Number.isFinite(n) ? n : null;
 }
 
-function normalizeRouteName(value) {
-  return clean(value).toLowerCase().replace(/\s+/g, " ");
-}
+const STATUS = { ACTIVO: "ACTIVO", ACTIVE: "ACTIVO", INACTIVO: "INACTIVO", INACTIVE: "INACTIVO" };
+const CRITICALITY = { CRITICA: "CRITICA", CRITICO: "CRITICA", ALTA: "ALTA", MEDIA: "MEDIA", BAJA: "BAJA" };
+const LUB_TYPES = { ACEITE: "Aceite", GRASA: "Grasa" };
+const LUB_UNITS = { L: "L", LT: "L", LTS: "L", LITRO: "L", LITROS: "L", ML: "ml", KG: "kg", G: "g", GR: "g" };
+const ROUTE_UNITS = { ...LUB_UNITS, BOMBAZO: "BOMBAZOS", BOMBAZOS: "BOMBAZOS" };
 
-function normalizeHeader(value) {
-  return clean(value)
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/\s+/g, "_");
-}
-
-function rowValue(row, key) {
-  return row[key] ?? row[normalizeHeader(key)] ?? "";
-}
-
-function parseSheetDate(value) {
-  if (!value) return null;
-
-  if (value instanceof Date && Number.isFinite(value.getTime())) {
-    return new Date(value.getFullYear(), value.getMonth(), value.getDate(), 12, 0, 0, 0);
+/** Valor legible de una celda de ExcelJS (texto con formato, fórmulas, hipervínculos, fechas). */
+export function cellValue(v) {
+  if (v == null) return "";
+  if (v instanceof Date) return v;
+  if (typeof v === "object") {
+    if (Array.isArray(v.richText)) return v.richText.map((t) => t.text).join("");
+    if ("result" in v) return cellValue(v.result);
+    if ("text" in v) return cellValue(v.text);
+    if ("hyperlink" in v) return String(v.hyperlink);
+    if ("error" in v) return "";
+    return "";
   }
+  return v;
+}
 
+/** Fecha de la hoja como YYYY-MM-DD (acepta fecha de Excel, AAAA-MM-DD y DD/MM/AAAA). */
+export function parseSheetYmd(value) {
+  if (!value) return null;
+  if (value instanceof Date && Number.isFinite(value.getTime())) {
+    // ExcelJS entrega las fechas a medianoche UTC del día capturado.
+    return value.toISOString().slice(0, 10);
+  }
   const raw = clean(value);
-  if (!raw) return null;
-
   let y;
   let m;
   let d;
-
-  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) {
-    [y, m, d] = raw.slice(0, 10).split("-").map(Number);
-  } else if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(raw)) {
-    const parts = raw.split("/").map(Number);
-    d = parts[0];
-    m = parts[1];
-    y = parts[2];
-  }
-
-  if (!y || !m || !d) return null;
-  return new Date(y, m - 1, d, 12, 0, 0, 0);
+  if (/^\d{4}-\d{1,2}-\d{1,2}/.test(raw)) [y, m, d] = raw.slice(0, 10).split("-").map(Number);
+  else if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(raw)) [d, m, y] = raw.split("/").map(Number);
+  if (!y || !m || !d || m > 12 || d > 31) return null;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (dt.getUTCMonth() !== m - 1) return null; // 31/02
+  return dt.toISOString().slice(0, 10);
 }
 
-function addDays(date, days) {
-  const d = new Date(date);
-  d.setDate(d.getDate() + Number(days));
-  d.setHours(12, 0, 0, 0);
-  return d;
+const addDaysYmd = (ymd, n) => new Date(Date.parse(`${ymd}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
+const noonInTz = (ymd, tz) => new Date(zonedStartOfDay(ymd, tz).getTime() + 12 * 3600000);
+
+/* ───────── Lectura del libro ───────── */
+function findSheet(workbook, key) {
+  return workbook.worksheets.find((ws) => normalizeHeader(ws.name) === key) || null;
 }
 
-function startOfDay(value) {
-  const d = parseSheetDate(value);
-  if (!d) return null;
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
-}
-
-function toSafeNoon(value) {
-  const d = value instanceof Date ? value : new Date(value);
-  if (!Number.isFinite(d.getTime())) return null;
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12, 0, 0, 0);
-}
-
-function resolveImportedNextRouteDate(lastDate, frequencyDays) {
-  const parsedLast = startOfDay(lastDate);
-  const days = Number(frequencyDays);
-  if (!parsedLast || !Number.isFinite(days) || days <= 0) return null;
-  const out = new Date(parsedLast);
-  out.setDate(out.getDate() + days);
-  out.setHours(0, 0, 0, 0);
-  return out;
-}
-
-function normalizeRouteMethod(value) {
-  return String(value || "")
-    .trim()
-    .replace(/\s+/g, " ")
-    .toLowerCase();
-}
-
-function dateToYmd(date) {
-  if (!(date instanceof Date) || !Number.isFinite(date.getTime())) return "";
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-}
-
-function sheetToRows(sheet) {
-  if (!sheet) return [];
-  const headerRow = sheet.getRow(1);
+export function sheetToRows(sheet) {
+  if (!sheet) return { rows: [], headers: [] };
   const headers = [];
-  headerRow.eachCell((cell, col) => {
-    headers[col] = normalizeHeader(cell.value);
+  sheet.getRow(1).eachCell((cell, col) => {
+    headers[col] = normalizeHeader(cellValue(cell.value));
   });
-
   const rows = [];
   sheet.eachRow((row, rowNumber) => {
     if (rowNumber === 1) return;
     const item = { _row: rowNumber };
     let hasValue = false;
-
     row.eachCell({ includeEmpty: true }, (cell, col) => {
       const key = headers[col];
       if (!key) return;
-      const value = cell.value?.text ?? cell.value?.result ?? cell.value;
-      if (clean(value) !== "") hasValue = true;
+      const value = cellValue(cell.value);
+      if (clean(value instanceof Date ? "x" : value) !== "") hasValue = true;
       item[key] = value;
     });
-
     if (hasValue) rows.push(item);
   });
-
-  return rows;
+  return { rows, headers: headers.filter(Boolean) };
 }
 
-function addTemplateSheet(workbook, name, headers, examples) {
-  const ws = workbook.addWorksheet(name);
-  ws.addRow(headers);
-  for (const example of examples) ws.addRow(example);
+const get = (row, key) => row[normalizeHeader(key)] ?? "";
 
-  ws.getRow(1).font = { bold: true };
-  ws.getRow(1).eachCell((cell) => {
-    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF3F4F6" } };
-  });
-  ws.columns.forEach((col) => {
-    col.width = 24;
-  });
+/* ───────── Validación ───────── */
+function bucket() {
+  return { ok: [], errors: [], skipped: [] };
 }
 
-async function readWorkbook(buffer) {
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(buffer);
-  return workbook;
-}
-
-function pushError(errors, row, message) {
-  errors.push({ row, message });
-}
-
-async function validateEquipos(rows = [], plantId) {
-  const errors = [];
-  const ok = [];
-  const seen = new Set();
-  const codes = rows.map((r) => upper(rowValue(r, "codigo"))).filter(Boolean);
+async function validateEquipos(rows, plantId) {
+  const out = bucket();
+  const codes = rows.map((r) => normalizeCode(get(r, "codigo"))).filter(Boolean);
+  // El código de equipo es único en todo el sistema. plantId explícito evita el filtro automático por planta.
   const existing = codes.length
-    ? await prisma.equipment.findMany({
-        where: { plantId, code: { in: codes } },
-        select: { code: true, plantId: true },
-      })
+    ? await prisma.equipment.findMany({ where: { plantId: { gt: 0 }, code: { in: codes } }, select: { code: true, plantId: true } })
     : [];
-  const existingByCode = new Map(existing.map((x) => [upper(x.code), x]));
-
-  for (const row of rows) {
-    const codigo = upper(rowValue(row, "codigo"));
-    const nombre = clean(rowValue(row, "nombre"));
-    const area = clean(rowValue(row, "area"));
-    const ubicacion = clean(rowValue(row, "ubicacion"));
-    const estado = upper(rowValue(row, "estado")) || "ACTIVO";
-    const criticidad = upper(rowValue(row, "criticidad")) || null;
-    const descripcion = clean(rowValue(row, "descripcion"));
-    const rowErrors = [];
-
-    if (!codigo) rowErrors.push("codigo es obligatorio");
-    if (!nombre) rowErrors.push("nombre es obligatorio");
-    if (!VALID_STATUS.has(estado)) rowErrors.push("estado debe ser Activo o Inactivo");
-    if (criticidad && !VALID_CRITICALITY.has(criticidad)) rowErrors.push("criticidad debe ser Alta, Media o Baja");
-    if (codigo && seen.has(codigo)) rowErrors.push("codigo duplicado en el archivo");
-    if (codigo && existingByCode.has(codigo)) rowErrors.push("codigo ya existe en LubriPlan");
-
-    if (rowErrors.length) {
-      for (const msg of rowErrors) pushError(errors, row._row, msg);
-    } else {
-      seen.add(codigo);
-      ok.push({ row: row._row, codigo, nombre, area, ubicacion, estado, criticidad, descripcion });
-    }
-  }
-
-  return { ok, errors };
-}
-
-async function validateLubricantes(rows = [], plantId) {
-  const errors = [];
-  const ok = [];
+  const byCode = new Map(existing.map((e) => [normalizeCode(e.code), e]));
   const seen = new Set();
-  const codes = rows.map((r) => upper(rowValue(r, "codigo"))).filter(Boolean);
-  const existing = codes.length
-    ? await prisma.lubricant.findMany({ where: { plantId, code: { in: codes } }, select: { code: true } })
-    : [];
-  const existingCodes = new Set(existing.map((x) => upper(x.code)));
 
-  for (const row of rows) {
-    const codigo = upper(rowValue(row, "codigo"));
-    const nombre = clean(rowValue(row, "nombre"));
-    const tipo = upper(rowValue(row, "tipo"));
-    const viscosidad = clean(rowValue(row, "viscosidad"));
-    const unidad = upper(rowValue(row, "unidad"));
-    const stock = toNumber(rowValue(row, "stock"));
-    const minStock = toNumber(rowValue(row, "minStock"));
-    const marca = clean(rowValue(row, "marca"));
-    const rowErrors = [];
-
-    if (!codigo) rowErrors.push("codigo es obligatorio");
-    if (!nombre) rowErrors.push("nombre es obligatorio");
-    if (!VALID_LUBRICANT_TYPES.has(tipo)) rowErrors.push("tipo debe ser Aceite o Grasa");
-    if (!VALID_UNITS.has(unidad)) rowErrors.push("unidad debe ser L, ml, kg o g");
-    if (stock == null || stock < 0) rowErrors.push("stock debe ser numero mayor o igual a cero");
-    if (minStock != null && minStock < 0) rowErrors.push("minStock no puede ser negativo");
-    if (codigo && seen.has(codigo)) rowErrors.push("codigo duplicado en el archivo");
-    if (codigo && existingCodes.has(codigo)) rowErrors.push("codigo ya existe en LubriPlan");
-
-    if (rowErrors.length) {
-      for (const msg of rowErrors) pushError(errors, row._row, msg);
-    } else {
-      seen.add(codigo);
-      ok.push({ row: row._row, codigo, nombre, tipo, viscosidad, unidad, stock, minStock, marca });
+  for (const r of rows) {
+    const codigo = normalizeCode(get(r, "codigo"));
+    const nombre = clean(get(r, "nombre"));
+    const estadoRaw = fold(get(r, "estado"));
+    const critRaw = fold(get(r, "criticidad"));
+    const errs = [];
+    if (!codigo) errs.push("Falta el código");
+    if (!nombre) errs.push("Falta el nombre");
+    if (estadoRaw && !STATUS[estadoRaw]) errs.push(`Estado "${clean(get(r, "estado"))}" no válido (usa Activo o Inactivo)`);
+    if (critRaw && !CRITICALITY[critRaw]) errs.push(`Criticidad "${clean(get(r, "criticidad"))}" no válida (usa Crítica, Alta, Media o Baja)`);
+    if (codigo && seen.has(codigo)) errs.push(`El código ${codigo} está repetido en el archivo`);
+    if (errs.length) {
+      errs.forEach((message) => out.errors.push({ row: r._row, message }));
+      continue;
     }
-  }
-
-  return { ok, errors };
-}
-
-async function validateTecnicos(rows = [], plantId) {
-  const errors = [];
-  const ok = [];
-  const seen = new Set();
-  const codes = rows.map((r) => upper(rowValue(r, "codigo"))).filter(Boolean);
-  const existing = codes.length
-    ? await prisma.technician.findMany({ where: { plantId, code: { in: codes }, deletedAt: null }, select: { code: true } })
-    : [];
-  const existingCodes = new Set(existing.map((x) => upper(x.code)));
-
-  for (const row of rows) {
-    const nombre = clean(rowValue(row, "nombre"));
-    const codigo = upper(rowValue(row, "codigo"));
-    const especialidad = clean(rowValue(row, "especialidad")) || "Lubricacion";
-    const estatus = clean(rowValue(row, "estatus")) || "Activo";
-    const estatusNorm = upper(estatus);
-    const rowErrors = [];
-
-    if (!nombre) rowErrors.push("nombre es obligatorio");
-    if (!codigo) rowErrors.push("codigo es obligatorio");
-    if (!VALID_STATUS.has(estatusNorm)) rowErrors.push("estatus debe ser Activo o Inactivo");
-    if (codigo && seen.has(codigo)) rowErrors.push("codigo duplicado en el archivo");
-    if (codigo && existingCodes.has(codigo)) rowErrors.push("codigo ya existe en LubriPlan");
-
-    if (rowErrors.length) {
-      for (const msg of rowErrors) pushError(errors, row._row, msg);
-    } else {
-      seen.add(codigo);
-      ok.push({ row: row._row, nombre, codigo, especialidad, estatus: estatusNorm === "ACTIVO" ? "Activo" : "Inactivo" });
+    seen.add(codigo);
+    const found = byCode.get(codigo);
+    if (found) {
+      out.skipped.push({
+        row: r._row,
+        codigo,
+        message: found.plantId === plantId ? `El equipo ${codigo} ya existe: se omite` : `El código ${codigo} ya lo usa un equipo de otra planta: se omite`,
+        otherPlant: found.plantId !== plantId,
+      });
+      continue;
     }
-  }
-
-  return { ok, errors };
-}
-
-async function validateRutas(rows = [], plantId, staged = {}) {
-  const errors = [];
-  const ok = [];
-  const equipmentCodes = rows.map((r) => upper(rowValue(r, "equipo_codigo"))).filter(Boolean);
-  const lubricantCodes = rows.map((r) => upper(rowValue(r, "lubricante_codigo"))).filter(Boolean);
-  const technicianCodes = rows.map((r) => upper(rowValue(r, "tecnico_codigo"))).filter(Boolean);
-
-  const [equipments, lubricants, technicians] = await Promise.all([
-    equipmentCodes.length ? prisma.equipment.findMany({ where: { plantId, code: { in: equipmentCodes } }, select: { id: true, code: true } }) : [],
-    lubricantCodes.length ? prisma.lubricant.findMany({ where: { plantId, code: { in: lubricantCodes } }, select: { id: true, code: true, type: true, name: true } }) : [],
-    technicianCodes.length ? prisma.technician.findMany({ where: { plantId, code: { in: technicianCodes }, deletedAt: null }, select: { id: true, code: true } }) : [],
-  ]);
-
-  const equipmentByCode = new Map(equipments.map((x) => [upper(x.code), x]));
-  const lubricantByCode = new Map(lubricants.map((x) => [upper(x.code), x]));
-  const technicianByCode = new Map(technicians.map((x) => [upper(x.code), x]));
-  const seenRoutes = new Set();
-
-  for (const item of staged.equipos || []) equipmentByCode.set(upper(item.codigo), { id: item.id ?? null, code: item.codigo });
-  for (const item of staged.lubricantes || []) {
-    lubricantByCode.set(upper(item.codigo), {
-      id: item.id ?? null,
-      code: item.codigo,
-      type: item.tipo,
-      name: item.nombre,
+    out.ok.push({
+      row: r._row,
+      codigo,
+      nombre,
+      area: clean(get(r, "area")),
+      ubicacion: clean(get(r, "ubicacion")),
+      estado: STATUS[estadoRaw] || "ACTIVO",
+      criticidad: CRITICALITY[critRaw] || "MEDIA",
+      descripcion: clean(get(r, "descripcion")),
+      marca: clean(get(r, "marca")),
+      modelo: clean(get(r, "modelo")),
     });
   }
-  for (const item of staged.tecnicos || []) technicianByCode.set(upper(item.codigo), { id: item.id ?? null, code: item.codigo });
+  return out;
+}
 
-  for (const row of rows) {
-    const equipoCodigo = upper(rowValue(row, "equipo_codigo"));
-    const nombre = clean(rowValue(row, "nombre"));
-    const frecuenciaDias = toNumber(rowValue(row, "frecuencia_dias"));
-    const lubricanteCodigo = upper(rowValue(row, "lubricante_codigo"));
-    const cantidad = toNumber(rowValue(row, "cantidad"));
-    const unidad = upper(rowValue(row, "unidad"));
-    const equivalenciaBombazo = toNumber(rowValue(row, "equivalencia_bombazo"));
-    const unidadEquivalenciaBombazo = upper(rowValue(row, "unidad_equivalencia_bombazo"));
-    const tecnicoCodigo = upper(rowValue(row, "tecnico_codigo"));
-    const puntosLubricacion = toNumber(rowValue(row, "puntos_lubricacion"));
-    const metodoAplicacion = clean(rowValue(row, "metodo_aplicacion"));
-    const instrucciones = clean(rowValue(row, "instrucciones"));
-    const ultimaFecha = parseSheetDate(rowValue(row, "ultima_fecha_lubricacion"));
-    const rowErrors = [];
+async function validateLubricantes(rows, plantId) {
+  const out = bucket();
+  const existing = await prisma.lubricant.findMany({ where: { plantId, code: { not: null } }, select: { code: true } });
+  const existingCodes = new Set(existing.map((x) => normalizeCode(x.code)));
+  const seen = new Set();
 
-    const equipment = equipmentByCode.get(equipoCodigo);
-    const lubricant = lubricantByCode.get(lubricanteCodigo);
-    const technician = tecnicoCodigo ? technicianByCode.get(tecnicoCodigo) : null;
-    const proximaFecha = resolveImportedNextRouteDate(ultimaFecha, frecuenciaDias);
-    const normalizedMethod = normalizeRouteMethod(metodoAplicacion);
-
-    if (!equipoCodigo) rowErrors.push("equipo_codigo es obligatorio");
-    if (equipoCodigo && !equipment) rowErrors.push("equipo_codigo no existe");
-    if (!nombre) rowErrors.push("nombre es obligatorio");
-    if (frecuenciaDias == null || frecuenciaDias <= 0) rowErrors.push("frecuencia_dias debe ser mayor a cero");
-    if (!lubricanteCodigo) rowErrors.push("lubricante_codigo es obligatorio");
-    if (lubricanteCodigo && !lubricant) rowErrors.push("lubricante_codigo no existe");
-    if (cantidad == null || cantidad < 0) rowErrors.push("cantidad debe ser mayor o igual a cero");
-    if (!VALID_UNITS.has(unidad)) rowErrors.push("unidad debe ser L, ml, kg, g o BOMBAZOS");
-    if (tecnicoCodigo && !technician) rowErrors.push("tecnico_codigo no existe");
-    if (puntosLubricacion != null && (!Number.isFinite(puntosLubricacion) || puntosLubricacion <= 0)) {
-      rowErrors.push("puntos_lubricacion debe ser mayor a cero");
+  for (const r of rows) {
+    const codigo = normalizeCode(get(r, "codigo"));
+    const nombre = clean(get(r, "nombre"));
+    const tipo = LUB_TYPES[fold(get(r, "tipo"))];
+    const unidad = LUB_UNITS[fold(get(r, "unidad"))];
+    const stock = toNumber(get(r, "stock"));
+    const minStockRaw = get(r, "minstock");
+    const minStock = toNumber(minStockRaw);
+    const costRaw = get(r, "costo_unitario");
+    const costo = toNumber(costRaw);
+    const errs = [];
+    if (!codigo) errs.push("Falta el código");
+    if (!nombre) errs.push("Falta el nombre");
+    if (!tipo) errs.push(`Tipo "${clean(get(r, "tipo"))}" no válido (usa Aceite o Grasa)`);
+    if (!unidad) errs.push(`Unidad "${clean(get(r, "unidad"))}" no válida (usa L, ml, kg o g)`);
+    if (stock == null || stock < 0) errs.push("El stock debe ser un número mayor o igual a cero");
+    if (clean(minStockRaw) !== "" && (minStock == null || minStock < 0)) errs.push("El stock mínimo debe ser un número mayor o igual a cero");
+    if (clean(costRaw) !== "" && (costo == null || costo < 0)) errs.push("El costo unitario debe ser un número mayor o igual a cero");
+    if (codigo && seen.has(codigo)) errs.push(`El código ${codigo} está repetido en el archivo`);
+    if (errs.length) {
+      errs.forEach((message) => out.errors.push({ row: r._row, message }));
+      continue;
     }
-    if (!ultimaFecha) rowErrors.push("ultima_fecha_lubricacion es obligatoria");
+    seen.add(codigo);
+    if (existingCodes.has(codigo)) {
+      out.skipped.push({ row: r._row, codigo, message: `El lubricante ${codigo} ya existe: se omite (su stock no se modifica)` });
+      continue;
+    }
+    out.ok.push({ row: r._row, codigo, nombre, tipo, unidad, stock, minStock, costo, viscosidad: clean(get(r, "viscosidad")), marca: clean(get(r, "marca")) });
+  }
+  return out;
+}
+
+async function validateTecnicos(rows, plantId) {
+  const out = bucket();
+  // Incluye técnicos eliminados: la base de datos no permite repetir su código en la planta.
+  const existing = await prisma.technician.findMany({ where: { plantId }, select: { code: true, deletedAt: true } });
+  const byCode = new Map(existing.map((t) => [normalizeCode(t.code), t]));
+  const seen = new Set();
+
+  for (const r of rows) {
+    const nombre = clean(get(r, "nombre"));
+    const codigo = normalizeCode(get(r, "codigo"));
+    const estatusRaw = fold(get(r, "estatus"));
+    const errs = [];
+    if (!nombre) errs.push("Falta el nombre");
+    if (!codigo) errs.push("Falta el código");
+    if (estatusRaw && !STATUS[estatusRaw]) errs.push(`Estatus "${clean(get(r, "estatus"))}" no válido (usa Activo o Inactivo)`);
+    if (codigo && seen.has(codigo)) errs.push(`El código ${codigo} está repetido en el archivo`);
+    const found = codigo ? byCode.get(codigo) : null;
+    if (found?.deletedAt) errs.push(`El código ${codigo} perteneció a un técnico eliminado; usa otro código`);
+    if (errs.length) {
+      errs.forEach((message) => out.errors.push({ row: r._row, message }));
+      continue;
+    }
+    seen.add(codigo);
+    if (found) {
+      out.skipped.push({ row: r._row, codigo, message: `El técnico ${codigo} ya existe: se omite` });
+      continue;
+    }
+    out.ok.push({
+      row: r._row,
+      nombre,
+      codigo,
+      especialidad: clean(get(r, "especialidad")) || "Lubricación",
+      estatus: STATUS[estatusRaw] === "INACTIVO" ? "Inactivo" : "Activo",
+    });
+  }
+  return out;
+}
+
+async function validateRutas(rows, plantId, staged, tz) {
+  const out = bucket();
+  const warnings = [];
+  const today = zonedYmd(new Date(), tz);
+  const [equipments, lubricants, technicians, routes] = await Promise.all([
+    prisma.equipment.findMany({ where: { plantId, code: { not: null } }, select: { id: true, code: true } }),
+    prisma.lubricant.findMany({ where: { plantId, code: { not: null } }, select: { id: true, code: true, name: true, type: true } }),
+    prisma.technician.findMany({ where: { plantId, deletedAt: null }, select: { id: true, code: true, status: true } }),
+    prisma.route.findMany({ where: { plantId }, select: { equipmentId: true, lubricantId: true, normalizedName: true, method: true } }),
+  ]);
+  const eqByCode = new Map(equipments.map((x) => [normalizeCode(x.code), x]));
+  const lubByCode = new Map(lubricants.map((x) => [normalizeCode(x.code), x]));
+  const techByCode = new Map(technicians.map((x) => [normalizeCode(x.code), x]));
+  for (const x of staged.equipos) eqByCode.set(x.codigo, { id: null, code: x.codigo, staged: true });
+  for (const x of staged.lubricantes) lubByCode.set(x.codigo, { id: null, code: x.codigo, name: x.nombre, type: x.tipo, staged: true });
+  for (const x of staged.tecnicos) techByCode.set(x.codigo, { id: null, code: x.codigo, status: x.estatus, staged: true });
+  const existingRoutes = new Set(routes.map((r) => `${r.equipmentId}|${r.lubricantId}|${r.normalizedName}|${r.method || ""}`));
+  const seen = new Set();
+  let overdueOnImport = 0;
+
+  for (const r of rows) {
+    const equipoCodigo = normalizeCode(get(r, "equipo_codigo"));
+    const nombre = clean(get(r, "nombre"));
+    const frecuencia = toNumber(get(r, "frecuencia_dias"));
+    const lubCodigo = normalizeCode(get(r, "lubricante_codigo"));
+    const cantidad = toNumber(get(r, "cantidad"));
+    const unidad = ROUTE_UNITS[fold(get(r, "unidad"))];
+    const eqBomb = toNumber(get(r, "equivalencia_bombazo"));
+    const eqBombUnit = LUB_UNITS[fold(get(r, "unidad_equivalencia_bombazo"))];
+    const techCodigo = normalizeCode(get(r, "tecnico_codigo"));
+    const puntosRaw = get(r, "puntos_lubricacion");
+    const puntos = toNumber(puntosRaw);
+    const metodo = clean(get(r, "metodo_aplicacion"));
+    const ultima = parseSheetYmd(get(r, "ultima_fecha_lubricacion"));
+    const equipment = eqByCode.get(equipoCodigo);
+    const lubricant = lubByCode.get(lubCodigo);
+    const technician = techCodigo ? techByCode.get(techCodigo) : null;
+    const errs = [];
+
+    if (!equipoCodigo) errs.push("Falta el código del equipo");
+    else if (!equipment) errs.push(`El equipo ${equipoCodigo} no existe en esta planta ni en el archivo`);
+    if (!nombre) errs.push("Falta el nombre de la ruta");
+    if (frecuencia == null || frecuencia < 1 || !Number.isInteger(frecuencia)) errs.push("La frecuencia debe ser un número entero de días (1 o más)");
+    if (!lubCodigo) errs.push("Falta el código del lubricante");
+    else if (!lubricant) errs.push(`El lubricante ${lubCodigo} no existe en esta planta ni en el archivo`);
+    if (cantidad == null || cantidad <= 0) errs.push("La cantidad debe ser mayor a cero");
+    if (!unidad) errs.push(`Unidad "${clean(get(r, "unidad"))}" no válida (usa L, ml, kg, g o BOMBAZOS)`);
     if (unidad === "BOMBAZOS") {
-      if (equivalenciaBombazo == null || equivalenciaBombazo <= 0) {
-        rowErrors.push("equivalencia_bombazo debe ser mayor a cero cuando la unidad es BOMBAZOS");
-      }
-      if (!unidadEquivalenciaBombazo || !new Set(["L", "ML", "KG", "G"]).has(unidadEquivalenciaBombazo)) {
-        rowErrors.push("unidad_equivalencia_bombazo debe ser L, ml, kg o g cuando la unidad es BOMBAZOS");
-      }
+      if (eqBomb == null || eqBomb <= 0) errs.push("Con BOMBAZOS indica cuánto equivale un bombazo (equivalencia_bombazo)");
+      if (!eqBombUnit) errs.push("Con BOMBAZOS indica la unidad del bombazo (g, kg, ml o L)");
     }
+    if (techCodigo && !technician) errs.push(`El técnico ${techCodigo} no existe en esta planta ni en el archivo`);
+    if (clean(puntosRaw) !== "" && (puntos == null || puntos < 1 || !Number.isInteger(puntos))) errs.push("Los puntos de lubricación deben ser un número entero (1 o más)");
+    if (!ultima) errs.push("La última fecha de lubricación falta o no es válida (AAAA-MM-DD o DD/MM/AAAA)");
+    else if (ultima > today) errs.push(`La última fecha (${ultima}) está en el futuro`);
 
-    const fileRouteKey = `${equipoCodigo}|${normalizeRouteName(nombre)}|${lubricanteCodigo}|${normalizedMethod}`;
-    if (seenRoutes.has(fileRouteKey)) rowErrors.push("ruta duplicada en el archivo");
-
-    if (equipment?.id && lubricant?.id) {
-      const duplicate = await prisma.route.findFirst({
-        where: {
-          plantId,
-          equipmentId: equipment.id,
-          lubricantId: lubricant.id,
-          normalizedName: normalizeRouteName(nombre),
-          method: normalizedMethod,
-        },
-        select: { id: true },
-      });
-      if (duplicate) rowErrors.push("ruta ya existe para ese equipo, nombre, lubricante y metodo");
+    const key = `${equipoCodigo}|${lubCodigo}|${normalizeRouteName(nombre)}|${normalizeMethod(metodo)}`;
+    if (!errs.length && seen.has(key)) errs.push("Ruta repetida en el archivo (mismo equipo, lubricante, nombre y método)");
+    if (errs.length) {
+      errs.forEach((message) => out.errors.push({ row: r._row, message }));
+      continue;
     }
-
-    if (rowErrors.length) {
-      for (const msg of rowErrors) pushError(errors, row._row, msg);
-    } else {
-      seenRoutes.add(fileRouteKey);
-      ok.push({
-        row: row._row,
-        equipo_codigo: equipoCodigo,
-        nombre,
-        frecuencia_dias: frecuenciaDias,
-        lubricante_codigo: lubricanteCodigo,
-        cantidad,
-        unidad,
-        equivalencia_bombazo: unidad === "BOMBAZOS" ? equivalenciaBombazo : null,
-        unidad_equivalencia_bombazo: unidad === "BOMBAZOS" ? unidadEquivalenciaBombazo : null,
-        tecnico_codigo: tecnicoCodigo,
-        puntos_lubricacion: puntosLubricacion,
-        metodo_aplicacion: metodoAplicacion,
-        instrucciones,
-        ultima_fecha_lubricacion: dateToYmd(ultimaFecha),
-        proxima_fecha: dateToYmd(proximaFecha),
-        equipmentId: equipment.id ?? null,
-        lubricantId: lubricant.id ?? null,
-        technicianId: technician?.id ?? null,
-        lubricantType: upper(lubricant.type) || (unidad === "L" || unidad === "ML" ? "ACEITE" : "GRASA"),
-        lubricantName: lubricant.name || null,
-      });
+    seen.add(key);
+    if (equipment.id && lubricant.id && existingRoutes.has(`${equipment.id}|${lubricant.id}|${normalizeRouteName(nombre)}|${normalizeMethod(metodo)}`)) {
+      out.skipped.push({ row: r._row, message: `La ruta "${nombre}" ya existe en ${equipoCodigo}: se omite` });
+      continue;
     }
+    if (technician && String(technician.status || "").toUpperCase() === "INACTIVO") {
+      warnings.push(`Fila ${r._row}: el técnico ${techCodigo} está inactivo; la ruta quedará asignada a él.`);
+    }
+    const proxima = addDaysYmd(ultima, frecuencia);
+    if (proxima < today) overdueOnImport += 1;
+    out.ok.push({
+      row: r._row,
+      equipo_codigo: equipoCodigo,
+      lubricante_codigo: lubCodigo,
+      tecnico_codigo: techCodigo || null,
+      nombre,
+      frecuencia,
+      cantidad,
+      unidad,
+      equivalencia_bombazo: unidad === "BOMBAZOS" ? eqBomb : null,
+      unidad_equivalencia_bombazo: unidad === "BOMBAZOS" ? eqBombUnit : null,
+      puntos: puntos ?? null,
+      metodo,
+      instrucciones: clean(get(r, "instrucciones")),
+      ultima,
+      proxima,
+    });
+  }
+  if (overdueOnImport) {
+    warnings.push(`${overdueOnImport} ruta${overdueOnImport === 1 ? "" : "s"} quedará${overdueOnImport === 1 ? "" : "n"} con su próxima actividad ya vencida (última fecha + frecuencia es anterior a hoy).`);
+  }
+  return { ...out, warnings };
+}
+
+export async function validateWorkbook(workbook, plantId, tz) {
+  const sheets = {};
+  const warnings = [];
+  const raw = {};
+  let foundAny = false;
+
+  for (const key of SHEETS) {
+    const ws = findSheet(workbook, key);
+    if (!ws) {
+      raw[key] = [];
+      continue;
+    }
+    foundAny = true;
+    const { rows, headers } = sheetToRows(ws);
+    const missing = REQUIRED_COLUMNS[key].filter((c) => !headers.includes(normalizeHeader(c)));
+    if (rows.length && missing.length) {
+      raw[key] = [];
+      sheets[key] = { ...bucket(), errors: [{ row: 1, message: `Faltan columnas: ${missing.join(", ")}. Descarga la plantilla para ver el formato.` }] };
+      continue;
+    }
+    if (rows.length > MAX_ROWS) {
+      raw[key] = [];
+      sheets[key] = { ...bucket(), errors: [{ row: 1, message: `La hoja tiene ${rows.length} filas; el máximo por importación es ${MAX_ROWS}. Divide el archivo.` }] };
+      continue;
+    }
+    raw[key] = rows;
   }
 
-  return { ok, errors };
+  if (!foundAny) {
+    return {
+      sheets: Object.fromEntries(SHEETS.map((k) => [k, bucket()])),
+      warnings: ["El archivo no tiene ninguna hoja llamada equipos, lubricantes, tecnicos o rutas. Usa la plantilla de LubriPlan."],
+    };
+  }
+
+  sheets.equipos = sheets.equipos || (await validateEquipos(raw.equipos, plantId));
+  sheets.lubricantes = sheets.lubricantes || (await validateLubricantes(raw.lubricantes, plantId));
+  sheets.tecnicos = sheets.tecnicos || (await validateTecnicos(raw.tecnicos, plantId));
+  if (!sheets.rutas) {
+    const rutas = await validateRutas(raw.rutas, plantId, { equipos: sheets.equipos.ok, lubricantes: sheets.lubricantes.ok, tecnicos: sheets.tecnicos.ok }, tz);
+    warnings.push(...rutas.warnings);
+    delete rutas.warnings;
+    sheets.rutas = rutas;
+  }
+  if (sheets.equipos.skipped.some((s) => s.otherPlant)) {
+    warnings.push("Algunos códigos de equipo ya los usa otra planta: el código de equipo es único en todo LubriPlan.");
+  }
+  return { sheets, warnings };
 }
 
-async function validateWorkbook(workbook, plantId) {
-  const result = {};
-  const raw = {};
-  for (const sheetKey of SHEETS) raw[sheetKey] = sheetToRows(workbook.getWorksheet(WORKSHEET_NAMES[sheetKey]));
-
-  result.equipos = await validateEquipos(raw.equipos, plantId);
-  result.lubricantes = await validateLubricantes(raw.lubricantes, plantId);
-  result.tecnicos = await validateTecnicos(raw.tecnicos, plantId);
-  result.rutas = await validateRutas(raw.rutas, plantId, {
-    equipos: result.equipos.ok,
-    lubricantes: result.lubricantes.ok,
-    tecnicos: result.tecnicos.ok,
-  });
-
-  return result;
-}
-
-function summaryFromResult(result) {
+export function summarize(sheets) {
   return Object.fromEntries(
-    SHEETS.map((sheetKey) => [sheetKey, { ok: result[sheetKey]?.ok?.length || 0, errors: result[sheetKey]?.errors?.length || 0 }])
+    SHEETS.map((k) => [k, { ok: sheets[k]?.ok?.length || 0, errors: sheets[k]?.errors?.length || 0, skipped: sheets[k]?.skipped?.length || 0 }])
   );
 }
 
-async function createEquipos(rows, plantId, tx) {
-  const created = [];
-  for (const row of rows || []) {
+/* ───────── Creación ───────── */
+async function createAll(tx, plantId, sheets, tz) {
+  const ids = { equipos: new Map(), lubricantes: new Map(), tecnicos: new Map() };
+  const counts = { equipos: 0, lubricantes: 0, tecnicos: 0, rutas: 0, actividades: 0 };
+
+  for (const e of sheets.equipos.ok) {
     let areaId = null;
-    if (row.area) {
+    if (e.area) {
       const area = await tx.equipmentArea.upsert({
-        where: { plantId_name: { plantId, name: row.area } },
+        where: { plantId_name: { plantId, name: e.area } },
         update: {},
-        create: { plantId, name: row.area },
+        create: { plantId, name: e.area },
+        select: { id: true },
       });
       areaId = area.id;
     }
-
     const item = await tx.equipment.create({
       data: {
         plantId,
-        code: row.codigo,
-        name: row.nombre,
-        location: row.ubicacion || "Sin ubicacion",
-        status: row.estado,
-        criticality: row.criticidad,
-        description: row.descripcion || null,
+        code: e.codigo,
+        name: e.nombre,
+        location: e.ubicacion || "Sin ubicación",
+        status: e.estado,
+        criticality: e.criticidad,
+        description: e.descripcion || null,
+        brand: e.marca || null,
+        model: e.modelo || null,
         areaId,
       },
-      select: { id: true, code: true, name: true },
+      select: { id: true },
     });
-    created.push({ id: item.id, codigo: item.code, nombre: item.name });
+    ids.equipos.set(e.codigo, item.id);
+    counts.equipos += 1;
   }
-  return created;
-}
 
-async function createLubricantes(rows, plantId, tx) {
-  const created = [];
-  for (const row of rows || []) {
+  for (const l of sheets.lubricantes.ok) {
     const item = await tx.lubricant.create({
       data: {
         plantId,
-        code: row.codigo,
-        name: row.nombre,
-        type: row.tipo,
-        viscosity: row.viscosidad || null,
-        unit: String(row.unidad || "").toLowerCase(),
-        stock: Number(row.stock || 0),
-        minStock: row.minStock == null ? null : Number(row.minStock),
-        brand: row.marca || null,
+        code: l.codigo,
+        name: l.nombre,
+        type: l.tipo,
+        unit: l.unidad,
+        stock: l.stock,
+        minStock: l.minStock,
+        unitCost: l.costo,
+        viscosity: l.viscosidad || null,
+        brand: l.marca || null,
       },
-      select: { id: true, code: true, name: true, type: true },
+      select: { id: true },
     });
-    created.push({ id: item.id, codigo: item.code, nombre: item.name, tipo: item.type });
+    ids.lubricantes.set(l.codigo, item.id);
+    counts.lubricantes += 1;
+    if (l.stock > 0) {
+      await tx.lubricantMovement.create({
+        data: { lubricantId: item.id, type: "IN", quantity: l.stock, reason: "Stock inicial (importación)", stockBefore: 0, stockAfter: l.stock },
+      });
+    }
   }
-  return created;
-}
 
-async function createTecnicos(rows, plantId, tx) {
-  const created = [];
-  for (const row of rows || []) {
+  for (const t of sheets.tecnicos.ok) {
     const item = await tx.technician.create({
-      data: {
-        plantId,
-        code: row.codigo,
-        name: row.nombre,
-        specialty: row.especialidad || "Lubricacion",
-        status: row.estatus || "Activo",
-      },
-      select: { id: true, code: true, name: true },
+      data: { plantId, code: t.codigo, name: t.nombre, specialty: t.especialidad, status: t.estatus },
+      select: { id: true },
     });
-    created.push({ id: item.id, codigo: item.code, nombre: item.name });
+    ids.tecnicos.set(t.codigo, item.id);
+    counts.tecnicos += 1;
   }
-  return created;
-}
 
-async function createRutas(rows, plantId, tx, staged) {
-  const created = [];
-  const equipmentByCode = new Map((staged.equipos || []).map((x) => [upper(x.codigo), x]));
-  const lubricantByCode = new Map((staged.lubricantes || []).map((x) => [upper(x.codigo), x]));
-  const technicianByCode = new Map((staged.tecnicos || []).map((x) => [upper(x.codigo), x]));
+  // Códigos existentes de la planta, comparados ya normalizados (mayúsculas, sin acentos).
+  if (sheets.rutas.ok.length) {
+    const [eqs, lubs, techs] = await Promise.all([
+      tx.equipment.findMany({ where: { plantId, code: { not: null } }, select: { id: true, code: true } }),
+      tx.lubricant.findMany({ where: { plantId, code: { not: null } }, select: { id: true, code: true } }),
+      tx.technician.findMany({ where: { plantId, deletedAt: null }, select: { id: true, code: true } }),
+    ]);
+    for (const x of eqs) if (!ids.equipos.has(normalizeCode(x.code))) ids.equipos.set(normalizeCode(x.code), x.id);
+    for (const x of lubs) if (!ids.lubricantes.has(normalizeCode(x.code))) ids.lubricantes.set(normalizeCode(x.code), x.id);
+    for (const x of techs) if (!ids.tecnicos.has(normalizeCode(x.code))) ids.tecnicos.set(normalizeCode(x.code), x.id);
+  }
+  const lookup = async (map, model, code) => map.get(code) ?? null;
 
-  for (const row of rows || []) {
-    let equipment = equipmentByCode.get(upper(row.equipo_codigo));
-    if (!equipment) {
-      equipment = await tx.equipment.findFirst({ where: { plantId, code: upper(row.equipo_codigo) }, select: { id: true, code: true, name: true } });
-    }
-
-    let lubricant = lubricantByCode.get(upper(row.lubricante_codigo));
-    if (!lubricant) {
-      lubricant = await tx.lubricant.findFirst({ where: { plantId, code: upper(row.lubricante_codigo) }, select: { id: true, code: true, name: true, type: true } });
-    }
-
-    let technician = null;
-    if (row.tecnico_codigo) {
-      technician = technicianByCode.get(upper(row.tecnico_codigo));
-      if (!technician) {
-        technician = await tx.technician.findFirst({ where: { plantId, code: upper(row.tecnico_codigo), deletedAt: null }, select: { id: true, code: true } });
-      }
-    }
-
-    if (!equipment || !lubricant) throw new Error(`Ruta fila ${row.row}: referencia no encontrada`);
-
-    const lastDate = parseSheetDate(row.ultima_fecha_lubricacion);
-    const nextDate = resolveImportedNextRouteDate(lastDate, row.frecuencia_dias);
-    const scheduledAt = nextDate ? toSafeNoon(nextDate) : toSafeNoon(new Date());
-    const pointsInt =
-      row.puntos_lubricacion === "" || row.puntos_lubricacion == null
-        ? null
-        : Number(row.puntos_lubricacion);
-    const normalizedMethod = normalizeRouteMethod(row.metodo_aplicacion);
+  for (const r of sheets.rutas.ok) {
+    const equipmentId = await lookup(ids.equipos, "equipment", r.equipo_codigo);
+    const lubricantId = await lookup(ids.lubricantes, "lubricant", r.lubricante_codigo);
+    const technicianId = r.tecnico_codigo ? await lookup(ids.tecnicos, "technician", r.tecnico_codigo) : null;
+    if (!equipmentId || !lubricantId) throw new Error(`Ruta de la fila ${r.row}: no se encontró el equipo o el lubricante`);
+    const lub = await tx.lubricant.findFirst({ where: { id: lubricantId }, select: { type: true, name: true } });
+    const isGrease = /grasa/i.test(`${lub?.type} ${lub?.name}`);
 
     const route = await tx.route.create({
       data: {
         plantId,
-        equipmentId: equipment.id,
-        lubricantId: lubricant.id,
-        technicianId: technician?.id ?? null,
-        name: row.nombre,
-        normalizedName: normalizeRouteName(row.nombre),
-        lubricantType: row.lubricantType || upper(lubricant.type) || "ACEITE",
-        lubricantName: null,
-        quantity: Number(row.cantidad),
-        unit: String(row.unidad).trim().toUpperCase() === "BOMBAZOS" ? "BOMBAZOS" : String(row.unidad).toLowerCase(),
-        pumpStrokeValue: String(row.unidad).trim().toUpperCase() === "BOMBAZOS" ? Number(row.equivalencia_bombazo) : null,
-        pumpStrokeUnit: String(row.unidad).trim().toUpperCase() === "BOMBAZOS" ? String(row.unidad_equivalencia_bombazo || "").toLowerCase() : null,
-        frequencyDays: Number(row.frecuencia_dias),
-        method: normalizedMethod,
-        points: pointsInt,
-        instructions: row.instrucciones || null,
-        lastDate,
-        nextDate,
+        equipmentId,
+        lubricantId,
+        technicianId,
+        name: r.nombre,
+        normalizedName: normalizeRouteName(r.nombre),
+        lubricantType: isGrease ? "GRASA" : "ACEITE",
+        quantity: r.cantidad,
+        unit: r.unidad,
+        pumpStrokeValue: r.equivalencia_bombazo,
+        pumpStrokeUnit: r.unidad_equivalencia_bombazo,
+        frequencyDays: r.frecuencia,
+        method: normalizeMethod(r.metodo) || null,
+        points: r.puntos,
+        instructions: r.instrucciones || null,
+        lastDate: noonInTz(r.ultima, tz),
+        nextDate: noonInTz(r.proxima, tz),
       },
-      select: { id: true, name: true },
+      select: { id: true },
     });
+    counts.rutas += 1;
 
     await tx.execution.create({
-      data: {
-        plantId,
-        routeId: route.id,
-        equipmentId: equipment.id,
-        technicianId: technician?.id ?? null,
-        status: "PENDING",
-        scheduledAt,
-      },
+      data: { plantId, routeId: route.id, equipmentId, technicianId, status: "PENDING", scheduledAt: noonInTz(r.proxima, tz) },
     });
-
-    created.push({ id: route.id, nombre: route.name });
+    counts.actividades += 1;
   }
-
-  return created;
+  return counts;
 }
 
-router.get("/template", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), async (req, res) => {
-  const workbook = new ExcelJS.Workbook();
-  workbook.creator = "LubriPlan";
-  workbook.created = new Date();
+/* ───────── Plantilla ───────── */
+const EXAMPLES = {
+  equipos: [["EQ-001", "Compresor GA75", "Producción", "Línea 1", "Activo", "Alta", "Compresor principal", "Atlas Copco", "GA75"]],
+  lubricantes: [
+    ["LUB-001", "Aceite hidráulico ISO 68", "Aceite", "68", "L", 120, 20, "Shell", 95],
+    ["LUB-002", "Grasa EP2 complejo de litio", "Grasa", "NLGI 2", "kg", 18, 4, "Mobil", 180],
+  ],
+  tecnicos: [["Luis Hernández", "TEC-01", "Lubricación general", "Activo"]],
+  rutas: [
+    ["EQ-001", "Revisión de nivel de aceite", 7, "LUB-001", 0.5, "L", "", "", "TEC-01", 1, "llenado", "2026-04-01", "Verificar nivel y rellenar si es necesario"],
+    ["EQ-001", "Engrase de rodamientos", 15, "LUB-002", 3, "BOMBAZOS", 1.2, "g", "TEC-01", 4, "engrase manual", "01/04/2026", "Tres bombazos por punto"],
+  ],
+};
 
-  addTemplateSheet(
-    workbook,
-    "instrucciones",
-    ["seccion", "detalle"],
-    [
-      ["Equipos", "Llena una fila por equipo. El codigo debe ser unico por planta."],
-      ["Lubricantes", "Usa unidad base L, ML, KG o G segun el producto."],
-      ["Tecnicos", "El codigo del tecnico debe ser unico por planta."],
-      ["Rutas", "Si unidad = BOMBAZOS, llena equivalencia_bombazo y unidad_equivalencia_bombazo."],
-      ["Rutas", "Agrega puntos_lubricacion y metodo_aplicacion para describir mejor la ruta."],
-      ["Rutas", "ultima_fecha_lubricacion debe ir en formato AAAA-MM-DD o DD/MM/AAAA."],
-    ]
-  );
+export function buildTemplateWorkbook(data = EXAMPLES) {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "LubriPlan";
+  wb.created = new Date();
 
-  addTemplateSheet(workbook, "equipos", ["codigo", "nombre", "area", "ubicacion", "estado", "criticidad", "descripcion"], [
-    ["EQ-001", "Compresor GA75", "Produccion", "Linea 1", "Activo", "Alta", "Compresor principal"],
+  const info = wb.addWorksheet("instrucciones");
+  info.columns = [{ header: "seccion", width: 16 }, { header: "detalle", width: 110 }];
+  info.addRows([
+    ["General", "No cambies los nombres de las hojas ni de las columnas. Puedes dejar hojas vacías. Los registros que ya existen se omiten."],
+    ["General", `Máximo ${MAX_ROWS} filas por hoja. Las columnas obligatorias se marcan en la segunda fila de cada hoja.`],
+    ["equipos", "codigo y nombre obligatorios. El código es único en todo LubriPlan. estado: Activo/Inactivo. criticidad: Crítica, Alta, Media o Baja."],
+    ["lubricantes", "tipo: Aceite o Grasa. unidad: L, ml, kg o g. stock en esa unidad; se registra como entrada inicial. costo_unitario por unidad (opcional)."],
+    ["tecnicos", "codigo único por planta (incluye técnicos eliminados). estatus: Activo o Inactivo."],
+    ["rutas", "equipo_codigo, lubricante_codigo y tecnico_codigo deben existir en la planta o venir en este mismo archivo."],
+    ["rutas", "frecuencia_dias entero. unidad: L, ml, kg, g o BOMBAZOS; con BOMBAZOS llena equivalencia_bombazo y unidad_equivalencia_bombazo."],
+    ["rutas", "ultima_fecha_lubricacion AAAA-MM-DD o DD/MM/AAAA, no futura. La primera actividad se programa en última fecha + frecuencia."],
   ]);
+  info.getRow(1).font = { bold: true };
 
-  addTemplateSheet(workbook, "lubricantes", ["codigo", "nombre", "tipo", "viscosidad", "unidad", "stock", "minStock", "marca"], [
-    ["LUB-001", "Aceite hidraulico ISO 68", "Aceite", "68", "L", 120, 20, "Shell"],
-  ]);
+  for (const key of SHEETS) {
+    const ws = wb.addWorksheet(key);
+    const cols = TEMPLATE_COLUMNS[key];
+    ws.columns = cols.map((c) => ({ header: c, key: c, width: Math.max(14, c.length + 4) }));
+    const header = ws.getRow(1);
+    header.font = { bold: true, color: { argb: "FFFFFFFF" } };
+    header.eachCell((cell, col) => {
+      const required = REQUIRED_COLUMNS[key].includes(cols[col - 1]);
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: required ? "FFC2410C" : "FF1F2937" } };
+      cell.note = required ? "Obligatorio" : "Opcional";
+    });
+    ws.views = [{ state: "frozen", ySplit: 1 }];
+    for (const row of data[key] || []) ws.addRow(row);
+  }
+  return wb;
+}
 
-  addTemplateSheet(workbook, "tecnicos", ["nombre", "codigo", "especialidad", "estatus"], [
-    ["Luis Hernandez", "TEC-01", "Lubricacion general", "Activo"],
-  ]);
+/* ───────── Rutas HTTP ───────── */
+async function plantTz(plantId) {
+  const plant = await prisma.plant.findFirst({ where: { id: plantId }, select: { timezone: true } });
+  return safeTimeZone(plant?.timezone || DEFAULT_TZ);
+}
 
-  addTemplateSheet(
-    workbook,
-    "rutas",
-    [
-      "Equipo_codigo",
-      "Nombre",
-      "Frecuencia_dias",
-      "Lubricante_codigo",
-      "Cantidad",
-      "Unidad",
-      "Equivalencia_bombazo",
-      "Unidad_equivalencia_bombazo",
-      "Tecnico_codigo",
-      "Puntos_lubricacion",
-      "Metodo_aplicacion",
-      "ultima_fecha_lubricacion",
-      "Instrucciones",
-    ],
-    [
-      ["EQ-001", "Revision nivel aceite", 7, "LUB-001", 0.5, "L", "", "", "TEC-01", 1, "llenado", "2026-04-01", "Verificar nivel y rellenar si es necesario"],
-      ["EQ-002", "Engrase de rodamientos", 15, "LUB-002", 3, "BOMBAZOS", 8, "G", "TEC-01", 4, "engrase manual", "2026-04-02", "Aplicar tres bombazos por punto"],
-    ]
-  );
-
-  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-  res.setHeader("Content-Disposition", 'attachment; filename="lubriplan_plantilla_importacion.xlsx"');
-  await workbook.xlsx.write(res);
-  return res.end();
-});
-
-router.post("/preview", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), upload.single("file"), async (req, res) => {
+async function readUpload(req, res) {
+  if (!req.currentPlantId) {
+    res.status(400).json({ error: "PLANT_REQUIRED" });
+    return null;
+  }
+  if (!req.file?.buffer) {
+    res.status(400).json({ error: "Adjunta el archivo de Excel (.xlsx)" });
+    return null;
+  }
+  const wb = new ExcelJS.Workbook();
   try {
-    const plantId = req.currentPlantId;
-    if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
-    if (!req.file?.buffer) return res.status(400).json({ error: "Archivo requerido" });
+    await wb.xlsx.load(req.file.buffer);
+  } catch {
+    res.status(400).json({ error: "No se pudo leer el archivo. Debe ser un Excel .xlsx (no .xls ni .csv)." });
+    return null;
+  }
+  return wb;
+}
 
-    const workbook = await readWorkbook(req.file.buffer);
-    const result = await validateWorkbook(workbook, plantId);
-    return res.json({ ok: true, summary: summaryFromResult(result), sheets: result });
-  } catch (error) {
-    logger.error("Import preview error:", error);
-    return res.status(500).json({ error: "Error validando archivo" });
+router.get("/template", ...managers, async (req, res) => {
+  try {
+    const wb = buildTemplateWorkbook();
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", 'attachment; filename="lubriplan_plantilla_importacion.xlsx"');
+    await wb.xlsx.write(res);
+    return res.end();
+  } catch (e) {
+    logger.error("Import template error:", e);
+    return res.status(500).json({ error: "No se pudo generar la plantilla" });
   }
 });
 
-router.post("/commit", requireAuth, requireRole(["ADMIN", "SUPERVISOR"]), async (req, res) => {
+router.post("/preview", ...managers, upload.single("file"), async (req, res) => {
   try {
+    const wb = await readUpload(req, res);
+    if (!wb) return undefined;
+    const tz = await plantTz(req.currentPlantId);
+    const { sheets, warnings } = await validateWorkbook(wb, req.currentPlantId, tz);
+    return res.json({ ok: true, summary: summarize(sheets), sheets, warnings });
+  } catch (e) {
+    logger.error("Import preview error:", e);
+    return res.status(500).json({ error: "Error validando el archivo" });
+  }
+});
+
+// Confirmar: se vuelve a subir el MISMO archivo y se valida otra vez en el servidor.
+router.post("/commit", ...managers, upload.single("file"), async (req, res) => {
+  try {
+    const wb = await readUpload(req, res);
+    if (!wb) return undefined;
     const plantId = req.currentPlantId;
-    if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
+    const tz = await plantTz(plantId);
+    const { sheets, warnings } = await validateWorkbook(wb, plantId, tz);
+    const summary = summarize(sheets);
+    if (SHEETS.some((k) => summary[k].errors)) {
+      return res.status(400).json({ error: "El archivo tiene errores. Corrígelos y vuelve a validar.", summary, sheets, warnings });
+    }
+    if (!SHEETS.some((k) => summary[k].ok)) {
+      return res.status(400).json({ error: "No hay registros nuevos para importar.", summary, sheets, warnings });
+    }
 
-    const sheets = req.body?.sheets || {};
-    const hasErrors = SHEETS.some((sheetKey) => (sheets?.[sheetKey]?.errors || []).length > 0);
-    if (hasErrors) return res.status(400).json({ error: "Corrige los errores antes de importar" });
+    const created = await prisma.$transaction((tx) => createAll(tx, plantId, sheets, tz), { timeout: 120000, maxWait: 10000 });
 
-    const created = await prisma.$transaction(async (tx) => {
-      const staged = { equipos: [], lubricantes: [], tecnicos: [], rutas: [] };
-      staged.equipos = await createEquipos(sheets.equipos?.ok || [], plantId, tx);
-      staged.lubricantes = await createLubricantes(sheets.lubricantes?.ok || [], plantId, tx);
-      staged.tecnicos = await createTecnicos(sheets.tecnicos?.ok || [], plantId, tx);
-      staged.rutas = await createRutas(sheets.rutas?.ok || [], plantId, tx, staged);
-      return staged;
-    });
+    logger.info("[IMPORT] Importación completada", { plantId, userId: req.user?.id, created });
+    logAudit({
+      plantId,
+      userId: req.user?.id,
+      action: "CREATE",
+      model: "Importación",
+      recordId: req.file?.originalname || "archivo",
+      changes: { after: created, skipped: Object.fromEntries(SHEETS.map((k) => [k, summary[k].skipped])) },
+      ip: req.ip,
+    }).catch(() => {});
 
-    return res.json({ ok: true, created, summary: Object.fromEntries(SHEETS.map((sheetKey) => [sheetKey, created[sheetKey]?.length || 0])) });
-  } catch (error) {
-    logger.error("Import commit error:", error);
-    return res.status(500).json({ error: error?.message || "Error importando archivo" });
+    return res.json({ ok: true, created, summary, warnings });
+  } catch (e) {
+    if (e?.code === "P2002") {
+      return res.status(409).json({ error: "Otro registro con el mismo código se creó mientras importabas. Vuelve a validar el archivo." });
+    }
+    logger.error("Import commit error:", e);
+    return res.status(500).json({ error: "No se pudo completar la importación. No se guardó ningún registro." });
   }
 });
 
 export default router;
-
