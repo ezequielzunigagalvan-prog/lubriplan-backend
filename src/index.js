@@ -78,7 +78,7 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
   import { parseRouteInput, RouteInputError } from "./routes/routeRules.js";
   import { syncOpenExecution, routeEquipmentIds } from "./services/routeExecutions.js";
   import { ymdToDate as ymdToDateRs, toYmd as toYmdRs, ruleOf as ruleOfRs, nextAfterCompletion } from "./utils/routeSchedule.js";
-  import { zonedYmd as zonedYmdTz, safeTimeZone as safeTimeZoneTz } from "./utils/tzRange.js";
+  import { zonedYmd as zonedYmdTz, safeTimeZone as safeTimeZoneTz, zonedStartOfDay as zonedStartOfDayTz } from "./utils/tzRange.js";
   import analysisRoutes from "./routes/analysis.routes.js";
   import { notifyIfLowStock } from "./services/inventory/lowStock.js";
   import { mountMaintenance } from "./modules/maintenance/index.js";
@@ -6324,18 +6324,22 @@ const executionBaseSelect = {
   },
 };
 
+// todayStart = instante en que empieza "hoy" en la zona horaria de la planta (ver plantStartOfToday).
 function resolveExecutionStatusForUi(execution, todayStart = toStartOfDaySafe(new Date())) {
   const rawStatus = String(execution?.status || "").trim().toUpperCase();
   if (rawStatus === "COMPLETED" && execution?.executedAt) return "COMPLETED";
 
-  const scheduledDay = execution?.scheduledAt
-    ? toStartOfDaySafe(new Date(execution.scheduledAt))
-    : null;
+  const scheduled = execution?.scheduledAt ? new Date(execution.scheduledAt) : null;
+  if (scheduled && !Number.isNaN(scheduled.getTime())) {
+    return scheduled.getTime() < todayStart.getTime() ? "OVERDUE" : "PENDING";
+  }
+  return rawStatus === "OVERDUE" ? "OVERDUE" : "PENDING";
+}
 
-  if (scheduledDay && scheduledDay.getTime() < todayStart.getTime()) return "OVERDUE";
-  if (rawStatus === "OVERDUE") return "OVERDUE";
-
-  return "PENDING";
+async function plantStartOfToday(plantId) {
+  const plant = await prisma.plant.findFirst({ where: { id: plantId }, select: { timezone: true } });
+  const tz = safeTimeZoneTz(plant?.timezone || "America/Mexico_City");
+  return { start: zonedStartOfDayTz(zonedYmdTz(new Date(), tz), tz), ymd: zonedYmdTz(new Date(), tz), tz };
 }
 
 function serializeExecutionForUi(execution, todayStart = toStartOfDaySafe(new Date())) {
@@ -6353,6 +6357,133 @@ function serializeExecutionForUi(execution, todayStart = toStartOfDaySafe(new Da
   };
 }
 
+// ===== Reprogramar una actividad (supervisor / admin) =====
+// Cambia la fecha de una actividad abierta. Si es de ruta, la ruta toma esa fecha como su próxima;
+// al completarla, la siguiente vuelve al calendario de la frecuencia. Queda en auditoría con el motivo.
+app.patch(
+  "/api/executions/:id/reschedule",
+  requireAuth,
+  requireRole(["ADMIN", "SUPERVISOR"]),
+  async (req, res) => {
+    try {
+      const plantId = req.currentPlantId;
+      if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id)) return res.status(400).json({ error: "id invalido" });
+
+      const ymd = toYmdRs(req.body?.scheduledAt || req.body?.date);
+      const reason = String(req.body?.reason || "").trim().slice(0, 300);
+      if (!ymd) return res.status(400).json({ error: "Elige la nueva fecha" });
+      if (reason.length < 3) return res.status(400).json({ error: "Escribe el motivo de la reprogramación" });
+
+      const { ymd: todayYmd } = await plantStartOfToday(plantId);
+      if (ymd < todayYmd) return res.status(400).json({ error: "La nueva fecha no puede ser anterior a hoy" });
+      const maxYmd = `${Number(todayYmd.slice(0, 4)) + 1}${todayYmd.slice(4)}`;
+      if (ymd > maxYmd) return res.status(400).json({ error: "La nueva fecha debe estar dentro del próximo año" });
+
+      const exec = await prisma.execution.findFirst({
+        where: { id, plantId },
+        select: {
+          id: true,
+          status: true,
+          scheduledAt: true,
+          routeId: true,
+          technicianId: true,
+          manualTitle: true,
+          route: { select: { id: true, name: true, nextDate: true, equipment: { select: { name: true } } } },
+          equipment: { select: { name: true } },
+        },
+      });
+      if (!exec) return res.status(404).json({ error: "Actividad no encontrada" });
+      if (String(exec.status).toUpperCase() === "COMPLETED") {
+        return res.status(400).json({ error: "La actividad ya está completada" });
+      }
+      const fromYmd = toYmdRs(exec.scheduledAt);
+      if (fromYmd === ymd) return res.status(400).json({ error: "La actividad ya está programada en esa fecha" });
+
+      if (exec.routeId) {
+        const clash = await prisma.execution.findFirst({
+          where: { plantId, routeId: exec.routeId, id: { not: id }, scheduledAt: ymdToDateRs(ymd) },
+          select: { id: true, status: true },
+        });
+        if (clash) return res.status(409).json({ error: "Esta ruta ya tiene una actividad en esa fecha" });
+      }
+
+      const newDate = ymdToDateRs(ymd);
+      const updated = await prisma.$transaction(async (tx) => {
+        const item = await tx.execution.update({
+          where: { id },
+          data: { scheduledAt: newDate, status: "PENDING" },
+          select: executionBaseSelect,
+        });
+        // La ruta muestra como próxima la fecha de su actividad abierta.
+        if (exec.routeId && exec.route && toYmdRs(exec.route.nextDate) === fromYmd) {
+          await tx.route.update({ where: { id: exec.routeId }, data: { nextDate: newDate } });
+        }
+        return item;
+      });
+
+      logAudit({
+        plantId,
+        userId: req.user?.id,
+        action: "RESCHEDULE",
+        model: "Execution",
+        recordId: id,
+        changes: { before: { scheduledAt: fromYmd, status: exec.status }, after: { scheduledAt: ymd, status: "PENDING" }, reason },
+        ip: req.ip,
+      });
+
+      if (exec.technicianId) {
+        const eqName = exec.route?.equipment?.name || exec.equipment?.name || "";
+        notifyTechnicianAssignee(prisma, {
+          plantId,
+          technicianId: exec.technicianId,
+          actorUserId: req.user?.id,
+          type: "EXEC_ASSIGNED",
+          title: "Actividad reprogramada",
+          message: `${exec.route?.name || exec.manualTitle || "Actividad"}${eqName ? ` · ${eqName}` : ""} · ${fromYmd} → ${ymd}. Motivo: ${reason}`,
+          link: `/activities?executionId=${id}`,
+        }).catch((err) => logger.error("No se pudo notificar reprogramación:", err));
+      }
+
+      return res.json({ ok: true, item: serializeExecutionForUi(updated, (await plantStartOfToday(plantId)).start) });
+    } catch (e) {
+      logger.error("Error reprogramando actividad:", e);
+      return res.status(500).json({ error: "No se pudo reprogramar la actividad" });
+    }
+  }
+);
+
+// Historial de reprogramaciones de una actividad
+app.get("/api/executions/:id/reschedules", requireAuth, async (req, res) => {
+  try {
+    const plantId = req.currentPlantId;
+    const id = Number(req.params.id);
+    if (!plantId || !Number.isInteger(id)) return res.status(400).json({ error: "id invalido" });
+    const exists = await prisma.execution.findFirst({ where: { id, plantId }, select: { id: true } });
+    if (!exists) return res.status(404).json({ error: "Actividad no encontrada" });
+    const rows = await prisma.auditLog.findMany({
+      where: { plantId, model: "Execution", action: "RESCHEDULE", recordId: String(id) },
+      orderBy: { createdAt: "desc" },
+      take: 20,
+      select: { id: true, createdAt: true, changes: true, user: { select: { name: true } } },
+    });
+    return res.json({
+      items: rows.map((r) => ({
+        id: r.id,
+        at: r.createdAt,
+        by: r.user?.name || "—",
+        from: r.changes?.before?.scheduledAt || null,
+        to: r.changes?.after?.scheduledAt || null,
+        reason: r.changes?.reason || "",
+      })),
+    });
+  } catch (e) {
+    logger.error("Error historial de reprogramación:", e);
+    return res.status(500).json({ error: "No se pudo cargar el historial" });
+  }
+});
+
 app.put(
   "/api/executions/check-overdue",
   requireAuth,
@@ -6362,7 +6493,7 @@ app.put(
       const plantId = req.currentPlantId;
       if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
 
-      const today = toStartOfDaySafe(new Date());
+      const { start: today } = await plantStartOfToday(plantId);
 
       const updated = await prisma.execution.updateMany({
         where: {
@@ -6371,6 +6502,10 @@ app.put(
           scheduledAt: { lt: today },
         },
         data: { status: "OVERDUE" },
+      });
+      await prisma.execution.updateMany({
+        where: { plantId, status: "OVERDUE", scheduledAt: { gte: today } },
+        data: { status: "PENDING" },
       });
 
       return res.json({ ok: true, updatedCount: Number(updated?.count || 0) });
@@ -6387,7 +6522,7 @@ app.get("/api/executions", requireAuth, async (req, res) => {
     if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
 
     const today = new Date();
-    const todayStart = toStartOfDaySafe(today);
+    const { start: todayStart, ymd: plantToday } = await plantStartOfToday(plantId);
 
     const monthRaw = String(req.query.month || "").trim();
     const monthMatch = /^(\d{4})-(\d{2})$/.exec(monthRaw);
@@ -6427,10 +6562,13 @@ app.get("/api/executions", requireAuth, async (req, res) => {
       .trim()
       .toUpperCase();
 
-    const limitRaw = Number(req.query.limit ?? req.query.pageSize ?? 50);
+    // La pantalla no pagina: por defecto se entrega el mes completo.
+    const limitRaw = Number(req.query.limit ?? req.query.pageSize ?? 1000);
     const pageSize = Number.isFinite(limitRaw)
-      ? Math.min(Math.max(limitRaw, 1), 200)
-      : 50;
+      ? Math.min(Math.max(limitRaw, 1), 1000)
+      : 1000;
+    // En el mes actual también se muestran las actividades abiertas de meses anteriores (atrasadas).
+    const isCurrentMonth = monthYear === Number(plantToday.slice(0, 4)) && monthIndex === Number(plantToday.slice(5, 7)) - 1;
 
     const pageRaw = Number(req.query.page ?? 1);
     const page = Number.isFinite(pageRaw) ? Math.max(pageRaw, 1) : 1;
@@ -6441,6 +6579,7 @@ app.get("/api/executions", requireAuth, async (req, res) => {
         OR: [
           { scheduledAt: { gte: monthStart, lte: monthEnd } },
           { executedAt: { not: null, gte: completedFrom, lte: completedTo } },
+          ...(isCurrentMonth ? [{ status: { in: ["PENDING", "OVERDUE"] }, scheduledAt: { lt: monthStart } }] : []),
         ],
       },
       select: executionBaseSelect,
@@ -6537,7 +6676,7 @@ app.get("/api/executions/:id", requireAuth, async (req, res) => {
       }
     }
 
-    return res.json(serializeExecutionForUi(execution));
+    return res.json(serializeExecutionForUi(execution, (await plantStartOfToday(plantId)).start));
   } catch (e) {
     logger.error("Error execution detail:", e);
     return res.status(500).json({ error: "Error cargando actividad" });
@@ -6607,10 +6746,9 @@ app.post(
         }
       }
 
-      const scheduledDay = startOfDay(scheduledAt);
-      const todayStart = toStartOfDaySafe(new Date());
+      const { start: todayStart } = await plantStartOfToday(plantId);
       const initialStatus =
-        scheduledDay && scheduledDay.getTime() < todayStart.getTime()
+        scheduledAt.getTime() < todayStart.getTime()
           ? "OVERDUE"
           : "PENDING";
 
