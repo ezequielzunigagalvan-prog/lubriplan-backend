@@ -73,6 +73,7 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
   import { startMonthlyTechSummaryScheduler } from "./jobs/monthlyTechSummary.job.js";
   import monthlyReportRoutes from "./routes/monthlyReport.routes.js";
   import lubricationCardsRoutes from "./routes/lubricationCards.routes.js";
+  import equipmentQrRoutes, { newToken as newQrToken } from "./routes/equipmentQr.routes.js";
   import olpRoutes from "./routes/olp.routes.js";
   import historyRoutes from "./routes/history.routes.js";
   import { parseRouteInput, RouteInputError } from "./routes/routeRules.js";
@@ -349,6 +350,7 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
   app.use("/api", auditLogRoutes({ prisma, auth: requireAuth, requireRole }));
   app.use("/api", webhooksRoutes({ prisma, auth: requireAuth, requireRole }));
   app.use("/api", lubricationCardsRoutes({ prisma, auth: requireAuth, requireRole }));
+  app.use("/api", equipmentQrRoutes({ prisma, auth: requireAuth }));
   // Órdenes de Lubricación Preventiva (OLP)
   app.use("/api/preventive-orders", olpRoutes({ prisma, auth: requireAuth, requireRole }));
   // Historial / auditoría
@@ -3376,6 +3378,8 @@ app.post("/api/equipment", requireAuth, requireManager, async (req, res) => {
         plantId,
         ...parsed.data,
         areaId: parsedAreaId,
+        qrToken: newQrToken(),
+        qrCreatedAt: new Date(),
       },
       include: {
         area: true,

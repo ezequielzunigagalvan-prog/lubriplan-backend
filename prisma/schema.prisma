@@ -150,6 +150,11 @@ model Equipment {
   code        String? @unique
   name        String
   location    String
+
+  // Código QR único del equipo (no cambia; el QR impreso siempre apunta a este equipo).
+  qrToken     String?   @unique
+  qrCreatedAt DateTime?
+
   status      String
   description String?
   brand       String?
@@ -850,6 +855,8 @@ model LubricationPoint {
 
   // Ruta de origen cuando fue sincronizado automáticamente
   routeId Int?
+  // Frecuencia exacta de la ruta (p. ej. "Bimestral (día 24)"); frequency queda como grupo de color.
+  frequencyLabel String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
