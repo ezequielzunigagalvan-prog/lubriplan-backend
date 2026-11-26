@@ -160,6 +160,9 @@ model Equipment {
   qrToken     String?   @unique
   qrCreatedAt DateTime?
 
+  // Datos técnicos libres: [{ label, value, unit }]
+  techSpecs Json?
+
   status      String
   description String?
   brand       String?
@@ -186,6 +189,8 @@ model Equipment {
   routeLinks          RouteEquipment[]
   evidenceExecutions  Execution[]      @relation("ExecutionEvidenceEquipment")
   actionItems         ActionItem[]
+  documents           EquipmentDocument[]
+  lubeDiagrams        LubricationDiagram[]
 
   @@index([areaId])
   @@index([status])
@@ -569,6 +574,8 @@ model Plant {
   mtSpareParts       MtSparePart[]
   mtWarehouses       MtWarehouse[]
   actionItems ActionItem[]
+  equipmentDocuments EquipmentDocument[]
+  lubeDiagrams       LubricationDiagram[]
 }
 
 model UserPlant {
@@ -1822,4 +1829,47 @@ model ActionEvidence {
   createdAt DateTime @default(now())
 
   @@index([actionId])
+}
+
+// =========================
+// EQUIPO: documentos técnicos y diagramas de lubricación automática
+// =========================
+model EquipmentDocument {
+  id          Int       @id @default(autoincrement())
+  plantId     Int
+  plant       Plant     @relation(fields: [plantId], references: [id], onDelete: Cascade)
+  equipmentId Int
+  equipment   Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+
+  category String // MANUAL | PLANO | FICHA | CERTIFICADO | FOTO | OTRO
+  name     String
+  url      String
+  publicId String?
+  mime     String?
+  size     Int?
+
+  uploadedById Int?
+  createdAt    DateTime @default(now())
+
+  @@index([equipmentId])
+}
+
+model LubricationDiagram {
+  id          Int       @id @default(autoincrement())
+  plantId     Int
+  plant       Plant     @relation(fields: [plantId], references: [id], onDelete: Cascade)
+  equipmentId Int
+  equipment   Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+
+  name       String
+  systemType String // PROGRESSIVE | OIL_METERING | SINGLE_LINE | DUAL_LINE | OTHER
+  data       Json // { nodes: [], edges: [] }
+  notes      String?
+
+  createdById Int?
+  updatedById Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([equipmentId])
 }
