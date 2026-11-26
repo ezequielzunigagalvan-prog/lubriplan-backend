@@ -79,7 +79,7 @@ function makeDb({ stock = 10, preventNegativeStock = true, routeOverrides = {} }
       updateMany: async () => ({ count: 1 }),
       deleteMany: async () => ({ count: 1 }),
     },
-    plant: { findFirst: async () => ({ timezone: "America/Mexico_City" }) },
+    plant: { findFirst: async () => ({ timezone: "UTC" }) }, // UTC: las fechas esperadas se calculan en UTC
     $transaction: async (fn) => fn(db),
   };
   return db;
@@ -167,7 +167,7 @@ describe("OLP: completar punto", () => {
   it("la orden se completa sola cuando no quedan puntos pendientes (omitidos cuentan)", async () => {
     const app = makeApp(db);
     await request(app).put("/api/preventive-orders/1/items/11").send({ status: "COMPLETED" });
-    await request(app).put("/api/preventive-orders/1/items/12").send({ status: "SKIPPED" });
+    await request(app).put("/api/preventive-orders/1/items/12").send({ status: "SKIPPED", observations: "Equipo sin acceso" });
     expect(db.state.order.status).toBe("COMPLETED");
     expect(db.state.order.completedAt).toBeInstanceOf(Date);
   });
@@ -188,5 +188,137 @@ describe("OLP: cerrar orden", () => {
     expect(res.status).toBe(200);
     expect(db.state.order.signatureImage).toBe("data:firma");
     expect(db.state.order.status).toBe("COMPLETED");
+  });
+});
+
+describe("OLP: flujo con la actividad de la ruta", () => {
+  const ymd = (d) => d.toISOString().slice(0, 10);
+  const plusDays = (n) => new Date(Date.now() + n * 86400000);
+
+  function withOpen(db, scheduledAt) {
+    const open = { id: 500, plantId: 1, routeId: 21, status: "PENDING", scheduledAt };
+    db.state.executions.push(open);
+    db.execution.findFirst = async ({ where }) =>
+      db.state.executions.find((e) => e.routeId === where.routeId && where.status.in.includes(e.status)) || null;
+    db.execution.update = async ({ where, data }) => {
+      const e = db.state.executions.find((x) => x.id === where.id);
+      Object.assign(e, data);
+      return e;
+    };
+    db.execution.findMany = async ({ where }) => db.state.executions.filter((e) => e.routeId === where.routeId && where.status.in.includes(e.status));
+    return open;
+  }
+
+  it("cierra la actividad pendiente de la ruta en vez de crear una duplicada", async () => {
+    const db = makeDb();
+    const open = withOpen(db, new Date(`${ymd(plusDays(-2))}T12:00:00Z`));
+    const res = await request(makeApp(db)).put("/api/preventive-orders/1/items/11").send({ status: "COMPLETED", condition: "REGULAR" });
+    expect(res.status).toBe(200);
+    expect(res.body.execution).toMatchObject({ id: 500, reusedOpen: true });
+    expect(open.status).toBe("COMPLETED");
+    expect(open.sourceType).toBe("OLP");
+    expect(open.condition).toBe("REGULAR");
+    expect(db.state.movements[0].executionId).toBe(500);
+    // siguiente fecha: calendario a partir de la fecha programada (vencida hace 2 días, ciclo 7) → +5 días
+    expect(ymd(new Date(res.body.nextDate))).toBe(ymd(plusDays(5)));
+  });
+
+  it("si la ruta se adelantó por el preventivo, el ciclo se reinicia desde hoy", async () => {
+    const db = makeDb();
+    const open = withOpen(db, new Date(`${ymd(plusDays(4))}T12:00:00Z`));
+    const res = await request(makeApp(db)).put("/api/preventive-orders/1/items/11").send({ status: "COMPLETED" });
+    expect(res.status).toBe(200);
+    // la actividad adelantada queda programada hoy (cuenta en este periodo)
+    expect(ymd(open.scheduledAt)).toBe(ymd(new Date()));
+    expect(ymd(new Date(res.body.nextDate))).toBe(ymd(plusDays(7)));
+  });
+
+  it("usa la cantidad real capturada por punto", async () => {
+    const db = makeDb();
+    const res = await request(makeApp(db)).put("/api/preventive-orders/1/items/11").send({ status: "COMPLETED", usedQuantity: 25 });
+    expect(res.status).toBe(200);
+    // 25 ml × 4 puntos = 100 ml = 0.1 L
+    expect(db.state.movements[0].quantity).toBe(0.1);
+    expect(res.body.stock).toMatchObject({ quantity: 0.1, unit: "L" });
+  });
+
+  it("rechaza condición inválida y omitir sin motivo", async () => {
+    const db = makeDb();
+    const app = makeApp(db);
+    expect((await request(app).put("/api/preventive-orders/1/items/11").send({ condition: "NORMAL" })).status).toBe(400);
+    expect((await request(app).put("/api/preventive-orders/1/items/11").send({ status: "SKIPPED" })).status).toBe(400);
+  });
+
+  it("exige foto si la ruta la requiere", async () => {
+    const db = makeDb({ routeOverrides: { evidenceRequired: true } });
+    const res = await request(makeApp(db)).put("/api/preventive-orders/1/items/11").send({ status: "COMPLETED" });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("PHOTO_REQUIRED");
+    expect(db.state.executions).toHaveLength(0);
+  });
+
+  it("completar todas ejecuta las pendientes y deja la orden completada", async () => {
+    const db = makeDb();
+    db.preventiveOrderItem.findMany = async () =>
+      db.state.items.filter((i) => i.status === "PENDING").map((i) => ({ ...i, route: { id: i.routeId, name: db.state.routes[i.routeId].name, evidenceRequired: false } }));
+    const res = await request(makeApp(db)).post("/api/preventive-orders/1/items/complete-all").send({ condition: "BUENO" });
+    expect(res.status).toBe(200);
+    expect(res.body.completed).toBe(2);
+    expect(res.body.failed).toBe(0);
+    expect(res.body.orderStatus).toBe("COMPLETED");
+    expect(db.state.items.every((i) => i.status === "COMPLETED")).toBe(true);
+    expect(db.state.routeUpdates).toHaveLength(2);
+  });
+
+  it("completar todas sigue con las demás si una ruta falla por stock", async () => {
+    const db = makeDb({ stock: 0.05 });
+    db.preventiveOrderItem.findMany = async () =>
+      db.state.items.filter((i) => i.status === "PENDING").map((i) => ({ ...i, route: { id: i.routeId, name: db.state.routes[i.routeId].name, evidenceRequired: false } }));
+    const res = await request(makeApp(db)).post("/api/preventive-orders/1/items/complete-all").send({});
+    expect(res.body.completed).toBe(1);
+    expect(res.body.failed).toBe(1);
+    expect(res.body.results.find((r) => !r.ok).error).toMatch(/Stock insuficiente/);
+    expect(res.body.orderStatus).toBe("IN_PROGRESS");
+  });
+});
+
+describe("OLP: selección de rutas al crear", () => {
+  function createDb() {
+    const created = [];
+    const db = {
+      created,
+      equipment: { findFirst: async () => ({ id: 5, name: "Molino 1" }) },
+      technician: { findFirst: async () => ({ id: 7 }) },
+      route: { findMany: async () => [{ id: 21 }, { id: 22 }, { id: 23 }] },
+      preventiveOrder: {
+        create: async ({ data }) => {
+          created.push(data);
+          return { id: 9, ...data, items: data.items.create };
+        },
+      },
+    };
+    return db;
+  }
+  const app = (db) => makeApp(db, { id: 1, role: "SUPERVISOR" });
+
+  it("sin routeIds incluye todas las rutas del equipo", async () => {
+    const db = createDb();
+    const res = await request(app(db)).post("/api/preventive-orders").send({ equipmentId: 5, scheduledDate: "2026-12-01" });
+    expect(res.status).toBe(201);
+    expect(db.created[0].items.create.map((i) => i.routeId)).toEqual([21, 22, 23]);
+    expect(db.created[0].scheduledDate.toISOString()).toBe("2026-12-01T12:00:00.000Z");
+  });
+
+  it("con routeIds solo incluye las elegidas", async () => {
+    const db = createDb();
+    const res = await request(app(db)).post("/api/preventive-orders").send({ equipmentId: 5, scheduledDate: "2026-12-01", routeIds: [23, 21] });
+    expect(res.status).toBe(201);
+    expect(db.created[0].items.create.map((i) => i.routeId)).toEqual([23, 21]);
+  });
+
+  it("rechaza rutas de otro equipo o selección vacía", async () => {
+    const db = createDb();
+    expect((await request(app(db)).post("/api/preventive-orders").send({ equipmentId: 5, scheduledDate: "2026-12-01", routeIds: [99] })).status).toBe(400);
+    expect((await request(app(db)).post("/api/preventive-orders").send({ equipmentId: 5, scheduledDate: "2026-12-01", routeIds: [] })).status).toBe(400);
   });
 });
