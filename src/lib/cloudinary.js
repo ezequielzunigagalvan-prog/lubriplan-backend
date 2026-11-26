@@ -73,7 +73,7 @@ export async function uploadBufferToCloudinary(buffer, options = {}) {
         folder,
         public_id: publicId || undefined,
         overwrite: true,
-        resource_type: "image",
+        resource_type: options.resourceType || "image",
         unique_filename: !publicId,
       },
       (error, result) => {

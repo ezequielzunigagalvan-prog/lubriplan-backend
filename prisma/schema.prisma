@@ -86,6 +86,11 @@ model User {
 
   userPlants UserPlant[]
 
+  ownedActions    ActionItem[]     @relation("ActionItemOwner")
+  createdActions  ActionItem[]     @relation("ActionItemCreator")
+  actionComments  ActionComment[]  @relation("ActionCommentAuthor")
+  actionEvidence  ActionEvidence[] @relation("ActionEvidenceAuthor")
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -180,6 +185,7 @@ model Equipment {
   @@index([plantId])
   routeLinks          RouteEquipment[]
   evidenceExecutions  Execution[]      @relation("ExecutionEvidenceEquipment")
+  actionItems         ActionItem[]
 
   @@index([areaId])
   @@index([status])
@@ -499,6 +505,8 @@ enum NotificationType {
   EXEC_OVERDUE
   LOW_STOCK
   MONTHLY_TECH_SUMMARY
+  ACTION_ASSIGNED
+  ACTION_UPDATED
 }
 
 model Notification {
@@ -560,6 +568,7 @@ model Plant {
   mtFailureCodes     MtFailureCode[]
   mtSpareParts       MtSparePart[]
   mtWarehouses       MtWarehouse[]
+  actionItems ActionItem[]
 }
 
 model UserPlant {
@@ -1722,4 +1731,95 @@ model RouteEquipment {
 
   @@unique([routeId, equipmentId])
   @@index([equipmentId])
+}
+
+// =========================
+// PLAN DE ACCIÓN (pendientes de supervisores y administradores)
+// =========================
+enum ActionCategory {
+  LUBRICATION
+  SAFETY
+  PREDICTIVE
+  AUDIT
+}
+
+enum ActionStatus {
+  OPEN
+  IN_PROGRESS
+  DONE
+  CANCELLED
+}
+
+enum ActionPriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+model ActionItem {
+  id      Int   @id @default(autoincrement())
+  plantId Int
+  plant   Plant @relation(fields: [plantId], references: [id], onDelete: Cascade)
+
+  category    ActionCategory
+  title       String
+  description String?
+  priority    ActionPriority @default(MEDIUM)
+  status      ActionStatus   @default(OPEN)
+  progress    Int            @default(0) // 0–100
+
+  dueDate  DateTime // fecha de ejecución / cierre comprometida
+  closedAt DateTime? // fecha real de cierre (al llegar a 100%)
+
+  ownerUserId Int // responsable
+  owner       User @relation("ActionItemOwner", fields: [ownerUserId], references: [id])
+  createdById Int
+  createdBy   User @relation("ActionItemCreator", fields: [createdById], references: [id])
+
+  equipmentId Int?
+  equipment   Equipment? @relation(fields: [equipmentId], references: [id], onDelete: SetNull)
+
+  comments ActionComment[]
+  evidence ActionEvidence[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([plantId, category])
+  @@index([ownerUserId])
+  @@index([dueDate])
+}
+
+model ActionComment {
+  id       Int        @id @default(autoincrement())
+  actionId Int
+  action   ActionItem @relation(fields: [actionId], references: [id], onDelete: Cascade)
+  userId   Int
+  user     User       @relation("ActionCommentAuthor", fields: [userId], references: [id])
+
+  text         String
+  progressFrom Int? // si el comentario registró un avance
+  progressTo   Int?
+
+  createdAt DateTime @default(now())
+
+  @@index([actionId])
+}
+
+model ActionEvidence {
+  id       Int        @id @default(autoincrement())
+  actionId Int
+  action   ActionItem @relation(fields: [actionId], references: [id], onDelete: Cascade)
+  userId   Int
+  user     User       @relation("ActionEvidenceAuthor", fields: [userId], references: [id])
+
+  url      String
+  publicId String?
+  name     String?
+  note     String?
+
+  createdAt DateTime @default(now())
+
+  @@index([actionId])
 }
