@@ -77,6 +77,7 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
   import plantsOverviewRoutes from "./routes/plantsOverview.routes.js";
   import actionPlanRoutes from "./routes/actionPlan.routes.js";
   import equipmentTechRoutes from "./routes/equipmentTech.routes.js";
+  import equipmentMoveRoutes from "./routes/equipmentMove.routes.js";
   import olpRoutes from "./routes/olp.routes.js";
   import historyRoutes from "./routes/history.routes.js";
   import { parseRouteInput, RouteInputError } from "./routes/routeRules.js";
@@ -357,6 +358,7 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
   app.use("/api", plantsOverviewRoutes({ prisma, auth: requireAuth, requireRole }));
   app.use("/api", actionPlanRoutes({ prisma, auth: requireAuth, requireRole }));
   app.use("/api", equipmentTechRoutes({ prisma, auth: requireAuth, requireRole }));
+  app.use("/api", equipmentMoveRoutes({ prisma, auth: requireAuth, requireRole }));
   // Órdenes de Lubricación Preventiva (OLP)
   app.use("/api/preventive-orders", olpRoutes({ prisma, auth: requireAuth, requireRole }));
   // Historial / auditoría

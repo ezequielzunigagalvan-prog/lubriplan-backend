@@ -121,6 +121,44 @@ export default function lubricationCardsRoutes({ prisma, auth, requireRole }) {
   });
 
   // ─────────────────────────────────────────────────────────────────────────
+  // GET /api/lubrication-cards/:equipmentId/route-spot/:routeId
+  // Carta del equipo con los puntos de esa ruta resaltados (en lugar de una foto por ruta).
+  // Solo lectura: no crea la carta si no existe.
+  // ─────────────────────────────────────────────────────────────────────────
+  router.get("/lubrication-cards/:equipmentId/route-spot/:routeId", auth, async (req, res) => {
+    try {
+      const plantId = req.currentPlantId;
+      const equipmentId = Number(req.params.equipmentId);
+      const routeId = Number(req.params.routeId) || null;
+      if (!plantId || !Number.isFinite(equipmentId)) return res.status(400).json({ error: "Datos inválidos" });
+      const eq = await prisma.equipment.findFirst({ where: { id: equipmentId, plantId }, select: { id: true, name: true, code: true } });
+      if (!eq) return res.status(404).json({ error: "Equipo no encontrado" });
+      const card = await prisma.lubricationCard.findUnique({
+        where: { equipmentId },
+        select: {
+          imageUrl: true,
+          images: { select: { id: true, imageUrl: true, label: true, order: true }, orderBy: { order: "asc" } },
+          points: { select: { id: true, label: true, x: true, y: true, imageId: true, routeId: true, frequency: true, frequencyLabel: true, lubricant: true, quantity: true, unit: true }, orderBy: { createdAt: "asc" } },
+        },
+      });
+      const points = card?.points || [];
+      const highlightIds = routeId ? points.filter((pt) => pt.routeId === routeId).map((pt) => pt.id) : [];
+      return res.json({
+        ok: true,
+        equipment: eq,
+        hasCard: Boolean(card && (card.imageUrl || card.images.length)),
+        imageUrl: card?.imageUrl || null,
+        images: card?.images || [],
+        points,
+        highlightIds,
+      });
+    } catch (e) {
+      logger.error("GET route-spot error:", e);
+      return res.status(500).json({ error: "Error cargando la carta" });
+    }
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
   // POST /api/lubrication-cards/:equipmentId/points
   // ─────────────────────────────────────────────────────────────────────────
   router.post("/lubrication-cards/:equipmentId/points", auth, requireRole(["ADMIN", "SUPERVISOR"]), async (req, res) => {
