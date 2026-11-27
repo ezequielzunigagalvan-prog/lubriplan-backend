@@ -158,6 +158,7 @@ router.post("/login", loginRateLimiter, validate(loginSchema), async (req, res) 
         name: user.name,
         email: user.email,
         role: user.role,
+        isPlatformOwner: user.isPlatformOwner === true,
         technicianId: loginTechnicianId,
         technician: user.technician,
       },
@@ -275,7 +276,7 @@ router.get("/me", requireAuth, async (req, res) => {
   try {
     const user = await prisma.user.findUnique({
       where: { id: req.user.id },
-      select: { id: true, name: true, email: true, role: true },
+      select: { id: true, name: true, email: true, role: true, isPlatformOwner: true },
     });
     if (!user) return res.status(404).json({ error: "Usuario no encontrado" });
     const technicianId = req.user.technicianId ?? null;

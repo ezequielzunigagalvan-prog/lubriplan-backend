@@ -1,6 +1,7 @@
 ﻿  // src/routes/admin.links.routes.js
   import express from "express";
   import { logger } from "../config/logger.js";
+  import { scopePlantIds, assertCanManageUser, ScopeError } from "../services/accessScope.js";
 
   export default function adminLinksRoutes({ prisma, auth }) {
     const router = express.Router();
@@ -20,8 +21,14 @@
     // =========================
     router.get("/admin/links/technicians", auth, requireAdmin, async (req, res) => {
       try {
+        // Solo usuarios del mismo cliente (con acceso a alguna planta del admin).
+        const scope = await scopePlantIds(prisma, req.user);
         const techUsers = await prisma.user.findMany({
-          where: { role: "TECHNICIAN", active: true },
+          where: {
+            role: "TECHNICIAN",
+            active: true,
+            ...(scope === null ? {} : { userPlants: { some: { plantId: { in: scope.length ? scope : [-1] }, active: true } } }),
+          },
           orderBy: { name: "asc" },
           select: {
             id: true,
@@ -70,6 +77,13 @@
 
         const syncName = Boolean(req.body?.syncName);
 
+        try {
+          await assertCanManageUser(prisma, req.user, userId);
+        } catch (err) {
+          if (err instanceof ScopeError) return res.status(err.status).json({ error: err.message });
+          throw err;
+        }
+
         const user = await prisma.user.findUnique({
           where: { id: userId },
           select: { id: true, role: true, technicianId: true, name: true },
@@ -83,8 +97,9 @@
         // Si va a ligar a un técnico, validar que exista y que no esté ligado a otro usuario
         let tech = null;
         if (technicianId !== null) {
+          const techScope = await scopePlantIds(prisma, req.user);
           tech = await prisma.technician.findFirst({
-            where: { id: technicianId, deletedAt: null },
+            where: { id: technicianId, deletedAt: null, plantId: techScope === null ? { gt: 0 } : { in: techScope.length ? techScope : [-1] } },
             select: { id: true, name: true, code: true },
           });
           if (!tech) return res.status(404).json({ error: "Técnico no encontrado" });

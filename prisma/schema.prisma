@@ -75,6 +75,9 @@ model User {
   role         UserRole @default(TECHNICIAN)
   active       Boolean  @default(true)
 
+  // Dueño de la plataforma: único que ve todas las plantas y da de alta clientes (consola aparte).
+  isPlatformOwner Boolean @default(false)
+
   technicianId Int?        @unique
   technician   Technician? @relation("UserTechnician", fields: [technicianId], references: [id], onDelete: SetNull)
   technicianProfiles Technician[] @relation("UserTechnicianProfiles")

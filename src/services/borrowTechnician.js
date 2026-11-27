@@ -9,13 +9,14 @@
 //  - Si no tiene cuenta, se crea un perfil con sus mismos datos (o se reutiliza uno con el mismo nombre).
 
 import { ensureTechnicianProfile, ProfileError } from "./technicianProfile.js";
+import { isPlatformOwner } from "./accessScope.js";
 
 const isActive = (s) => ["ACTIVO", "ACTIVE"].includes(String(s || "").trim().toUpperCase());
 
 /** Plantas (distintas a la actual) de las que el usuario puede tomar técnicos. */
 export async function sourcePlantIds(prisma, { user, currentPlantId }) {
   const role = String(user?.role || "").toUpperCase();
-  if (role === "ADMIN") {
+  if (role === "ADMIN" && isPlatformOwner(user)) {
     const plants = await prisma.plant.findMany({ where: { active: true, id: { not: currentPlantId } }, select: { id: true } });
     return plants.map((p) => p.id);
   }

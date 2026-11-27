@@ -63,7 +63,7 @@ export async function requireAuth(req, res, next) {
     const [dbUser, plantResult] = await Promise.all([
       prisma.user.findUnique({
         where: { id: userId },
-        select: { id: true, role: true, active: true, technicianId: true },
+        select: { id: true, role: true, active: true, technicianId: true, isPlatformOwner: true },
       }),
       plantQuery,
     ]);
@@ -77,6 +77,7 @@ export async function requireAuth(req, res, next) {
       id: dbUser.id,
       role: dbUser.role,
       technicianId: dbUser.technicianId ?? null,
+      isPlatformOwner: dbUser.isPlatformOwner === true,
     };
 
     let currentPlantId = parsedPlantId;

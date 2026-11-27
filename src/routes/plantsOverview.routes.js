@@ -1,6 +1,6 @@
 // src/routes/plantsOverview.routes.js
 // Dashboard multiplanta: cómo va cada planta, de un vistazo.
-//  - ADMIN ve todas las plantas activas; SUPERVISOR solo las que tiene asignadas (UserPlant).
+//  - ADMIN ve sus plantas (el dueño de la plataforma, todas); SUPERVISOR solo las que tiene asignadas (UserPlant).
 //  - Todas las fechas se calculan con la zona horaria de cada planta.
 //  - Definiciones (las mismas para todas las plantas, para poder compararlas):
 //      atrasadas      = actividades abiertas con fecha anterior a hoy
@@ -9,6 +9,7 @@
 //      cumplimiento   = del mes elegido, actividades programadas hasta hoy que ya están completadas
 //      a tiempo       = de esas completadas, las hechas a más tardar el día programado
 import express from "express";
+import { isPlatformOwner } from "../services/accessScope.js";
 import { logger } from "../config/logger.js";
 import { logAudit } from "../services/audit.service.js";
 import { safeTimeZone, zonedStartOfDay, zonedEndOfDay, zonedMonthRange, zonedYmd } from "../utils/tzRange.js";
@@ -41,7 +42,8 @@ export function plantHealth(m) {
 
 async function plantsForUser(prisma, user) {
   const role = String(user?.role || "").toUpperCase();
-  if (role === "ADMIN") {
+  // Solo el dueño de la plataforma ve todas las plantas; un ADMIN de cliente ve las suyas.
+  if (role === "ADMIN" && isPlatformOwner(user)) {
     return prisma.plant.findMany({ where: { active: true }, select: { id: true, name: true, timezone: true }, orderBy: { name: "asc" } });
   }
   const links = await prisma.userPlant.findMany({
@@ -166,6 +168,8 @@ export default function plantsOverviewRoutes({ prisma, auth, requireRole }) {
   // ADMIN abre una planta en la que aún no está dado de alta: se le da acceso (queda en auditoría).
   router.post("/dashboard/plants/:id/enter", auth, requireRole(["ADMIN"]), async (req, res) => {
     try {
+      // Darse acceso a una planta ajena solo lo puede hacer el dueño de la plataforma.
+      if (!isPlatformOwner(req.user)) return res.status(404).json({ error: "Planta no encontrada" });
       const plantId = Number(req.params.id);
       const plant = await prisma.plant.findFirst({ where: { id: plantId, active: true }, select: { id: true, name: true } });
       if (!plant) return res.status(404).json({ error: "Planta no encontrada" });

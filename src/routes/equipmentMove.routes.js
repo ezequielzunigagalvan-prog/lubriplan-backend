@@ -1,6 +1,7 @@
 // src/routes/equipmentMove.routes.js
 // Trasladar un equipo a otra planta (solo ADMIN). Lógica en services/equipmentMove.js.
 import express from "express";
+import { scopePlantIds, canAccessPlant } from "../services/accessScope.js";
 import { logger } from "../config/logger.js";
 import { logAudit } from "../services/audit.service.js";
 import { notifyManagers } from "../notifications/notify.js";
@@ -24,8 +25,10 @@ export default function equipmentMoveRoutes({ prisma, auth, requireRole }) {
   // Plantas destino posibles
   router.get("/equipment/move-targets", ...adminOnly, async (req, res) => {
     try {
+      // Solo plantas del mismo cliente (las del admin); el dueño de la plataforma, todas.
+      const scope = await scopePlantIds(prisma, req.user);
       const plants = await prisma.plant.findMany({
-        where: { active: true, id: { not: req.currentPlantId } },
+        where: { active: true, id: scope === null ? { not: req.currentPlantId } : { in: scope.filter((id) => id !== req.currentPlantId) } },
         select: { id: true, name: true },
         orderBy: { name: "asc" },
       });
@@ -35,8 +38,15 @@ export default function equipmentMoveRoutes({ prisma, auth, requireRole }) {
     }
   });
 
+  // La planta destino debe estar dentro del alcance del admin.
+  const assertTarget = async (req) => {
+    const to = Number(req.query.toPlantId ?? req.body?.toPlantId);
+    if (Number.isInteger(to) && !(await canAccessPlant(prisma, req.user, to))) throw new MoveError("Elige la planta destino");
+  };
+
   router.get("/equipment/:id/move-preview", ...adminOnly, async (req, res) => {
     try {
+      await assertTarget(req);
       return res.json({ ok: true, ...(await previewMove(prisma, args(req))) });
     } catch (e) {
       return fail(res, e, "GET move-preview");
@@ -45,6 +55,7 @@ export default function equipmentMoveRoutes({ prisma, auth, requireRole }) {
 
   router.post("/equipment/:id/move", ...adminOnly, async (req, res) => {
     try {
+      await assertTarget(req);
       const a = args(req);
       const r = await moveEquipment(prisma, a);
       logAudit({

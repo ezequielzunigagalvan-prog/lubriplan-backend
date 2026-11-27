@@ -10,7 +10,6 @@ import emergencyActivities from "./emergencyActivities.js";
 import conditionReportsRoutes from "./conditionReports.routes.js";
 import notificationsRoutes from "./notifications.routes.js";
 import adminLinksRoutes from "./admin.links.routes.js";
-import adminOnboardingRoutes from "./admin.onboarding.routes.js";
 import realtimeRoutes from "./realtime.routes.js";
 import settingsRoutes from "./settings.routes.js";
 
@@ -75,14 +74,6 @@ export function mountRoutes(app, { prisma }) {
   app.use("/api", conditionReportsRoutes({ prisma, auth: requireAuth }));
   app.use("/api", notificationsRoutes({ prisma, auth: requireAuth }));
   app.use("/api", adminLinksRoutes({ prisma, auth: requireAuth }));
-  app.use(
-    "/api/admin",
-    adminOnboardingRoutes({
-      prisma,
-      auth: requireAuth,
-      requireRole,
-    })
-  );
   app.use("/api", realtimeRoutes({ auth: requireAuth }));
 
  // ✅ SETTINGS (GLOBAL)

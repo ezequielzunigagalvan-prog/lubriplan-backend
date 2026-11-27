@@ -36,7 +36,7 @@ import { sseHub } from "./realtime/sseHub.js";
 import { notifyManagers, notifyTechnicianAssignee, notifyLowStockIfNew, notifyConditionReporter } from "./notifications/notify.js"; 
 import realtimeRoutes from "./routes/realtime.routes.js";
 import adminLinksRoutes from "./routes/admin.links.routes.js";
-import adminOnboardingRoutes from "./routes/admin.onboarding.routes.js";
+import ownerRoutes from "./routes/owner.routes.js";
 import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
     import aiRouter from "./ia/aiRouter.js";
     import chatRouter from "./ia/chatRouter.js";
@@ -320,14 +320,8 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
     })
   );
   app.use("/api", adminLinksRoutes({ prisma, auth: requireAuth }));
-  app.use(
-    "/api/admin",
-    adminOnboardingRoutes({
-      prisma,
-      auth: requireAuth,
-      requireRole,
-    })
-  );
+  // Consola del dueño de la plataforma (alta de clientes). Reemplaza /api/admin/onboarding-client.
+  app.use("/api/owner", ownerRoutes({ prisma, auth: requireAuth }));
   app.use(
     "/api",
     settingsRoutes({

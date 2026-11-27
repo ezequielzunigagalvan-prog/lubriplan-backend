@@ -20,9 +20,21 @@ import { hashPassword } from "../utils/password.js";
 import { logger } from "../config/logger.js";
 import { createResetToken, sendResetEmail } from "../services/auth/passwordReset.js";
 import { ensureTechnicianProfile, listTechnicianProfiles, ProfileError } from "../services/technicianProfile.js";
+import { ScopeError, isPlatformOwner, scopePlantIds, assertCanManageUser, assertPlantsInScope } from "../services/accessScope.js";
 
 const router = express.Router();
 const admin = [requireAuth, requireRole(["ADMIN"])];
+
+// Un admin solo administra usuarios de su cliente (todas sus plantas dentro de su alcance).
+async function checkTarget(req, res, next) {
+  try {
+    await assertCanManageUser(prisma, req.user, req.params.id);
+    next();
+  } catch (e) {
+    fail(res, e, "users target");
+  }
+}
+const adminTarget = [...admin, checkTarget];
 const ROLES = ["ADMIN", "SUPERVISOR", "TECHNICIAN"];
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MIN_PASSWORD = 8;
@@ -37,14 +49,24 @@ class HttpError extends Error {
 }
 
 function fail(res, e, label) {
-  if (e instanceof HttpError || e instanceof ProfileError) return res.status(e.status || 400).json({ error: e.message });
+  if (e instanceof HttpError || e instanceof ProfileError || e instanceof ScopeError) return res.status(e.status || 400).json({ error: e.message });
   if (e?.code === "P2002") return res.status(409).json({ error: "Ya existe un registro con ese valor (correo o código)" });
   logger.error(label, e);
   return res.status(500).json({ error: "Ocurrió un error; intenta de nuevo" });
 }
 
-async function activeAdminCount(excludeId = null) {
-  return prisma.user.count({ where: { role: "ADMIN", active: true, ...(excludeId ? { id: { not: excludeId } } : {}) } });
+/** Otros admins activos del mismo cliente (que comparten alguna planta con el usuario). */
+async function activeAdminCount(excludeId) {
+  const plants = await prisma.userPlant.findMany({ where: { userId: excludeId }, select: { plantId: true } });
+  return prisma.user.count({
+    where: {
+      role: "ADMIN",
+      active: true,
+      id: { not: excludeId },
+      isPlatformOwner: false,
+      userPlants: { some: { plantId: { in: plants.map((x) => x.plantId) }, active: true } },
+    },
+  });
 }
 
 /* ───────── Serialización ───────── */
@@ -107,7 +129,7 @@ async function serializeUsers(users) {
  * plants: [{ plantId, isDefault }]
  * technicians: { [plantId]: { technicianId? , code? } }  (solo rol TECHNICIAN)
  */
-async function parseAccess(body) {
+async function parseAccess(body, actor) {
   const list = Array.isArray(body?.plants) ? body.plants : [];
   const plants = [];
   const seen = new Set();
@@ -128,6 +150,7 @@ async function parseAccess(body) {
   const ok = new Set(existing.map((p) => p.id));
   const bad = plants.filter((p) => !ok.has(p.plantId));
   if (bad.length) throw new HttpError(400, "Una de las plantas no existe o está inactiva");
+  await assertPlantsInScope(prisma, actor, plants.map((p) => p.plantId));
 
   const technicians = body?.technicians && typeof body.technicians === "object" ? body.technicians : {};
   return { plants, technicians };
@@ -180,7 +203,10 @@ router.get("/", ...admin, async (req, res) => {
       plantFilter = mine.map((m) => m.plantId);
     }
     const users = await prisma.user.findMany({
-      where: { userPlants: { some: { plantId: { in: plantFilter }, active: true } } },
+      where: {
+        userPlants: { some: { plantId: { in: plantFilter }, active: true } },
+        ...(isPlatformOwner(req.user) ? {} : { isPlatformOwner: false }),
+      },
       orderBy: [{ active: "desc" }, { name: "asc" }],
       select: USER_SELECT,
     });
@@ -193,10 +219,12 @@ router.get("/", ...admin, async (req, res) => {
 // Opciones para el formulario: plantas activas y, por planta, técnicos sin cuenta para ligar.
 router.get("/options", ...admin, async (req, res) => {
   try {
+    const scope = await scopePlantIds(prisma, req.user);
+    const inScope = scope === null ? { gt: 0 } : { in: scope.length ? scope : [-1] };
     const [plants, techs] = await Promise.all([
-      prisma.plant.findMany({ where: { active: true }, orderBy: { name: "asc" }, select: { id: true, name: true } }),
+      prisma.plant.findMany({ where: { active: true, id: inScope }, orderBy: { name: "asc" }, select: { id: true, name: true } }),
       prisma.technician.findMany({
-        where: { deletedAt: null, plantId: { gt: 0 } },
+        where: { deletedAt: null, plantId: inScope },
         orderBy: [{ plantId: "asc" }, { name: "asc" }],
         select: { id: true, plantId: true, name: true, code: true, status: true, userId: true, user: { select: { id: true } } },
       }),
@@ -252,7 +280,7 @@ router.post("/", ...admin, async (req, res) => {
           plants: [{ plantId: req.currentPlantId, isDefault: true }],
           technicians: req.body?.technicianId ? { [req.currentPlantId]: { technicianId: req.body.technicianId } } : req.body?.technicians,
         };
-    const access = await parseAccess(body);
+    const access = await parseAccess(body, req.user);
     const passwordHash = password ? await hashPassword(password) : null;
 
     const user = await prisma.$transaction(async (tx) => {
@@ -277,7 +305,7 @@ router.post("/", ...admin, async (req, res) => {
   }
 });
 
-router.patch("/:id", ...admin, async (req, res) => {
+router.patch("/:id", ...adminTarget, async (req, res) => {
   try {
     const id = Number(req.params.id);
     const current = await prisma.user.findUnique({ where: { id }, select: { id: true, name: true, email: true, role: true, active: true, technicianId: true } });
@@ -300,7 +328,7 @@ router.patch("/:id", ...admin, async (req, res) => {
     }
 
     const accessGiven = Array.isArray(req.body?.plants);
-    const access = accessGiven ? await parseAccess(req.body) : null;
+    const access = accessGiven ? await parseAccess(req.body, req.user) : null;
     if (role === "TECHNICIAN" && current.role !== "TECHNICIAN" && !access) {
       throw new HttpError(400, "Para cambiarlo a técnico indica sus plantas y su perfil de técnico en cada una");
     }
@@ -326,7 +354,7 @@ async function putAccess(req, res) {
     const id = Number(req.params.id);
     const user = await prisma.user.findUnique({ where: { id }, select: { id: true, name: true, email: true, role: true, technicianId: true } });
     if (!user) throw new HttpError(404, "El usuario no existe");
-    const access = await parseAccess(req.body);
+    const access = await parseAccess(req.body, req.user);
     await prisma.$transaction((tx) => applyAccess(tx, user, user.role, access));
     const [out] = await serializeUsers([await prisma.user.findUnique({ where: { id }, select: USER_SELECT })]);
     return res.json({ ok: true, user: out });
@@ -334,10 +362,10 @@ async function putAccess(req, res) {
     return fail(res, e, "PUT /users/:id/access");
   }
 }
-router.put("/:id/access", ...admin, putAccess);
-router.put("/:id/plants", ...admin, putAccess);
+router.put("/:id/access", ...adminTarget, putAccess);
+router.put("/:id/plants", ...adminTarget, putAccess);
 
-router.patch("/:id/status", ...admin, async (req, res) => {
+router.patch("/:id/status", ...adminTarget, async (req, res) => {
   try {
     const id = Number(req.params.id);
     const raw = req.body?.active;
@@ -357,7 +385,7 @@ router.patch("/:id/status", ...admin, async (req, res) => {
 });
 
 // El administrador fija una contraseña nueva.
-router.post("/:id/password", ...admin, async (req, res) => {
+router.post("/:id/password", ...adminTarget, async (req, res) => {
   try {
     const id = Number(req.params.id);
     const password = String(req.body?.password || "");
@@ -373,7 +401,7 @@ router.post("/:id/password", ...admin, async (req, res) => {
 });
 
 // Envía al usuario un enlace para crear o restablecer su contraseña.
-router.post("/:id/password-link", ...admin, async (req, res) => {
+router.post("/:id/password-link", ...adminTarget, async (req, res) => {
   try {
     const id = Number(req.params.id);
     const user = await prisma.user.findUnique({ where: { id }, select: { id: true, name: true, email: true, active: true, passwordHash: true } });
@@ -389,7 +417,7 @@ router.post("/:id/password-link", ...admin, async (req, res) => {
 });
 
 // Perfiles de técnico del usuario (uno por planta).
-router.get("/:id/technician-profiles", ...admin, async (req, res) => {
+router.get("/:id/technician-profiles", ...adminTarget, async (req, res) => {
   try {
     const user = await prisma.user.findUnique({ where: { id: Number(req.params.id) }, select: { id: true, technicianId: true } });
     if (!user) throw new HttpError(404, "El usuario no existe");
