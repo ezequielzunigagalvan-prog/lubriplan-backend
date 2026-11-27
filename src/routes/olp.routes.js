@@ -17,6 +17,7 @@
 //  - Foto obligatoria si la ruta o la orden la piden.
 //  - Completar dos veces la misma ruta no descuenta dos veces.
 
+import { getPlantSettings } from "../services/plantSettings.js";
 import { Router } from "express";
 import { logger } from "../config/logger.js";
 import { startOfDay, endOfDay } from "../utils/routeScheduling.js";
@@ -138,7 +139,7 @@ async function executeItem(tx, { order, item, plantId, executorTechnicianId, inp
       inventoryWarning = `No se descontó inventario: ${consumption.reason}`;
       consumption = null;
     } else {
-      const settings = await tx.appSettings.findUnique({ where: { id: 1 }, select: { preventNegativeStock: true } });
+      const settings = await getPlantSettings(tx, plantId);
       const preventNegativeStock = settings?.preventNegativeStock ?? true;
       if (preventNegativeStock && Number(lubricant.stock || 0) - consumption.inventoryQuantity < 0) {
         throw new HttpError(
@@ -679,7 +680,7 @@ export default function olpRoutes({ prisma, auth, requireRole }) {
           createdBy: req.user.id,
           assignedTo,
           notes: body.notes ? String(body.notes).trim() : null,
-          requiresPhoto: body.requiresPhoto === true,
+          requiresPhoto: typeof body.requiresPhoto === "boolean" ? body.requiresPhoto : (await getPlantSettings(prisma, plantId)).requiresPhotoOLP,
           items: { create: routeIds.map((routeId) => ({ routeId, status: "PENDING" })) },
         },
         include: { items: true },
@@ -872,6 +873,11 @@ export default function olpRoutes({ prisma, auth, requireRole }) {
         if (order.requiresPhoto || r?.evidenceRequired) {
           return res.status(400).json({ error: "Esta ruta requiere foto de evidencia", code: "PHOTO_REQUIRED" });
         }
+        // Ajuste de la planta: evidencia obligatoria (foto o nota), igual que en Actividades.
+        const plantSettings = await getPlantSettings(prisma, plantId);
+        if (plantSettings.executionEvidenceRequired && !input.observations) {
+          return res.status(400).json({ error: "La planta exige evidencia: agrega una foto o una observación", code: "EVIDENCE_REQUIRED" });
+        }
       }
       if (input.photoUrl && preItem.status !== "COMPLETED") {
         const up = await uploadPhoto(input.photoUrl, order.id, itemId);
@@ -952,8 +958,14 @@ export default function olpRoutes({ prisma, auth, requireRole }) {
         orderBy: { id: "asc" },
       });
 
+      const plantSettings = await getPlantSettings(prisma, plantId);
+      const needsNote = plantSettings.executionEvidenceRequired && !input.observations;
       const results = [];
       for (const it of items) {
+        if (needsNote) {
+          results.push({ itemId: it.id, routeName: it.route?.name, ok: false, error: "La planta exige evidencia (foto u observación)", code: "EVIDENCE_REQUIRED" });
+          continue;
+        }
         if (order.requiresPhoto || it.route?.evidenceRequired) {
           results.push({ itemId: it.id, routeName: it.route?.name, ok: false, error: "Requiere foto de evidencia", code: "PHOTO_REQUIRED" });
           continue;

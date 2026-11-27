@@ -1,5 +1,6 @@
 ﻿// src/routes/alerts.routes.js
 import express from "express";
+import { getPlantSettings } from "../services/plantSettings.js";
 import { logger } from "../config/logger.js";
 
 export default function alertsRoutes({ prisma, auth, requireRole, toStartOfDaySafe }) {
@@ -16,17 +17,7 @@ export default function alertsRoutes({ prisma, auth, requireRole, toStartOfDaySa
         if (!plantId) return res.status(400).json({ error: "PLANT_REQUIRED" });
 
         // Read AppSettings — overload params stored there take precedence over hardcoded defaults
-        const settings = await prisma.appSettings.findUnique({
-          where: { id: 1 },
-          select: {
-            technicianOverloadEnabled: true,
-            overloadWindowDays: true,
-            overloadOverdueLookbackDays: true,
-            overloadCapacityPerDay: true,
-            overloadWarnRatio: true,
-            overloadCriticalRatio: true,
-          },
-        });
+        const settings = await getPlantSettings(prisma, plantId);
 
         if (settings?.technicianOverloadEnabled === false) {
           return res.json({ ok: true, items: [], disabled: true });

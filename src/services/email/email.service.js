@@ -1,4 +1,5 @@
 ﻿import { Resend } from "resend";
+import { getPlantSettings } from "../plantSettings.js";
 import nodemailer from "nodemailer";
 import {
   conditionAlertTemplate,
@@ -32,17 +33,13 @@ const API_PUBLIC_BASE_URL = String(
   process.env.API_PUBLIC_BASE_URL || process.env.APP_BASE_URL || "http://localhost"
 ).replace(/\/$/, "");
 
-async function getEmailSettings(prisma) {
+async function getEmailSettings(prisma, plantId) {
   if (!prisma?.appSettings) return null;
-  return prisma.appSettings.upsert({
-    where: { id: 1 },
-    update: {},
-    create: { id: 1 },
-  });
+  return getPlantSettings(prisma, plantId);
 }
 
-async function checkEmailEnabled(prisma, key) {
-  const settings = await getEmailSettings(prisma);
+async function checkEmailEnabled(prisma, key, plantId) {
+  const settings = await getEmailSettings(prisma, plantId);
   if (!settings) return { ok: true };
   if (settings[key] === false) {
     return { ok: false, skipped: true, reason: "EMAIL_DISABLED_BY_SETTINGS" };
@@ -100,7 +97,7 @@ export async function sendEmail({ to, subject, html, replyTo }) {
 }
 
 export async function sendConditionAlertEmail({ prisma, payload }) {
-  const emailStatus = await checkEmailEnabled(prisma, "conditionReportEmailEnabled");
+  const emailStatus = await checkEmailEnabled(prisma, "conditionReportEmailEnabled", payload?.plantId);
   if (!emailStatus.ok) return emailStatus;
 
   const recipients = await getPlantAlertRecipients({
@@ -126,7 +123,7 @@ export async function sendConditionAlertEmail({ prisma, payload }) {
 }
 
 export async function sendCriticalActivityEmail({ prisma, payload }) {
-  const emailStatus = await checkEmailEnabled(prisma, "criticalActivityEmailEnabled");
+  const emailStatus = await checkEmailEnabled(prisma, "criticalActivityEmailEnabled", payload?.plantId);
   if (!emailStatus.ok) return emailStatus;
 
   const recipients = await getPlantAlertRecipients({
@@ -152,7 +149,7 @@ export async function sendCriticalActivityEmail({ prisma, payload }) {
 }
 
 export async function sendOverdueSummaryEmail({ prisma, payload }) {
-  const emailStatus = await checkEmailEnabled(prisma, "overdueSummaryEmailEnabled");
+  const emailStatus = await checkEmailEnabled(prisma, "overdueSummaryEmailEnabled", payload?.plantId);
   if (!emailStatus.ok) return emailStatus;
 
   const recipients = await getPlantAlertRecipients({
@@ -189,7 +186,7 @@ export async function sendOverdueSummaryEmail({ prisma, payload }) {
 }
 
 export async function sendMonthlyExecutiveReportEmail({ prisma, payload }) {
-  const emailStatus = await checkEmailEnabled(prisma, "monthlyReportEmailEnabled");
+  const emailStatus = await checkEmailEnabled(prisma, "monthlyReportEmailEnabled", payload?.plantId);
   if (!emailStatus.ok) return emailStatus;
 
   const recipients = await getPlantAlertRecipients({

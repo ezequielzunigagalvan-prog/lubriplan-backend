@@ -5,6 +5,7 @@
 // Antes solo existía dentro de un endpoint duplicado que nunca se ejecutaba,
 // así que en la práctica nadie recibía el aviso.
 
+import { getPlantSettings } from "../plantSettings.js";
 import { notifyLowStockIfNew } from "../../notifications/notify.js";
 import { sseHub } from "../../realtime/sseHub.js";
 import { logger } from "../../config/logger.js";
@@ -23,7 +24,7 @@ export async function notifyIfLowStock(prisma, { plantId, lubricantId }) {
         where: { id: Number(lubricantId), plantId: Number(plantId) },
         select: { id: true, name: true, unit: true, stock: true, minStock: true },
       }),
-      prisma.appSettings.findUnique({ where: { id: 1 }, select: { lowStockWarningEnabled: true } }),
+      getPlantSettings(prisma, plantId),
     ]);
 
     if (!lub || lub.minStock == null) return { notified: false };

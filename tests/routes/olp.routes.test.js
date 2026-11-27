@@ -290,6 +290,7 @@ describe("OLP: selección de rutas al crear", () => {
       equipment: { findFirst: async () => ({ id: 5, name: "Molino 1" }) },
       technician: { findFirst: async () => ({ id: 7 }) },
       route: { findMany: async () => [{ id: 21 }, { id: 22 }, { id: 23 }] },
+      appSettings: { findUnique: async () => null, findFirst: async () => ({ id: 1, plantId: null, requiresPhotoOLP: true }) },
       preventiveOrder: {
         create: async ({ data }) => {
           created.push(data);
@@ -307,6 +308,8 @@ describe("OLP: selección de rutas al crear", () => {
     expect(res.status).toBe(201);
     expect(db.created[0].items.create.map((i) => i.routeId)).toEqual([21, 22, 23]);
     expect(db.created[0].scheduledDate.toISOString()).toBe("2026-12-01T12:00:00.000Z");
+    // sin requiresPhoto explícito toma el ajuste de la planta (aquí, el general)
+    expect(db.created[0].requiresPhoto).toBe(true);
   });
 
   it("con routeIds solo incluye las elegidas", async () => {

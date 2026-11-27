@@ -1,4 +1,5 @@
 ﻿import express from "express";
+import { getPlantSettings } from "../services/plantSettings.js";
 import { notifyManagers, notifyTechnicianAssignee, notifyLowStockIfNew } from "../notifications/notify.js";
 import { sseHub } from "../realtime/sseHub.js";
 import { sendCriticalActivityEmail } from "../services/email/email.service.js";
@@ -194,10 +195,7 @@ export default function emergencyActivitiesRoutes({ prisma, auth }) {
 
           // 2) Descuento atómico del stock (antes se calculaba con el valor leído y se
           //    sobrescribía, así que dos registros simultáneos podían perder un descuento).
-          const settings = await tx.appSettings.findUnique({
-            where: { id: 1 },
-            select: { preventNegativeStock: true },
-          });
+          const settings = await getPlantSettings(tx, plantId);
           const preventNegativeStock = settings?.preventNegativeStock ?? true;
 
           const lubAfter = await tx.lubricant.update({

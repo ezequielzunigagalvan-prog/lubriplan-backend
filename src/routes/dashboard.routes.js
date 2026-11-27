@@ -1,5 +1,6 @@
 ﻿// src/routes/dashboard.routes.js
 import express from "express";
+import { getPlantSettings } from "../services/plantSettings.js";
 import { logger } from "../config/logger.js";
 
 export default function dashboardRoutes({
@@ -576,10 +577,7 @@ export default function dashboardRoutes({
           return res.status(400).json({ error: "PLANT_REQUIRED" });
         }
 
-        const appSettings = await prisma.appSettings.findUnique({
-          where: { id: 1 },
-          select: { predictiveAlertsEnabled: true },
-        });
+        const appSettings = await getPlantSettings(prisma, plantId);
         if (appSettings?.predictiveAlertsEnabled === false) {
           return res.json({ ok: true, disabled: true, alerts: [], total: 0 });
         }

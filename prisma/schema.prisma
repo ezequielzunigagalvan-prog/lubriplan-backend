@@ -20,7 +20,11 @@ enum ExecutionSourceType {
 }
 
 model AppSettings {
-  id Int @id @default(1)
+  // La fila con plantId nulo es la configuración general (id 1): se usa en plantas sin ajustes propios.
+  id Int @id @default(autoincrement())
+
+  plantId Int?   @unique
+  plant   Plant? @relation(fields: [plantId], references: [id], onDelete: Cascade)
 
   // =========================
   // Ejecución / Evidencias
@@ -539,6 +543,8 @@ model Notification {
 model Plant {
   id       Int     @id @default(autoincrement())
   name     String
+
+  settings AppSettings?
   timezone String  @default("America/Mexico_City")
   active   Boolean @default(true)
 

@@ -1,4 +1,5 @@
 ﻿import { notifyTechnicianAssignee } from "../notifications/notify.js";
+import { getPlantSettings } from "../services/plantSettings.js";
 import { logger } from "../config/logger.js";
 
 const TZ = "America/Mexico_City";
@@ -54,9 +55,6 @@ async function getOrCreateJobRun({ prisma, plantId, period }) {
 }
 
 export async function runMonthlyTechSummaryJob({ prisma, forcePlantId = null, forceMonth = null }) {
-  const settings = await prisma.appSettings.findUnique({ where: { id: 1 } });
-  if (!settings?.monthlyTechSummaryEnabled && !forceMonth && !forcePlantId) return [];
-
   const plants = await prisma.plant.findMany({
     where: { active: true, ...(forcePlantId ? { id: Number(forcePlantId) } : {}) },
     select: { id: true, name: true, timezone: true },
@@ -75,6 +73,13 @@ export async function runMonthlyTechSummaryJob({ prisma, forcePlantId = null, fo
           results.push({ plantId: plant.id, sent: false, reason: "OUTSIDE_WINDOW", period });
           continue;
         }
+      }
+
+      // Ajuste por planta: solo se envía en las plantas que lo tienen activo.
+      const plantSettings = await getPlantSettings(prisma, plant.id);
+      if (!plantSettings.monthlyTechSummaryEnabled && !forceMonth && !forcePlantId) {
+        results.push({ plantId: plant.id, sent: false, reason: "DISABLED_BY_SETTINGS", period });
+        continue;
       }
 
       const jobRun = await getOrCreateJobRun({ prisma, plantId: plant.id, period });

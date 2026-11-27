@@ -1,5 +1,6 @@
 ﻿// src/ia/aiRouter.js
 import express from "express";
+import { getPlantSettings } from "../services/plantSettings.js";
 import { logger } from "../config/logger.js";
 import { getAISummary } from "./aiService.js";
 import { cacheInvalidatePrefix } from "./aiCache.js";
@@ -37,10 +38,7 @@ export default function aiRouter({
         return res.status(400).json({ error: "PLANT_REQUIRED" });
       }
 
-      const settings = await prisma.appSettings.findUnique({
-        where: { id: 1 },
-        select: { aiSummaryEnabled: true },
-      });
+      const settings = await getPlantSettings(prisma, currentPlantId);
       if (settings?.aiSummaryEnabled === false) {
         return res.json({ ok: true, disabled: true, summary: null });
       }

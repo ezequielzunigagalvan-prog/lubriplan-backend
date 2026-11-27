@@ -1,5 +1,6 @@
 ﻿// src/index.js
     import express from "express";
+    import { getPlantSettings } from "./services/plantSettings.js";
     import dotenv from "dotenv";
     dotenv.config();
     import { initSentry, Sentry } from "./config/sentry.js";
@@ -5099,10 +5100,7 @@ app.get("/api/lubricants/:id/movements", requireAuth, requireRole(["ADMIN","SUPE
       });
       if (!item) return res.status(404).json({ error: "Lubricante no encontrado" });
 
-      const settings = await prisma.appSettings.findUnique({
-        where: { id: 1 },
-        select: { preventNegativeStock: true },
-      });
+      const settings = await getPlantSettings(prisma, plantId);
       const preventNegativeStock = settings?.preventNegativeStock ?? true;
 
       // Lectura y escritura del stock en la misma transacción con bloqueo de fila:
@@ -6923,11 +6921,7 @@ app.patch(
           .slice(2)}`,
       });
 
-      const settings = await prisma.appSettings.upsert({
-        where: { id: 1 },
-        update: {},
-        create: { id: 1 },
-      });
+      const settings = await getPlantSettings(prisma, plantId);
 
       if (settings.executionEvidenceRequired && !evidenceImage && !evidenceNote) {
         return res.status(400).json({
@@ -7086,10 +7080,7 @@ app.patch(
           return res.status(400).json({ error: "Lubricante invalido" });
         }
 
-        const settingsStock = await prisma.appSettings.findUnique({
-          where: { id: 1 },
-          select: { preventNegativeStock: true },
-        });
+        const settingsStock = await getPlantSettings(prisma, plantId);
 
         const routePoints = Math.max(1, Number(route?.points || 1));
         const routeInstructions = String(route?.instructions || "");
