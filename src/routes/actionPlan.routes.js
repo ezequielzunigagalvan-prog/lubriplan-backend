@@ -101,6 +101,49 @@ export default function actionPlanRoutes({ prisma, auth, requireRole }) {
     }
   });
 
+  // ── Mis pendientes en todas mis plantas (acceso rápido de los dashboards) ──
+  router.get("/action-plan/my-summary", ...managers, async (req, res) => {
+    try {
+      const links = await prisma.userPlant.findMany({
+        where: { userId: req.user.id, active: true, plant: { active: true } },
+        select: { plant: { select: { id: true, name: true, timezone: true } } },
+      });
+      const plants = links.map((l) => l.plant);
+      const ids = plants.map((p) => p.id);
+      const rows = ids.length
+        ? await prisma.actionItem.findMany({
+            where: { ownerUserId: req.user.id, plantId: { in: ids }, status: { notIn: ["DONE", "CANCELLED"] } },
+            select: { id: true, title: true, category: true, priority: true, progress: true, dueDate: true, status: true, plantId: true },
+            orderBy: [{ dueDate: "asc" }, { id: "asc" }],
+          })
+        : [];
+      const byId = new Map(plants.map((p) => [p.id, { ...p, today: zonedYmd(new Date(), safeTimeZone(p.timezone)) }]));
+      const items = rows.map((r) => {
+        const p = byId.get(r.plantId);
+        const due = new Date(r.dueDate).toISOString().slice(0, 10);
+        const daysLeft = Math.round((new Date(`${due}T12:00:00Z`) - new Date(`${p.today}T12:00:00Z`)) / 86_400_000);
+        return { ...r, plantName: p?.name || "", overdue: isOverdue(r, p.today), daysLeft };
+      });
+      const byPlant = plants
+        .map((p) => {
+          const mine = items.filter((i) => i.plantId === p.id);
+          return { plantId: p.id, name: p.name, open: mine.length, overdue: mine.filter((i) => i.overdue).length };
+        })
+        .filter((p) => p.open);
+      return res.json({
+        ok: true,
+        total: items.length,
+        overdue: items.filter((i) => i.overdue).length,
+        dueSoon: items.filter((i) => !i.overdue && i.daysLeft <= 7).length,
+        byPlant,
+        // vencidos primero, luego por fecha compromiso
+        items: [...items].sort((a, b) => Number(b.overdue) - Number(a.overdue) || a.daysLeft - b.daysLeft).slice(0, 6),
+      });
+    } catch (e) {
+      return fail(res, e, "GET /action-plan/my-summary");
+    }
+  });
+
   // Responsables posibles (admin)
   router.get("/action-plan/assignees", auth, requireRole(["ADMIN"]), async (req, res) => {
     try {
