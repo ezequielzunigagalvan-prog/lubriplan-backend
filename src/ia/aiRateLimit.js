@@ -1,52 +1,37 @@
 // src/ia/aiRateLimit.js
-function windowKey(prefix, id, windowMs) {
-  const bucket = Math.floor(Date.now() / windowMs);
-  return `${prefix}:${id}:${bucket}`;
+// Límite por hora (usuario y planta) para llamadas reales al proveedor de IA.
+// Antes la limpieza borraba llaves al azar (podía reiniciar el contador de la hora en curso).
+
+const HOUR = 60 * 60 * 1000;
+const hits = new Map(); // key -> { count, bucket }
+
+function cleanup(bucket) {
+  if (hits.size < 2000) return;
+  for (const [k, v] of hits) if (v.bucket < bucket) hits.delete(k);
 }
 
-const hits = new Map(); // key -> count
-
-function hit(key) {
-  const c = (hits.get(key) || 0) + 1;
-  hits.set(key, c);
-  return c;
+function peek(key, bucket) {
+  const h = hits.get(key);
+  return h && h.bucket === bucket ? h.count : 0;
 }
 
-function cleanupSometimes() {
-  // limpieza simple (no perfecta) para que no crezca infinito
-  if (hits.size < 5000) return;
-  const now = Date.now();
-  for (const k of hits.keys()) {
-    // si el bucket es muy viejo, lo dejamos morir (heurística)
-    // (no parseamos timestamps; solo recortamos)
-    if (Math.random() < 0.05) hits.delete(k);
+/**
+ * Verifica y (si procede) cuenta una llamada. Si se excede, no cuenta.
+ * Devuelve { ok, uCount, pCount, retryAfterSec, ... }.
+ */
+export function dualRateLimit({ userId, plantId, userLimitPerHour, plantLimitPerHour, namespace = "ai" }) {
+  const bucket = Math.floor(Date.now() / HOUR);
+  const uKey = `${namespace}:u:${userId ?? "anon"}`;
+  const pKey = `${namespace}:p:${plantId ?? "no-plant"}`;
+  cleanup(bucket);
+
+  const u = peek(uKey, bucket);
+  const p = peek(pKey, bucket);
+  const retryAfterSec = Math.ceil(((bucket + 1) * HOUR - Date.now()) / 1000);
+  if (u >= userLimitPerHour || p >= plantLimitPerHour) {
+    return { ok: false, uCount: u, pCount: p, userLimitPerHour, plantLimitPerHour, retryAfterSec };
   }
-}
-
-export function dualRateLimit({
-  userId,
-  plantId,
-  userLimitPerHour,
-  plantLimitPerHour,
-}) {
-  const HOUR = 60 * 60 * 1000;
-
-  const uid = userId ? String(userId) : "anon";
-  const pid = plantId ? String(plantId) : "no-plant";
-
-  const uKey = windowKey("ai:u", uid, HOUR);
-  const pKey = windowKey("ai:p", pid, HOUR);
-
-  const uCount = hit(uKey);
-  const pCount = hit(pKey);
-
-  cleanupSometimes();
-
-  return {
-    ok: uCount <= userLimitPerHour && pCount <= plantLimitPerHour,
-    uCount,
-    pCount,
-    userLimitPerHour,
-    plantLimitPerHour,
-  };
+  hits.set(uKey, { count: u + 1, bucket });
+  hits.set(pKey, { count: p + 1, bucket });
+  return { ok: true, uCount: u + 1, pCount: p + 1, userLimitPerHour, plantLimitPerHour, retryAfterSec };
 }

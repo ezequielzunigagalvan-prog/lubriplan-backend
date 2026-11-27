@@ -27,8 +27,6 @@ import lubricationCardsRoutes from "./lubricationCards.routes.js";
 // ========================
 // IA
 // ========================
-import aiRouter from "../ia/aiRouter.js";
-import chatRouter from "../ia/chatRouter.js";
 
 // ========================
 // MIDDLEWARES
@@ -121,28 +119,7 @@ app.use(
   app.use("/api", webhooksRoutes({ prisma, auth: requireAuth, requireRole }));
   app.use("/api", integrationsRoutes({ prisma, auth: requireAuth, requireRole }));
   app.use("/api", lubricationCardsRoutes({ prisma, auth: requireAuth, requireRole }));
-
-  // ========================
-  // IA (Resumen inteligente)
-  // ========================
-  app.use(
-    "/api/ai",
-    aiRouter({
-      prisma,
-      requireAuth,
-      requireRole,
-      buildDashboardSummary,
-      toStartOfDaySafe,
-    })
-  );
-
-  // ========================
-  // IA (Chat conversacional)
-  // ========================
-  app.use(
-    "/api/ai",
-    chatRouter({ prisma, requireAuth, requireRole })
-  );
+  // La IA (/api/ai/summary y /api/ai/chat) se registra en src/index.js; antes se registraba dos veces.
 }
 
 // Soporte default export (opcional)

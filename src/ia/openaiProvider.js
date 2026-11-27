@@ -1,5 +1,6 @@
-﻿import { OPENAI_MODEL } from "./aiConfig.js";
+import { OPENAI_MODEL } from "./aiConfig.js";
 import { logger } from "../config/logger.js";
+import { getOpenAI } from "./openaiClient.js";
 
 const SUMMARY_SCHEMA = {
   type: "object",
@@ -76,23 +77,6 @@ const SUMMARY_SCHEMA = {
   },
 };
 
-let clientPromise = null;
-
-async function getClient() {
-  if (clientPromise) return clientPromise;
-
-  clientPromise = (async () => {
-    const apiKey = String(process.env.OPENAI_API_KEY || "").trim();
-    if (!apiKey) throw new Error("OPENAI_API_KEY missing");
-
-    const mod = await import("openai");
-    const OpenAI = mod?.default || mod?.OpenAI || mod;
-    return new OpenAI({ apiKey });
-  })();
-
-  return clientPromise;
-}
-
 function extractResponseText(response) {
   const direct = String(response?.output_text || "").trim();
   if (direct) return direct;
@@ -135,10 +119,7 @@ function extractParsedResponse(response) {
 }
 
 export async function generateExecutiveSummary({ prompt }) {
-  const client = await getClient();
-  logger.info("AI_MODE:", process.env.AI_MODE);
-  logger.info("AI_MODEL:", OPENAI_MODEL);
-  logger.info("OPENAI_API_KEY exists:", Boolean(process.env.OPENAI_API_KEY));
+  const client = await getOpenAI();
 
   const response = await client.responses.create({
     model: OPENAI_MODEL,
@@ -165,6 +146,7 @@ export async function generateExecutiveSummary({ prompt }) {
     throw new Error("OPENAI_EMPTY_RESPONSE");
   }
 
-  logger.info("Raw AI response:", text.slice(0, 1200));
+  // Sin volcar el texto al log (puede incluir nombres de equipos y técnicos del cliente).
+  logger.debug("[AI] respuesta sin parsear", { chars: text.length });
   return text;
 }

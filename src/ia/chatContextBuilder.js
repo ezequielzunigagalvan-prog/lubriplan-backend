@@ -1,229 +1,192 @@
 // src/ia/chatContextBuilder.js
-// Compila un snapshot de la planta activa para usar como contexto en el chat.
-// Usa la misma lógica de queries que buildDashboardSummary para garantizar datos correctos.
-// Para modelos en TENANTED_MODELS (Execution, ConditionReport, Technician, Lubricant)
-// el middleware de Prisma auto-agrega plantId; además lo pasamos explícitamente como red de seguridad.
-// PurchaseOrder y Plant NO están en TENANTED_MODELS → filtro manual por plantId siempre.
+// Foto de la planta activa para LubriBot.
+//
+// Correcciones respecto a la versión anterior:
+//  - Los indicadores del mes salen del mismo cálculo que Análisis y el Reporte mensual
+//    (computeOverview), así LubriBot no contradice esas pantallas.
+//  - El mes se calcula en la zona horaria de la planta (antes, con el reloj del servidor).
+//  - Ahora incluye QUÉ actividades están vencidas, cuáles tocan hoy y cuáles vienen
+//    (antes solo los conteos, así que no podía responder "¿cuáles están vencidas?").
+//  - Los reportes de condición se ordenan por gravedad real (antes, alfabéticamente: REGULAR primero).
+//  - Agrega pendientes del Plan de acción y órdenes OLP abiertas.
+//  - Todas las consultas filtran por la planta de forma explícita.
 
-// Copia local de helpers de timezone (igual que buildDashboardSummary.js)
-const DEFAULT_TIMEZONE = "America/Mexico_City";
+import { computeOverview } from "../routes/analysis.routes.js";
+import { zonedYmd, zonedStartOfDay, safeTimeZone } from "../utils/tzRange.js";
 
-function dateKeyInTimezone(value, timezone = DEFAULT_TIMEZONE) {
-  const dt = new Date(value);
-  if (!Number.isFinite(dt.getTime())) return "";
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(dt);
-  const year = parts.find((p) => p.type === "year")?.value;
-  const month = parts.find((p) => p.type === "month")?.value;
-  const day = parts.find((p) => p.type === "day")?.value;
-  return year && month && day ? `${year}-${month}-${day}` : "";
+const SEVERITY = { CRITICO: 4, MALO: 3, REGULAR: 2, BUENO: 1 };
+const isActiveTech = (s) => ["ACTIVO", "ACTIVE"].includes(String(s || "").trim().toUpperCase());
+const addDaysYmd = (ymd, n) => {
+  const d = new Date(`${ymd}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+};
+const dayDiff = (a, b) => Math.round((new Date(`${b}T12:00:00Z`) - new Date(`${a}T12:00:00Z`)) / 86_400_000);
+const r1 = (n) => (n == null ? null : Math.round(Number(n) * 10) / 10);
+
+function activityRow(e, tz, today) {
+  const eq = e.route?.equipment || e.equipment || null;
+  const ymd = zonedYmd(e.scheduledAt, tz);
+  return {
+    activity: e.route?.name || e.manualTitle || "Actividad",
+    equipment: eq?.name || null,
+    code: eq?.code || null,
+    criticality: eq?.criticality || null,
+    date: ymd,
+    daysLate: ymd < today ? dayDiff(ymd, today) : 0,
+    technician: e.technician?.name || null,
+  };
 }
 
-function isBeforeTodayInTimezone(value, todayKey, timezone = DEFAULT_TIMEZONE) {
-  const valueKey = dateKeyInTimezone(value, timezone);
-  return Boolean(valueKey) && Boolean(todayKey) && valueKey < todayKey;
-}
-
-export async function buildChatContext(prisma, { plantId }) {
+export async function buildChatContext(prisma, { plantId, role }) {
   const pid = Number(plantId);
   if (!Number.isFinite(pid) || pid <= 0) return null;
 
-  const now = new Date();
+  const plant = await prisma.plant.findUnique({ where: { id: pid }, select: { name: true, timezone: true } });
+  const tz = safeTimeZone(plant?.timezone || "America/Mexico_City");
+  const today = zonedYmd(new Date(), tz);
+  const month = today.slice(0, 7);
+  const weekEnd = zonedStartOfDay(addDaysYmd(today, 8), tz);
 
-  // Paso 1: obtener planta y timezone primero (igual que buildDashboardSummary)
-  const plant = await prisma.plant.findUnique({
-    where: { id: pid },
-    select: { name: true, timezone: true },
-  });
-  const plantTimezone = String(plant?.timezone || DEFAULT_TIMEZONE);
-  const todayKey = dateKeyInTimezone(now, plantTimezone);
+  const execSelect = {
+    scheduledAt: true,
+    manualTitle: true,
+    technician: { select: { name: true } },
+    equipment: { select: { name: true, code: true, criticality: true } },
+    route: { select: { name: true, equipment: { select: { name: true, code: true, criticality: true } } } },
+  };
 
-  // Rango mes actual (para completadas y contexto)
-  const monthFrom = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
-  const monthTo = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
-
-  // Ventana para ejecuciones abiertas: 90 días atrás → 30 días adelante
-  // Así capturamos vencidas de meses anteriores y próximas actividades
-  const openFrom = new Date(now);
-  openFrom.setDate(openFrom.getDate() - 90);
-  const openTo = new Date(now);
-  openTo.setDate(openTo.getDate() + 30);
-
-  const [
-    openExecs,
-    completedCount,
-    openConditionReports,
-    badConditionExecCount,
-    technicians,
-    lubricants,
-    purchaseOrders,
-  ] = await Promise.all([
-    // Ejecuciones NO completadas en ventana — mismo patrón que buildDashboardSummary
-    // plantId explícito como red de seguridad + status: { not: "COMPLETED" }
+  const [overview, open, reports, lubricants, technicians, purchaseOrders, actions, olp] = await Promise.all([
+    computeOverview(prisma, pid, { month }).catch(() => null),
+    // Todas las actividades abiertas hasta dentro de 7 días (incluye vencidas de meses anteriores)
     prisma.execution.findMany({
-      where: {
-        plantId: pid,
-        scheduledAt: { gte: openFrom, lte: openTo },
-        status: { not: "COMPLETED" },
-      },
-      select: { scheduledAt: true, status: true },
-      take: 500,
+      where: { plantId: pid, status: { in: ["PENDING", "OVERDUE"] }, scheduledAt: { lt: weekEnd } },
+      select: execSelect,
+      orderBy: { scheduledAt: "asc" },
+      take: 400,
     }),
-
-    // Completadas en el mes actual (igual que dashboard)
-    prisma.execution.count({
-      where: {
-        plantId: pid,
-        status: "COMPLETED",
-        executedAt: { gte: monthFrom, lte: monthTo },
-      },
-    }),
-
-    // Reportes de condición FORMALES abiertos (creados explícitamente por técnico/usuario)
     prisma.conditionReport.findMany({
-      where: {
-        plantId: pid,
-        status: { in: ["OPEN", "IN_PROGRESS"] },
-      },
-      include: {
-        equipment: {
-          select: { name: true, code: true, criticality: true },
-        },
-      },
-      orderBy: [{ condition: "desc" }, { createdAt: "asc" }],
-      take: 8,
+      where: { plantId: pid, status: { in: ["OPEN", "IN_PROGRESS"] } },
+      select: { status: true, condition: true, category: true, createdAt: true, equipment: { select: { name: true, code: true, criticality: true } } },
+      take: 50,
     }),
-
-    // Ejecuciones completadas con condición MALO o CRITICO en el mes actual
-    // IMPORTANTE: estas NO son reportes de condición formales; son evaluaciones de ejecución
-    prisma.execution.count({
-      where: {
-        plantId: pid,
-        status: "COMPLETED",
-        condition: { in: ["MALO", "CRITICO"] },
-        executedAt: { gte: monthFrom, lte: monthTo },
-      },
-    }),
-
-    // Técnicos activos con sus ejecuciones abiertas (tenant-scoped + plantId explícito)
-    prisma.technician.findMany({
-      where: { plantId: pid, status: "Activo", deletedAt: null },
-      select: {
-        name: true,
-        code: true,
-        specialty: true,
-        executions: {
-          where: { status: { not: "COMPLETED" } },
-          select: { id: true, scheduledAt: true },
-        },
-      },
-      take: 10,
-    }),
-
-    // Lubricantes con minStock definido (tenant-scoped + plantId explícito)
     prisma.lubricant.findMany({
       where: { plantId: pid, minStock: { not: null } },
-      select: {
-        name: true,
-        code: true,
-        stock: true,
-        minStock: true,
-        unit: true,
-        brand: true,
-      },
-      take: 30,
+      select: { name: true, code: true, stock: true, minStock: true, unit: true },
+      take: 200,
     }),
-
-    // Órdenes de compra activas: NOT tenant-scoped → filtro manual por plantId siempre
+    prisma.technician.findMany({
+      where: { plantId: pid, deletedAt: null },
+      select: { id: true, name: true, code: true, status: true },
+      take: 100,
+    }),
     prisma.purchaseOrder.findMany({
-      where: {
-        plantId: pid,
-        status: { in: ["REQUESTED", "APPROVED"] },
-      },
+      where: { plantId: pid, status: { in: ["REQUESTED", "APPROVED"] } },
       orderBy: { createdAt: "desc" },
-      include: {
-        items: {
-          include: {
-            lubricant: { select: { name: true, unit: true } },
-          },
-        },
-      },
-      take: 3,
+      select: { id: true, status: true, items: { select: { requestedQty: true, unit: true, lubricant: { select: { name: true } } } } },
+      take: 5,
     }),
+    prisma.actionItem.findMany({
+      where: { plantId: pid, status: { not: "DONE" } },
+      orderBy: { dueDate: "asc" },
+      select: { title: true, category: true, progress: true, dueDate: true, owner: { select: { name: true } } },
+      take: 10,
+    }).catch(() => []),
+    prisma.preventiveOrder.findMany({
+      where: { plantId: pid, status: { in: ["DRAFT", "OPEN", "IN_PROGRESS"] } },
+      orderBy: { scheduledDate: "asc" },
+      select: { id: true, title: true, status: true, scheduledDate: true, equipment: { select: { name: true, code: true } }, _count: { select: { items: true } } },
+      take: 8,
+    }).catch(() => []),
   ]);
 
-  // Clasificar vencidas vs pendientes en JS con comparación de fechas en timezone de la planta
-  // (igual que buildDashboardSummary — evita errores UTC vs hora local)
-  let overdueCount = 0;
-  let pendingCount = 0;
-  for (const e of openExecs) {
-    if (isBeforeTodayInTimezone(e.scheduledAt, todayKey, plantTimezone)) {
-      overdueCount++;
-    } else {
-      pendingCount++;
-    }
+  const rows = open.map((e) => activityRow(e, tz, today));
+  const overdue = rows.filter((r) => r.date < today).sort((a, b) => b.daysLate - a.daysLate);
+  const dueToday = rows.filter((r) => r.date === today);
+  const upcoming = rows.filter((r) => r.date > today);
+
+  const tCount = new Map();
+  for (const r of rows) {
+    if (!r.technician) continue;
+    const t = tCount.get(r.technician) || { overdue: 0, today: 0, week: 0 };
+    if (r.date < today) t.overdue++;
+    else if (r.date === today) t.today++;
+    else t.week++;
+    tCount.set(r.technician, t);
   }
 
-  // Stock bajo: usa <= igual que el dashboard (stock <= minStock)
-  const lowStockLubricants = lubricants.filter(
-    (l) => l.minStock != null && l.stock <= l.minStock
-  );
-
-  // Carga real por técnico con comparación timezone-aware
-  const techniciansSummary = technicians.map((t) => {
-    const overdueAssigned = t.executions.filter(
-      (e) => isBeforeTodayInTimezone(e.scheduledAt, todayKey, plantTimezone)
-    ).length;
-    return {
-      name: t.name,
-      code: t.code,
-      specialty: t.specialty,
-      pendingCount: t.executions.length,
-      overdueCount: overdueAssigned,
-    };
-  });
-
+  const c = overview?.compliance || {};
   return {
     plantName: plant?.name || "Planta activa",
-    plantTimezone,
-    activities: {
-      completed: completedCount,
-      pending: pendingCount,
-      overdue: overdueCount,
-      total: completedCount + pendingCount + overdueCount,
+    today,
+    month,
+    role,
+    month_kpis: overview
+      ? {
+          complianceRate: c.complianceRate,
+          onTimeRate: c.onTimeRate,
+          due: c.due,
+          completed: c.completed,
+          onTime: c.onTime,
+          late: c.late,
+          overdueInMonth: c.overdue,
+          criticalOverdue: c.criticalOverdue,
+          executed: overview.executed?.total,
+          ole: overview.ole?.value,
+          condition: overview.condition ? { BUENO: overview.condition.BUENO, REGULAR: overview.condition.REGULAR, MALO: overview.condition.MALO, CRITICO: overview.condition.CRITICO } : null,
+          oilL: overview.consumption?.oilL,
+          greaseKg: overview.consumption?.greaseKg,
+          topLubricants: (overview.consumption?.byLubricant || []).slice(0, 3).map((l) => `${l.name}: ${r1(l.qty)} ${l.unit || ""}`.trim()),
+          failures: (overview.failures || []).slice(0, 5).map((f) => ({ equipment: f.name, code: f.code, malo: f.malo, critico: f.critico, reports: f.reports })),
+        }
+      : null,
+    open: {
+      overdueCount: overdue.length,
+      overdue: overdue.slice(0, 12),
+      todayCount: dueToday.length,
+      today: dueToday.slice(0, 10),
+      next7Count: upcoming.length,
+      next7: upcoming.slice(0, 8),
+      unassigned: rows.filter((r) => !r.technician).length,
     },
-    badConditionExecCount,
-    openConditionReports: openConditionReports.map((r) => ({
-      status: r.status,
-      condition: String(r.condition || ""),
-      category: r.category || null,
-      equipment: r.equipment?.name || "Equipo",
-      equipmentCode: r.equipment?.code || "",
-      criticality: r.equipment?.criticality || null,
-      ageHours: Math.round((now - new Date(r.createdAt)) / 3_600_000),
-    })),
-    activeTechnicians: techniciansSummary,
-    lowStockLubricants: lowStockLubricants.map((l) => ({
-      name: l.name,
-      code: l.code || "",
-      stock: l.stock,
-      minStock: l.minStock,
-      unit: l.unit,
-      brand: l.brand || "",
-    })),
-    activePurchaseOrders: purchaseOrders.map((po) => ({
+    conditionReports: reports
+      .map((r) => ({
+        status: r.status,
+        condition: String(r.condition || ""),
+        category: r.category || null,
+        equipment: r.equipment?.name || "Equipo",
+        code: r.equipment?.code || null,
+        criticality: r.equipment?.criticality || null,
+        ageDays: Math.max(0, Math.floor((Date.now() - new Date(r.createdAt)) / 86_400_000)),
+      }))
+      .sort((a, b) => (SEVERITY[b.condition] || 0) - (SEVERITY[a.condition] || 0) || b.ageDays - a.ageDays),
+    technicians: technicians
+      .filter((t) => isActiveTech(t.status))
+      .map((t) => ({ name: t.name, code: t.code, ...(tCount.get(t.name) || { overdue: 0, today: 0, week: 0 }) }))
+      .sort((a, b) => b.overdue - a.overdue || b.today - a.today),
+    lowStock: lubricants
+      .filter((l) => l.minStock != null && Number(l.stock) <= Number(l.minStock))
+      .map((l) => ({ name: l.name, code: l.code || null, stock: r1(l.stock), minStock: r1(l.minStock), unit: l.unit })),
+    purchaseOrders: purchaseOrders.map((po) => ({
       id: po.id,
       status: po.status,
-      createdAt: po.createdAt,
-      items: po.items.map((item) => ({
-        lubricant: item.lubricant?.name || "Lubricante",
-        quantity: item.quantity,
-        unit: item.lubricant?.unit || "",
-      })),
+      items: po.items.map((i) => `${i.lubricant?.name || "Lubricante"} ${r1(i.requestedQty)} ${i.unit || ""}`.trim()),
+    })),
+    actionPlan: actions.map((a) => ({
+      title: a.title,
+      category: a.category,
+      progress: a.progress,
+      due: a.dueDate ? new Date(a.dueDate).toISOString().slice(0, 10) : null,
+      owner: a.owner?.name || null,
+    })),
+    olpOrders: olp.map((o) => ({
+      id: o.id,
+      title: o.title,
+      status: o.status,
+      date: o.scheduledDate ? new Date(o.scheduledDate).toISOString().slice(0, 10) : null,
+      equipment: o.equipment?.name || null,
+      code: o.equipment?.code || null,
+      routes: o._count?.items || 0,
     })),
   };
 }

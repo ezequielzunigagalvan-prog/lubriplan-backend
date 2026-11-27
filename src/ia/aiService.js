@@ -6,10 +6,39 @@ import {
   AI_SCHEMA_VERSION,
   OPENAI_MODEL,
 } from "./aiConfig.js";
-import { cacheGet, cacheSet, makeCacheKey } from "./aiCache.js";
+import { cacheGet, cacheSet, makeCacheKey, fingerprint } from "./aiCache.js";
 import { generateExecutiveSummary } from "./openaiProvider.js";
 
-const AI_PROMPT_POLICY_VERSION = "confidentiality-v3-entities";
+// v4: la llave incluye una huella de los datos (si cambian los números se genera de nuevo).
+const AI_PROMPT_POLICY_VERSION = "confidentiality-v4-datafp";
+const FALLBACK_TTL_MS = 10 * 60 * 1000; // el resumen de respaldo no se guarda 24 h
+
+export class AiRateLimitError extends Error {
+  constructor(details) {
+    super("AI_RATE_LIMIT");
+    this.code = "AI_RATE_LIMIT";
+    this.details = details;
+  }
+}
+
+/** KPIs reales del tablero: no se toman de lo que escriba el modelo. */
+function realKpis(dashboard) {
+  const a = dashboard?.activities || {};
+  const al = dashboard?.alerts || {};
+  const cr = a.conditionReports || {};
+  return {
+    completed: toNum(a.completed),
+    pending: toNum(a.pending),
+    overdue: toNum(a.overdue),
+    conditionOpen: toNum(al.conditionOpenCount ?? cr.OPEN),
+    conditionInProgress: toNum(al.conditionInProgressCount ?? cr.IN_PROGRESS),
+    lowStockCount: toNum(al.lowStockCount),
+    unassignedPending: toNum(al.unassignedPending),
+  };
+}
+
+const shortErr = (e) =>
+  e?.issues ? e.issues.slice(0, 3).map((i) => `${i.path.join(".")}: ${i.message}`).join("; ") : String(e?.message || e).slice(0, 200);
 
 function cacheScopeForRole(role) {
   const r = String(role || "").toUpperCase();
@@ -461,42 +490,49 @@ function normalizeProviderOutput(raw) {
   return raw;
 }
 
-async function generateOnce({ month, plantId, role, lang, dashboard }) {
+async function generateOnce({ month, plantId, role, lang, dashboard, beforeProviderCall }) {
   const prompt = buildPrompt({ month, plantId, role, lang, dashboard });
 
   if (AI_MODE === "mock") {
     return fallbackSummary({ month, plantId, dashboard });
   }
 
+  if (beforeProviderCall) beforeProviderCall(); // límite por hora: solo cuenta llamadas reales
   return normalizeProviderOutput(await callProvider(prompt));
 }
 
-async function generateWithRepair({ month, plantId, role, lang, dashboard }) {
+async function generateWithRepair(args) {
+  const { month, plantId, dashboard } = args;
   const schema = AISummarySchemaVersioned(Number(AI_SCHEMA_VERSION || 1));
+  const ok = (summary) => ({ summary, source: AI_MODE === "mock" ? "rules" : "ai" });
+  const fallback = () => ({
+    summary: schema.parse(fallbackSummary({ month, plantId, dashboard })),
+    source: AI_MODE === "mock" ? "rules" : "fallback",
+  });
 
   let raw1 = "";
   try {
-    raw1 = await generateOnce({ month, plantId, role, lang, dashboard });
+    raw1 = await generateOnce(args);
   } catch (error) {
-    logger.error("AI summary failed:", error);
-    return schema.parse(fallbackSummary({ month, plantId, dashboard }));
+    if (error?.code === "AI_RATE_LIMIT") throw error;
+    logger.error("[AI resumen] el proveedor falló; se usa el resumen de respaldo", { plantId, month, error: shortErr(error), status: error?.status });
+    return fallback();
   }
 
   if (raw1 && typeof raw1 === "object" && !Array.isArray(raw1)) {
     try {
-      return schema.parse(raw1);
+      return ok(schema.parse(raw1));
     } catch (error) {
-      logger.error("AI first pass schema failed:", error);
+      logger.warn("[AI resumen] respuesta fuera de formato (1er intento)", { plantId, error: shortErr(error) });
     }
   }
 
   const json1 = extractJson(raw1);
   if (json1) {
     try {
-      return schema.parse(JSON.parse(json1));
+      return ok(schema.parse(JSON.parse(json1)));
     } catch (error) {
-      logger.error("AI first pass parse failed:", error);
-      logger.info("Raw AI response:", String(raw1).slice(0, 1200));
+      logger.warn("[AI resumen] JSON inválido (1er intento)", { plantId, error: shortErr(error), chars: String(raw1).length });
     }
   }
 
@@ -563,30 +599,29 @@ ${typeof raw1 === "string" ? raw1 : JSON.stringify(raw1)}
     try {
       raw2 = normalizeProviderOutput(await callProvider(repairPrompt));
     } catch (error) {
-      logger.error("AI repair pass failed:", error);
-      return schema.parse(fallbackSummary({ month, plantId, dashboard }));
+      logger.error("[AI resumen] falló la corrección; se usa el respaldo", { plantId, error: shortErr(error), status: error?.status });
+      return fallback();
     }
   }
 
   if (raw2 && typeof raw2 === "object" && !Array.isArray(raw2)) {
     try {
-      return schema.parse(raw2);
+      return ok(schema.parse(raw2));
     } catch (error) {
-      logger.error("AI repair pass schema failed:", error);
+      logger.warn("[AI resumen] corrección fuera de formato", { plantId, error: shortErr(error) });
     }
   }
 
   const json2 = extractJson(raw2);
   if (json2) {
     try {
-      return schema.parse(JSON.parse(json2));
+      return ok(schema.parse(JSON.parse(json2)));
     } catch (error) {
-      logger.error("AI repair pass parse failed:", error);
-      logger.info("Raw AI response:", String(raw2).slice(0, 1200));
+      logger.warn("[AI resumen] corrección con JSON inválido", { plantId, error: shortErr(error) });
     }
   }
 
-  return schema.parse(fallbackSummary({ month, plantId, dashboard }));
+  return fallback();
 }
 
 export async function getAISummary({
@@ -597,57 +632,42 @@ export async function getAISummary({
   lang,
   schemaVersion,
   dashboard,
+  beforeProviderCall = null,
 }) {
   const scope = cacheScopeForRole(role);
+  // La huella de los datos va en la llave: si se completa o vence algo, el resumen se rehace.
+  const dataFp = fingerprint(buildPrompt({ month, plantId, role, lang, dashboard }));
 
-  const key = makeCacheKey([
-    AI_PROMPT_POLICY_VERSION,
-    month,
-    plantId,
-    role,
-    scope === "USER" ? String(userId ?? "no-user") : "shared",
-    String(schemaVersion ?? AI_SCHEMA_VERSION ?? 1),
-    lang,
-  ]);
+  const key = makeCacheKey(
+    [
+      AI_PROMPT_POLICY_VERSION,
+      month,
+      role,
+      scope === "USER" ? String(userId ?? "no-user") : "shared",
+      String(schemaVersion ?? AI_SCHEMA_VERSION ?? 1),
+      lang,
+      dataFp,
+    ],
+    plantId
+  );
 
   const cached = cacheGet(key);
   if (cached) {
-    return {
-      cached: true,
-      model: getModelLabel(),
-      generatedAt: cached.generatedAt,
-      summary: cached.summary,
-    };
+    return { cached: true, model: cached.model, source: cached.source, generatedAt: cached.generatedAt, summary: cached.summary };
   }
 
-  logger.info("AI summary request:", {
-    month,
-    plantId,
-    role,
-    userId: userId ?? null,
-    lang,
-    model: getModelLabel(),
-  });
-
-  const summary = await generateWithRepair({
-    month,
-    plantId,
-    role,
-    lang,
-    dashboard,
-  });
+  const { summary, source } = await generateWithRepair({ month, plantId, role, lang, dashboard, beforeProviderCall });
+  // Los números siempre son los del sistema, aunque el modelo escriba otros.
+  summary.kpis = realKpis(dashboard);
 
   const payload = {
     generatedAt: new Date().toISOString(),
+    model: source === "ai" ? getModelLabel() : source === "rules" ? "reglas" : "respaldo",
+    source,
     summary,
   };
+  cacheSet(key, payload, source === "fallback" ? FALLBACK_TTL_MS : ttlMs());
+  logger.info("[AI resumen] generado", { plantId, month, source });
 
-  cacheSet(key, payload, ttlMs());
-
-  return {
-    cached: false,
-    model: getModelLabel(),
-    generatedAt: payload.generatedAt,
-    summary,
-  };
+  return { cached: false, model: payload.model, source, generatedAt: payload.generatedAt, summary };
 }

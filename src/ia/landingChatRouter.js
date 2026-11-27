@@ -1,9 +1,10 @@
-﻿// src/ia/landingChatRouter.js
+// src/ia/landingChatRouter.js
 // Endpoints públicos de chatbot para landing principal y landing de LubriPlan Card.
 import express from "express";
 import { logger } from "../config/logger.js";
 import { notifyChatLead, hasContactInfo } from "../services/email/leadNotifier.js";
 import { AI_MODE, OPENAI_MODEL } from "./aiConfig.js";
+import { getOpenAI, trimHistory } from "./openaiClient.js";
 
 const LANDING_MODEL = String(process.env.AI_LANDING_CHAT_MODEL || OPENAI_MODEL || "gpt-4o-mini").trim();
 const LANDING_MAX_TOKENS = Number(process.env.AI_LANDING_CHAT_MAX_TOKENS || 400);
@@ -22,6 +23,8 @@ const ipWindows = new Map();
 function ipRateLimit(ip) {
   const now = Date.now();
   const HOUR = 3_600_000;
+  // limpieza de ventanas viejas para que el mapa no crezca sin límite
+  if (ipWindows.size > 5000) for (const [k, v] of ipWindows) if (now - v.windowStart > HOUR) ipWindows.delete(k);
   const entry = ipWindows.get(ip);
   if (!entry || now - entry.windowStart > HOUR) {
     ipWindows.set(ip, { count: 1, windowStart: now });
@@ -45,14 +48,6 @@ function detectHotKeywords(messages) {
   return HOT_KEYWORDS.filter((kw) => userText.includes(kw));
 }
 
-async function getOpenAIClient() {
-  const apiKey = String(process.env.OPENAI_API_KEY || "").trim();
-  if (!apiKey) throw new Error("OPENAI_API_KEY no configurada");
-  const mod = await import("openai");
-  const OpenAI = mod?.default || mod?.OpenAI || mod;
-  return new OpenAI({ apiKey });
-}
-
 // ── System prompt: LubriPlan (landing principal) ─────────────────────────────
 const SYSTEM_PROMPT_LANDING = [
   "Eres el asistente virtual de LubriPlan, plataforma SaaS de gestion de lubricacion industrial.",
@@ -72,6 +67,12 @@ const SYSTEM_PROMPT_LANDING = [
   "- Multiplanta sin mezcla de datos entre operaciones",
   "- Modo offline para campo sin red",
   "- LubriPlan Card: carta digital de lubricacion por QR (ver detalle abajo)",
+  "- QR unico por equipo con su carta de lubricacion y etiquetas para imprimir",
+  "- Ordenes de lubricacion preventiva (OLP): ejecutar varias rutas de un equipo junto con el paro de mantenimiento",
+  "- Plan de accion para supervisores: pendientes de lubricacion, seguridad, predictivos y auditoria con avance y evidencia",
+  "- Diagramas de sistemas de lubricacion automatica (progresivos y de aceite con dosificadores) y documentos tecnicos por equipo",
+  "- Panel multiplanta para administradores y supervisores, analisis de cumplimiento, puntualidad, consumo y costo",
+  "- Asistente tecnico de campo: reengrase, bombazos, compatibilidad de grasas, viscosidad y conversiones",
   "",
   "QUE ES LUBRIPLAN CARD (modulo independiente y también incluido en LubriPlan):",
   "Es la carta de lubricacion digital accesible por codigo QR. Convierte las tarjetas fisicas o en papel de cada equipo en una ficha digital.",
@@ -212,24 +213,29 @@ async function handleChat({ req, res, prisma, source, systemPrompt, mockFn }) {
       model = "mock";
     } else {
       try {
-        const client = await getOpenAIClient();
+        const client = await getOpenAI();
         const response = await client.chat.completions.create({
           model: LANDING_MODEL,
-          messages: [{ role: "system", content: systemPrompt }, ...messages],
+          // solo role/content y un historial acotado (antes se reenviaba tal cual lo mandaba el navegador)
+          messages: [{ role: "system", content: systemPrompt }, ...trimHistory(messages, { maxMessages: 12, maxChars: 6000 })],
           max_tokens: LANDING_MAX_TOKENS,
           temperature: 0.3,
         });
         reply = response.choices?.[0]?.message?.content?.trim() || "";
         model = response.model;
       } catch (aiErr) {
-        logger.error("[landingChat] OpenAI error, fallback a mock:", aiErr?.message);
+        logger.warn("[landingChat] la IA falló; respuesta predefinida", { source, status: aiErr?.status, error: String(aiErr?.message || "").slice(0, 160) });
         const lastUser = [...messages].reverse().find((m) => m.role === "user");
         reply = mockFn(lastUser?.content);
         model = "mock-fallback";
       }
     }
 
-    const fullMessages = [...messages, { role: "assistant", content: reply }];
+    if (!reply) {
+      const lastUser = [...messages].reverse().find((m) => m.role === "user");
+      reply = mockFn(lastUser?.content);
+    }
+    const fullMessages = [...messages.map((m) => ({ role: m.role, content: String(m.content) })), { role: "assistant", content: reply }];
     const hotKeywords = detectHotKeywords(messages);
     const isHotLead = hotKeywords.length > 0;
 
