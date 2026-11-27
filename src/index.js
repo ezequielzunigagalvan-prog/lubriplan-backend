@@ -40,7 +40,6 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
     import aiRouter from "./ia/aiRouter.js";
     import chatRouter from "./ia/chatRouter.js";
     import landingChatRouter from "./ia/landingChatRouter.js";
-    import landingChatLogsRoutes from "./routes/landingChatLogs.routes.js";
     import landingLeadsRoutes from "./routes/landingLeads.routes.js";
     import prisma from "./prisma.js";
     import { getPredictiveMetrics } from "./dashboard/predictiveMetrics.js";
@@ -377,8 +376,7 @@ import { buildDashboardSummary } from "./dashboard/buildDashboardSummary.js";
   }));
 
   app.use("/api/ai", chatRouter({ prisma, requireAuth, requireRole }));
-  app.use("/api", landingChatLogsRoutes({ prisma, auth: requireAuth, requireRole }));
-  app.use("/api", landingLeadsRoutes({ prisma, auth: requireAuth, requireRole }));
+  app.use("/api", landingLeadsRoutes({ prisma }));
 
   app.use(
     "/api",

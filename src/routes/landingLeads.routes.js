@@ -4,7 +4,6 @@ import { logger } from "../config/logger.js";
 
 
 const VALID_SOURCES = ["landing", "card"];
-const VALID_STATUSES = ["NUEVO", "CONTACTADO", "CALIFICADO", "DESCARTADO"];
 
 function extractIp(req) {
   const raw = req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "unknown";
@@ -32,7 +31,7 @@ function leadRateLimit(ip) {
 
 const clip = (v, max) => String(v || "").trim().slice(0, max);
 
-export default function landingLeadsRoutes({ prisma, auth, requireRole }) {
+export default function landingLeadsRoutes({ prisma }) {
   const router = express.Router();
 
   // POST /api/landing/lead — público, sin auth
@@ -81,56 +80,6 @@ export default function landingLeadsRoutes({ prisma, auth, requireRole }) {
     } catch (e) {
       logger.error("[landingLeads] POST error:", e?.message);
       return res.status(500).json({ error: "Error registrando solicitud" });
-    }
-  });
-
-  // GET /api/admin/landing-leads — ADMIN
-  router.get("/admin/landing-leads", auth, requireRole(["ADMIN"]), async (req, res) => {
-    try {
-      const { source, status, page = "1", limit = "50" } = req.query;
-      const take = Math.min(Number(limit) || 50, 200);
-      const skip = (Math.max(Number(page) || 1, 1) - 1) * take;
-
-      const where = {};
-      if (source && VALID_SOURCES.includes(source)) where.source = source;
-      if (status && VALID_STATUSES.includes(status)) where.status = status;
-
-      const [leads, total] = await Promise.all([
-        prisma.landingLead.findMany({ where, orderBy: { createdAt: "desc" }, take, skip }),
-        prisma.landingLead.count({ where }),
-      ]);
-
-      return res.json({ ok: true, leads, total, page: Number(page), limit: take });
-    } catch (e) {
-      logger.error("[landingLeads] GET error:", e?.message);
-      return res.status(500).json({ error: "Error obteniendo leads" });
-    }
-  });
-
-  // PATCH /api/admin/landing-leads/:id — ADMIN (cambiar status)
-  router.patch("/admin/landing-leads/:id", auth, requireRole(["ADMIN"]), async (req, res) => {
-    try {
-      const id = Number(req.params.id);
-      if (!Number.isFinite(id)) return res.status(400).json({ error: "ID inválido" });
-
-      const data = {};
-      if (req.body?.status) {
-        if (!VALID_STATUSES.includes(req.body.status)) {
-          return res.status(400).json({ error: `status inválido. Valores: ${VALID_STATUSES.join(", ")}` });
-        }
-        data.status = req.body.status;
-      }
-
-      const lead = await prisma.landingLead.update({
-        where: { id },
-        data,
-        select: { id: true, nombre: true, email: true, status: true, source: true },
-      });
-
-      return res.json({ ok: true, lead });
-    } catch (e) {
-      logger.error("[landingLeads] PATCH error:", e?.message);
-      return res.status(500).json({ error: "Error actualizando lead" });
     }
   });
 
